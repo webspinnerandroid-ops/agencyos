@@ -294,10 +294,10 @@ Each campaign object must follow this exact structure:
   "targetKeywords": [
     {
       "keyword": "string",
-      "searchVolume": number (estimated),
-      "difficulty": "low" | "medium" | "high",
-      "currentRanking": number | null,
-      "targetRanking": number,
+      "searchVolume": number (best-effort ESTIMATE — no keyword-volume tool data is available, so estimate from the site's industry and content, round to the nearest 100, and never present as measured data),
+      "difficulty": "low" | "medium" | "high" (judgment call — clearly an estimate),
+      "currentRanking": number | null (MUST be null unless real ranking data appears in the audit's keywordRankings field; the audit does not measure rankings, so in practice this is always null — never invent a current ranking),
+      "targetRanking": number (the position the campaign will aim for — a target, not a guarantee),
       "intent": "informational" | "commercial" | "transactional" | "navigational"
     }
   ],
@@ -349,11 +349,11 @@ Each campaign object must follow this exact structure:
     "socialMediaStrategy": "string"
   },
   "kpisAndMetrics": {
-    "targetOrganicTrafficIncrease": "string (e.g., '+35% in 6 months')",
-    "targetKeywordImprovements": "string",
-    "targetConversionRate": "string",
-    "targetDomainAuthority": "string",
-    "additionalMetrics": ["string"]
+    "targetOrganicTrafficIncrease": "string (an ASPIRATIONAL TARGET based on industry benchmarks, phrased as a target with a caveat — e.g., 'Target: +35% organic traffic in 6 months (benchmark-based, not guaranteed)')",
+    "targetKeywordImprovements": "string (aspirational target with caveat, e.g., 'Target: top-3 rankings for 5 keywords in 12 months (not guaranteed)')",
+    "targetConversionRate": "string (aspirational target with caveat, e.g., 'Target: 2-3% conversion rate (industry benchmark, not guaranteed)')",
+    "targetDomainAuthority": "string (aspirational target with caveat, e.g., 'Target: DA 40-50 within 12 months (not guaranteed)')",
+    "additionalMetrics": ["string (only industry-benchmark framed targets, never measured claims)"]
   },
   "timeline": {
     "totalDuration": "string (e.g., '6 months', '12 months')",
@@ -366,7 +366,7 @@ Each campaign object must follow this exact structure:
       }
     ]
   },
-  "estimatedROI": "string (projected return on investment with reasoning)",
+  "estimatedROI": "string (a clearly-framed PROJECTION with stated assumptions — e.g., 'Projected 3x return over 12 months assuming benchmark conversion rates; not a guarantee'. Do not invent precise financial figures or present as measured data)",
   "differentiators": ["string (what makes this tier different from lower tiers)"]
 }
 
@@ -376,7 +376,8 @@ Each campaign object must follow this exact structure:
 2. Higher-priced tiers must clearly demonstrate MORE value: more keywords, more content pieces, deeper analysis, more sophisticated strategies.
 3. All recommendations must be grounded in the audit data and competitor analysis provided.
 4. Be specific, actionable, and measurable in all recommendations.
-5. Do NOT include any markdown formatting, code fences, or explanatory text outside the JSON array.`;
+5. Do NOT include any markdown formatting, code fences, or explanatory text outside the JSON array.
+6. HONESTY: This audit does NOT include measured keyword rankings, search volumes, domain authority, backlink data, or traffic metrics. Never present AI estimates as measured facts: label every volume/difficulty figure as an estimate, set currentRanking to null, and phrase all traffic/ROI/DA/conversion figures as aspirational targets or projections with stated assumptions and a 'not guaranteed' caveat.`;
 }
 
 // ============================================================================

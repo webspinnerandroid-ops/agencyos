@@ -439,6 +439,30 @@ Create one campaign per tier that is realistic, actionable, and tailored to the 
     const recommendedTier = rawResult?.recommended_tier ?? null;
 
     // ------------------------------------------------------------------
+    // 7b. Data integrity guard: never store invented metrics
+    // ------------------------------------------------------------------
+    // The auditor produces no measured keyword rankings (keywordRankings
+    // is always [] without a third-party API), so any currentRanking the
+    // model invented must be nulled before persisting. Search volumes are
+    // best-effort estimates, but must at least be sane non-negative
+    // numbers so they can never be presented as measured data.
+    const hasRealRankings = (auditData.keywordRankings?.length ?? 0) > 0;
+    for (const campaign of campaignArray) {
+      for (const kw of campaign.targetKeywords ?? []) {
+        if (!hasRealRankings) {
+          kw.currentRanking = null;
+        }
+        if (
+          typeof kw.searchVolume !== "number" ||
+          Number.isNaN(kw.searchVolume) ||
+          kw.searchVolume < 0
+        ) {
+          kw.searchVolume = 0;
+        }
+      }
+    }
+
+    // ------------------------------------------------------------------
     // 8. Store campaigns in seo_campaigns table
     // ------------------------------------------------------------------
     const storedCampaigns: unknown[] = [];

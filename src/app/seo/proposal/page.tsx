@@ -259,7 +259,7 @@ export default function PublicSeoProposalPage() {
                   <div className="text-xs text-muted-foreground mb-4 space-y-1">
                     <div>{contentCount} content pieces scheduled</div>
                     <div>{cj.targetKeywords?.length ?? 0} target keywords</div>
-                    {cj.estimatedROI && <div className="text-green-600 font-medium">{cj.estimatedROI}</div>}
+                    {cj.estimatedROI && <div className="text-muted-foreground">Projected ROI (est.): {cj.estimatedROI}</div>}
                   </div>
 
                   <Button className="w-full">Select {cj.tierName}</Button>
@@ -326,8 +326,8 @@ export default function PublicSeoProposalPage() {
                 <thead>
                   <tr className="border-b">
                     <th className="text-left py-2">Keyword</th>
-                    <th className="text-left py-2">Volume</th>
-                    <th className="text-left py-2">Difficulty</th>
+                    <th className="text-left py-2">Volume (est.)</th>
+                    <th className="text-left py-2">Difficulty (est.)</th>
                     <th className="text-left py-2">Intent</th>
                   </tr>
                 </thead>
@@ -430,8 +430,12 @@ export default function PublicSeoProposalPage() {
         {/* ROI */}
         {cj.estimatedROI && (
           <Card className="p-6">
-            <h2 className="text-lg font-semibold mb-3">Estimated ROI</h2>
+            <h2 className="text-lg font-semibold mb-3">Projected ROI (estimate)</h2>
             <p className="text-sm text-muted-foreground">{cj.estimatedROI}</p>
+            <p className="text-xs text-muted-foreground mt-3 italic">
+              This projection is generated from industry benchmarks and the website audit — it is an
+              estimate, not a guarantee of results.
+            </p>
           </Card>
         )}
 

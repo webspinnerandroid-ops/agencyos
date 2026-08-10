@@ -314,7 +314,7 @@ export default function SeoProposalPage() {
               </div>
               {(approvedCampaign.campaign_json as CampaignJson).estimatedROI && (
                 <div>
-                  <span className="font-medium">Estimated ROI:</span>{" "}
+                  <span className="font-medium">Projected ROI (est.):</span>{" "}
                   {approvedCampaign.campaign_json.estimatedROI}
                 </div>
               )}
@@ -443,8 +443,8 @@ export default function SeoProposalPage() {
                 </div>
                 {cj.estimatedROI && (
                   <div className="flex justify-between text-sm">
-                    <span className="text-muted-foreground">Est. ROI:</span>
-                    <span className="font-medium text-green-600 dark:text-green-400">
+                    <span className="text-muted-foreground">Projected ROI (est.):</span>
+                    <span className="font-medium text-muted-foreground">
                       {cj.estimatedROI}
                     </span>
                   </div>

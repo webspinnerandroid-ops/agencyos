@@ -860,7 +860,7 @@ function CampaignDetails({ campaign }: { campaign: StoredCampaign }) {
       <div className="flex flex-wrap gap-3">
         {cj.estimatedROI && (
           <div className="px-4 py-2 rounded-lg bg-green-50 dark:bg-green-950 text-green-700 dark:text-green-300 text-sm">
-            <span className="font-semibold">Estimated ROI:</span> {cj.estimatedROI}
+            <span className="font-semibold">Projected ROI (est.):</span> {cj.estimatedROI}
           </div>
         )}
         {cj.differentiators?.length > 0 && (
@@ -900,8 +900,8 @@ function CampaignDetails({ campaign }: { campaign: StoredCampaign }) {
               <thead>
                 <tr className="border-b text-left text-xs uppercase text-muted-foreground">
                   <th className="py-2 pr-4 font-medium">Keyword</th>
-                  <th className="py-2 pr-4 font-medium">Volume</th>
-                  <th className="py-2 pr-4 font-medium">Difficulty</th>
+                  <th className="py-2 pr-4 font-medium">Volume (est.)</th>
+                  <th className="py-2 pr-4 font-medium">Difficulty (est.)</th>
                   <th className="py-2 pr-4 font-medium">Intent</th>
                   <th className="py-2 pr-4 font-medium">Target Rank</th>
                 </tr>
@@ -1096,6 +1096,9 @@ function CampaignDetails({ campaign }: { campaign: StoredCampaign }) {
       {cj.kpisAndMetrics && (
         <div>
           <h3 className="text-sm font-semibold mb-2">KPIs & Success Metrics</h3>
+          <p className="text-xs text-muted-foreground mb-2">
+            These are aspirational targets based on industry benchmarks — not guarantees of results.
+          </p>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
             <div className="p-3 rounded-lg bg-muted">
               <span className="text-xs text-muted-foreground">Traffic Increase</span>

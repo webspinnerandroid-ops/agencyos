@@ -253,13 +253,22 @@ export async function getAllUsers(): Promise<ActionResponse<UserRecord[]>> {
       }
     }
 
-    // Fetch user emails from auth.admin (service role)
-    const { data: authUsers, error: authError } = await supabase.auth.admin.listUsers({ perPage: 1000 });
-    if (authError) throw new Error(authError.message);
-
-    // Build all-auth-users map with emails — this is the source of truth
-    // so users with no user_roles row still appear ("unassigned").
-    const authUsersArr = authUsers?.users ?? [];
+    // Fetch ALL auth users from auth.admin (service role), paginating so the
+    // list stays complete past the first 1000 accounts (listUsers returns one
+    // page at a time, with data.nextPage = null on the last page). This is the
+    // source of truth — users with no user_roles row still appear
+    // ("unassigned").
+    const authUsersArr: { id: string; email?: string | null }[] = [];
+    let userPage: number | null = 1;
+    while (userPage !== null) {
+      const { data: pageData, error: authError } = await supabase.auth.admin.listUsers({
+        page: userPage,
+        perPage: 1000,
+      });
+      if (authError) throw new Error(authError.message);
+      authUsersArr.push(...(pageData?.users ?? []));
+      userPage = pageData?.nextPage ?? null;
+    }
     const emailById = new Map<string, string>();
     for (const u of authUsersArr) {
       emailById.set(u.id, u.email ?? "");

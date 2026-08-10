@@ -386,10 +386,13 @@ function getDefaultModelForType(type: ProviderType): string {
   const useDeepSeek = !!process.env.DEEPSEEK_API_KEY && !process.env.OPENAI_API_KEY;
   switch (type) {
     case "text":
-      // DeepSeek's real model IDs are "deepseek-chat" and "deepseek-reasoner".
-      // "deepseek-v4-pro" / "deepseek-v4-flash" are NOT valid DeepSeek models
-      // and cause HTTP 400 "model not found" errors.
-      return useDeepSeek ? "deepseek-chat" : "gpt-4o";
+      // DeepSeek's current API model IDs are "deepseek-v4-pro" and
+      // "deepseek-v4-flash" (see api-docs.deepseek.com/quick_start/pricing).
+      // The legacy "deepseek-chat"/"deepseek-reasoner" aliases were retired
+      // on 2026-07-24 (see api-docs.deepseek.com/updates); they used to point
+      // at V4-Flash's non-thinking/thinking modes. Use v4-flash as the cheap,
+      // fast default for the env-var fallback path.
+      return useDeepSeek ? "deepseek-v4-flash" : "gpt-4o";
     case "image":
       // Google Imagen is the preferred image provider. Falls back to DALL-E
       // only if no Google key is configured.
@@ -403,7 +406,7 @@ function getDefaultModelForType(type: ProviderType): string {
     case "embedding":
       return useDeepSeek ? "text-embedding-3-large" : "text-embedding-3-large";
     default:
-      return useDeepSeek ? "deepseek-chat" : "gpt-4o";
+      return useDeepSeek ? "deepseek-v4-flash" : "gpt-4o";
   }
 }
 

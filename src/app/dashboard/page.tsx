@@ -36,20 +36,6 @@ export default async function DashboardPage({ searchParams }: { searchParams?: P
     .order("scheduled_at", { ascending: false })
     .limit(6);
 
-  let imagesQuery = db
-    .from("media_assets")
-    .select("id, url, prompt, created_at")
-    .eq("tenant_id", tenantId ?? "")
-    .eq("type", "image")
-    .eq("status", "completed");
-  // middleware() sets the workspace_id cookie, so workspaceId is normally
-  // present. When it isn't (no default workspace yet), don't filter by
-  // workspace at all rather than using the broken .is('workspace_id', null).
-  if (workspaceId) {
-    imagesQuery = imagesQuery.eq("workspace_id", workspaceId);
-  }
-  imagesQuery = imagesQuery.order("created_at", { ascending: false }).limit(6);
-
   let auditsQuery = db
     .from("seo_campaigns")
     .select("id, url, tier_name, tier_price, status, created_at")
@@ -59,7 +45,6 @@ export default async function DashboardPage({ searchParams }: { searchParams?: P
 
   if (clientId) {
     postsQuery = postsQuery.eq("client_id", clientId);
-    imagesQuery = imagesQuery.eq("client_id", clientId);
     auditsQuery = auditsQuery.eq("client_id", clientId);
   }
 
@@ -73,8 +58,8 @@ export default async function DashboardPage({ searchParams }: { searchParams?: P
         .eq("is_active", true)
     : Promise.resolve({ count: null });
 
-  const [{ data: clients }, { data: posts }, { data: images }, { data: audits }, { count: apiKeyCountResult }] =
-    await Promise.all([clientsQuery, postsQuery, imagesQuery, auditsQuery, apiKeyCountQuery]);
+  const [{ data: clients }, { data: posts }, { data: audits }, { count: apiKeyCountResult }] =
+    await Promise.all([clientsQuery, postsQuery, auditsQuery, apiKeyCountQuery]);
   const clientsArr = (clients ?? []) as { id: string; name: string }[];
   const apiKeyCount = apiKeyCountResult ?? 0;
 
@@ -182,35 +167,9 @@ export default async function DashboardPage({ searchParams }: { searchParams?: P
         </a>
       </div>
 
-      <div className="grid gap-8 lg:grid-cols-3 items-start">
+      <div className="grid gap-8 lg:grid-cols-2 items-start">
         <div>
           <RecentContentList posts={(posts ?? []) as any} />
-        </div>
-
-        <div>
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-semibold tracking-tight">Recent Images</h2>
-            <a href="/dashboard/generate-images" className="text-sm text-primary underline hover:underline">View all →</a>
-          </div>
-          {images && images.length > 0 ? (
-            <div className="rounded-lg border divide-y">
-              {(images as any[]).map((img) => (
-                <div key={img.id} className="flex items-center gap-3 p-3 hover:bg-muted/30 transition-colors">
-                  <img src={img.url} alt={img.prompt} className="h-12 w-12 rounded object-cover shrink-0" />
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium truncate">{img.prompt}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {new Date(img.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="rounded-lg border bg-card p-8 text-center text-muted-foreground">
-              <p className="text-sm">No images yet.</p>
-            </div>
-          )}
         </div>
 
         <div>

@@ -128,7 +128,7 @@ export function getBlogPrompt(brandVoice?: string, seoContext?: SeoContext): str
 
 9. **Call to Action**: End with a natural, contextual call to action: "${ctaText}" linking to ${ctaUrl}.
 
-10. **Image Prompt**: Generate a descriptive prompt for an AI image generator that would create a featured image complementing this blog post.
+10. **Images**: Plan the post's images. Every post gets exactly ONE featured image (placement "featured") that captures the overall topic, plus ONE inline image (placement "inline") for every ~500 words of body text, each placed after the H2 section it illustrates. A 1500-2000 word post therefore has 1 featured + 3-4 inline images. Each image must have a distinct, detailed prompt that is RELEVANT to the specific section it accompanies (its topic, examples, and data — never generic filler). Never repeat the same prompt twice. In the body markdown, place each inline image immediately after its section's H2 heading as ![description](IMAGE_URL) — but leave the URL as a placeholder like ![description](IMAGE_URL_2) since the actual image URLs are generated separately; the sectionTitle field tells the system where each image belongs.
 
 ${industry ? `\nINDUSTRY CONTEXT: This post is for the ${industry} industry. Use appropriate terminology and examples relevant to this sector.` : ""}
 
@@ -149,9 +149,19 @@ The JSON must have this structure:
     { "level": 2, "text": "string" },
     { "level": 3, "text": "string" }
   ],
-  "body": "string (full blog post body in markdown format)",
-  "suggestedImagePrompt": "string (descriptive image generation prompt)"
-}`;
+  "body": "string (full blog post body in markdown format, with image placeholders like ![description](IMAGE_URL_N) placed after the relevant H2 sections)",
+  "images": [
+    {
+      "prompt": "string (detailed, topic-relevant image generation prompt)",
+      "placement": "featured" | "inline",
+      "sectionTitle": "string (for inline images: the exact H2 heading text this image illustrates; for the featured image: \"\")",
+      "description": "string (short alt-text describing the image)"
+    }
+  ]
+}
+
+IMPORTANT: The first entry of "images" MUST be the featured image (placement "featured"). Follow it with one inline image per ~500 words, in body order, each tied to a real H2 section in your headings. The count of inline images must be approximately floor(bodyWordCount / 500) — never fewer than 1 for a post over 500 words, and never more than 5 total (1 featured + 4 inline) for very long posts.
+`;
 }
 
 // ============================================================================
@@ -470,10 +480,23 @@ export function getBlogPostSchema() {
           required: ["level", "text"],
         },
       },
-      body: { type: "string", description: "Full blog post body in markdown format" },
-      suggestedImagePrompt: { type: "string", description: "Descriptive image generation prompt" },
+      body: { type: "string", description: "Full blog post body in markdown format, with image placeholders (![description](IMAGE_URL_N)) placed after the relevant H2 sections" },
+      images: {
+        type: "array",
+        description: "Exactly one featured image plus one inline image per ~500 words of body text (max 5 total: 1 featured + 4 inline). Each prompt must be relevant to the section it accompanies.",
+        items: {
+          type: "object",
+          properties: {
+            prompt: { type: "string", description: "Detailed, topic-relevant image generation prompt" },
+            placement: { type: "string", enum: ["featured", "inline"] },
+            sectionTitle: { type: "string", description: "For inline images: the exact H2 heading text this image illustrates. For featured: empty string." },
+            description: { type: "string", description: "Short alt-text for the image" },
+          },
+          required: ["prompt", "placement", "sectionTitle", "description"],
+        },
+      },
     },
-    required: ["title", "slug", "metaDescription", "headings", "body", "suggestedImagePrompt"],
+    required: ["title", "slug", "metaDescription", "headings", "body", "images"],
   };
 }
 

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantId, requireRole } from "@/lib/auth";
 import { createClient } from "@supabase/supabase-js";
-import { generateStructuredOutput, generateText } from "@/lib/ai/orchestrator";
+import { generateStructuredOutput, generateText, generateImage } from "@/lib/ai/orchestrator";
 import { getBlogPrompt, getSocialCaptionPrompt, getBlogPostSchema } from "@/lib/ai/seo-prompts";
 import { generateContentSchema } from "@/lib/validations";
 import { incrementUsage } from "@/lib/usage";
@@ -57,13 +57,166 @@ function toPlainCaption(raw: unknown): string {
   return text;
 }
 
+interface BlogImageSpec {
+  prompt: string;
+  placement: "featured" | "inline";
+  sectionTitle: string;
+  description: string;
+}
+
 interface BlogPostResult {
   title: string;
   slug: string;
   metaDescription: string;
   headings: { level: number; text: string }[];
   body: string;
-  suggestedImagePrompt: string;
+  images: BlogImageSpec[];
+  suggestedImagePrompt?: string; // legacy fallback if model omits images
+}
+
+interface GeneratedBlogImage {
+  spec: BlogImageSpec;
+  url: string;
+}
+
+/**
+ * Max images per post — cost guardrail. 1 featured + 1 per ~500 words, capped
+ * so a very long post never burns unbounded image-generation budget.
+ */
+const MAX_BLOG_IMAGES = 5;
+
+/**
+ * Generates an image for each spec (capped), saves them to media_assets so
+ * they appear in the images page history, and returns url + spec pairs.
+ * Failures are isolated per image — a broken provider key or rate limit on
+ * one image never fails the whole blog generation.
+ */
+async function generateBlogImages(
+  tenantId: string,
+  clientId: string | null | undefined,
+  specs: BlogImageSpec[]
+): Promise<GeneratedBlogImage[]> {
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } }
+  );
+
+  const workspaceId = await getCurrentWorkspaceId().catch(() => null);
+  const capped = specs.slice(0, MAX_BLOG_IMAGES);
+  const results: GeneratedBlogImage[] = [];
+
+  await Promise.all(
+    capped.map(async (spec) => {
+      try {
+        // Featured image is the wide hero; inline images are square-ish.
+        const size =
+          spec.placement === "featured" ? "1792x1024" : "1024x1024";
+        const images = await generateImage(tenantId, spec.prompt, {
+          size: size as "1792x1024" | "1024x1024",
+          n: 1,
+          clientId: clientId ?? undefined,
+        });
+
+        const url = images[0]?.url;
+        if (!url) {
+          console.warn(
+            `[generate-content] Image provider returned no image for "${spec.sectionTitle || "featured"}"`
+          );
+          return;
+        }
+
+        // Persist to media_assets so it lands in the images page history.
+        const { error: assetErr } = await supabase.from("media_assets").insert({
+          tenant_id: tenantId,
+          client_id: clientId ?? null,
+          workspace_id: workspaceId,
+          type: "image",
+          prompt: spec.prompt,
+          url,
+          metadata: { placement: spec.placement, sectionTitle: spec.sectionTitle },
+          status: "completed",
+        });
+        if (assetErr) {
+          console.warn(
+            "[generate-content] Failed to save generated image to media_assets:",
+            assetErr.message
+          );
+        }
+
+        results.push({ spec, url });
+        void incrementUsage(tenantId, "image_generations", 1);
+        void incrementUsage(tenantId, "ai_tokens", 1000);
+      } catch (err) {
+        console.warn(
+          `[generate-content] Image generation failed for "${spec.sectionTitle || "featured"}":`,
+          err instanceof Error ? err.message : err
+        );
+      }
+    })
+  );
+
+  return results.sort((a, b) =>
+    (a.spec.placement === "featured" ? 0 : 1) - (b.spec.placement === "featured" ? 0 : 1)
+  );
+}
+
+/**
+ * Replaces image placeholders (![alt](IMAGE_URL_N)) in the body with the real
+ * generated URLs. Falls back to inserting right after the matching H2 heading
+ * when the model didn't emit a placeholder.
+ */
+function injectImagesIntoBody(
+  body: string,
+  images: GeneratedBlogImage[]
+): string {
+  let out = body;
+
+  images.forEach((img, index) => {
+    const alt = img.spec.description || img.spec.sectionTitle || "Image";
+    const markdown = `![${alt}](${img.url})`;
+
+    // 1. Replace an explicit placeholder (1-based like IMAGE_URL_1).
+    // Matches the whole ![alt](IMAGE_URL_N) so the alt text is preserved.
+    const placeholder = new RegExp(
+      `!\\[[^\\]]*\\]\\(\\s*IMAGE_URL_?${index + 1}\\s*\\)`,
+      "i"
+    );
+    if (placeholder.test(out)) {
+      out = out.replace(placeholder, markdown);
+      return;
+    }
+
+    // 2. Inline: insert right after its H2 section heading.
+    if (img.spec.placement === "inline" && img.spec.sectionTitle) {
+      const headingRe = new RegExp(
+        `(^|\\n)##\\s+${escapeRegExp(img.spec.sectionTitle)}(\\n|$)`,
+        "i"
+      );
+      if (headingRe.test(out)) {
+        out = out.replace(
+          headingRe,
+          `$1## ${img.spec.sectionTitle}$2${markdown}\n\n`
+        );
+        return;
+      }
+    }
+
+    // 3. Featured: prepend to the top of the body.
+    if (img.spec.placement === "featured") {
+      out = `${markdown}\n\n${out}`;
+      return;
+    }
+
+    // 4. Last resort: append at the end.
+    out = `${out}\n\n${markdown}`;
+  });
+
+  return out;
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 interface SocialCaptionResult {
@@ -228,6 +381,38 @@ export async function POST(request: NextRequest) {
     }
 
     // ------------------------------------------------------------------
+    // 3.5. Generate the post's images (featured + one per ~500 words)
+    // ------------------------------------------------------------------
+    // The model returns image specs (prompt + placement + section). We
+    // generate each image, save it to media_assets, and inject the real URLs
+    // into the body. Failures are isolated per image — text content always
+    // survives even if every image fails (e.g. no image API key configured).
+    const imageSpecs: BlogImageSpec[] =
+      blogPost.images && blogPost.images.length > 0
+        ? blogPost.images
+        : blogPost.suggestedImagePrompt
+          ? [
+              {
+                prompt: blogPost.suggestedImagePrompt,
+                placement: "featured" as const,
+                sectionTitle: "",
+                description: "Featured image for the post",
+              },
+            ]
+          : [];
+
+    const generatedImages = await generateBlogImages(
+      tenantId,
+      clientId,
+      imageSpecs
+    );
+
+    const bodyWithImages = injectImagesIntoBody(
+      blogPost.body,
+      generatedImages
+    );
+
+    // ------------------------------------------------------------------
     // 4. Generate social captions in parallel for each platform
     // ------------------------------------------------------------------
     const socialCaptionPromises = platforms.map(
@@ -349,8 +534,15 @@ Use the above context to craft a compelling, platform-optimized caption that dri
           slug: blogPost.slug,
           metaDescription: blogPost.metaDescription,
           headings: blogPost.headings,
-          body: blogPost.body,
-          suggestedImagePrompt: blogPost.suggestedImagePrompt,
+          body: bodyWithImages,
+          images: generatedImages.map((img) => ({
+            url: img.url,
+            prompt: img.spec.prompt,
+            placement: img.spec.placement,
+            sectionTitle: img.spec.sectionTitle,
+            description: img.spec.description,
+          })),
+          suggestedImagePrompt: blogPost.suggestedImagePrompt ?? "",
           topic,
           brandVoice,
         },
@@ -434,6 +626,7 @@ Use the above context to craft a compelling, platform-optimized caption that dri
     // ------------------------------------------------------------------
     // 7. Build the response
     // ------------------------------------------------------------------
+    // Count the written text (not the injected markdown image syntax).
     const finalWordCount = countWords(blogPost.body);
 
     return NextResponse.json({
@@ -444,9 +637,16 @@ Use the above context to craft a compelling, platform-optimized caption that dri
         slug: blogPost.slug,
         metaDescription: blogPost.metaDescription,
         headings: blogPost.headings,
-        body: blogPost.body,
+        body: bodyWithImages,
         wordCount: finalWordCount,
-        suggestedImagePrompt: blogPost.suggestedImagePrompt,
+        images: generatedImages.map((img) => ({
+          url: img.url,
+          prompt: img.spec.prompt,
+          placement: img.spec.placement,
+          sectionTitle: img.spec.sectionTitle,
+          description: img.spec.description,
+        })),
+        suggestedImagePrompt: blogPost.suggestedImagePrompt ?? "",
         status: blogPostRow.status,
       },
       socialPosts: socialResults.map(({ platform, caption }, index) => ({

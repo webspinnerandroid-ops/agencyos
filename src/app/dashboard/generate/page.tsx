@@ -34,6 +34,14 @@ interface Client {
   name: string;
 }
 
+interface BlogImage {
+  url: string;
+  prompt: string;
+  placement: "featured" | "inline";
+  sectionTitle: string;
+  description: string;
+}
+
 interface BlogPost {
   id: string;
   title: string;
@@ -42,7 +50,8 @@ interface BlogPost {
   headings: { level: number; text: string }[];
   body: string;
   wordCount?: number;
-  suggestedImagePrompt: string;
+  suggestedImagePrompt?: string;
+  images?: BlogImage[];
   status: string;
 }
 
@@ -441,12 +450,52 @@ export default function GeneratePage() {
                 </div>
               </div>
 
-              <div>
-                <Label className="text-xs">Suggested Image Prompt</Label>
-                <p className="text-sm text-muted-foreground italic mt-0.5">
-                  {result.blogPost.suggestedImagePrompt}
-                </p>
-              </div>
+              {/* Generated images — featured hero + inline section images */}
+              {result.blogPost.images && result.blogPost.images.length > 0 ? (
+                <div>
+                  <Label className="text-xs">
+                    Generated Images ({result.blogPost.images.length})
+                  </Label>
+                  <div className="mt-1 grid gap-3 sm:grid-cols-2">
+                    {result.blogPost.images.map((img, i) => (
+                      <div
+                        key={i}
+                        className="rounded-md border overflow-hidden"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={img.url}
+                          alt={img.description || img.sectionTitle || "Generated image"}
+                          className={`w-full object-cover ${
+                            img.placement === "featured" ? "h-40" : "h-32"
+                          }`}
+                        />
+                        <div className="p-2 space-y-1">
+                          <span
+                            className={`inline-block text-[10px] px-1.5 py-0.5 rounded-full capitalize ${
+                              img.placement === "featured"
+                                ? "bg-primary/10 text-primary"
+                                : "bg-muted text-muted-foreground"
+                            }`}
+                          >
+                            {img.placement}
+                          </span>
+                          <p className="text-xs text-muted-foreground line-clamp-2">
+                            {img.sectionTitle || img.prompt}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : result.blogPost.suggestedImagePrompt ? (
+                <div>
+                  <Label className="text-xs">Suggested Image Prompt</Label>
+                  <p className="text-sm text-muted-foreground italic mt-0.5">
+                    {result.blogPost.suggestedImagePrompt}
+                  </p>
+                </div>
+              ) : null}
             </CardContent>
           </Card>
 

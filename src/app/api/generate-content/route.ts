@@ -10,7 +10,7 @@ import { getCurrentWorkspaceId } from "@/lib/workspace";
 import { getDefaultBrandProfile } from "@/lib/brand-profile";
 import { buildBrandSystemPrompt } from "@/lib/brand-profile-utils";
 import { getWorkspaceKnowledgeContext } from "@/lib/knowledgebase";
-
+import { rateLimitRequest } from "@/lib/rate-limit";
 
 // Known social platforms
 const VALID_PLATFORMS = [
@@ -76,6 +76,20 @@ interface SocialCaptionResult {
 
 export async function POST(request: NextRequest) {
   try {
+    // ------------------------------------------------------------------
+    // 0. Rate limit (abuse protection — each generation burns LLM tokens)
+    // ------------------------------------------------------------------
+    const rl = rateLimitRequest(request, "generate-content", 10);
+    if (!rl.allowed) {
+      return NextResponse.json(
+        { error: `Rate limit exceeded. Try again in ${rl.retryAfterSeconds}s.` },
+        {
+          status: 429,
+          headers: { "Retry-After": String(rl.retryAfterSeconds) },
+        }
+      );
+    }
+
     // ------------------------------------------------------------------
     // 1. Authenticate & authorize
     // ------------------------------------------------------------------

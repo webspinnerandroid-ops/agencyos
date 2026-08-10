@@ -4,9 +4,22 @@ import { generateImage } from "@/lib/ai/orchestrator";
 import { incrementUsage } from "@/lib/usage";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getCurrentWorkspaceId } from "@/lib/workspace";
+import { rateLimitRequest } from "@/lib/rate-limit";
 
 export async function POST(request: NextRequest) {
   try {
+    // Rate limit (abuse protection — each generation hits an image model)
+    const rl = rateLimitRequest(request, "generate-image", 15);
+    if (!rl.allowed) {
+      return NextResponse.json(
+        { error: `Rate limit exceeded. Try again in ${rl.retryAfterSeconds}s.` },
+        {
+          status: 429,
+          headers: { "Retry-After": String(rl.retryAfterSeconds) },
+        }
+      );
+    }
+
     const tenantId = await getTenantId();
     const workspaceId = await getCurrentWorkspaceId();
     const supabase = await createServiceClient();

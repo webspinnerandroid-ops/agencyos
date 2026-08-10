@@ -1,0 +1,59 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+Thumbs.db
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files — never commit (may contain real secrets)
+.env*
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# supabase CLI cache (project refs, local state)
+/supabase/.temp/
+
+# ---------------------------------------------------------------------------
+# Deployment & diagnostics artifacts (repo-root level only)
+# Ad-hoc deploy/diag/fix/verify scripts and their output logs. These encode
+# the VPS deploy pattern but also contain live credentials — keep them local
+# and git-ignored. Real tooling lives in /scripts and /src.
+# ---------------------------------------------------------------------------
+/*.cjs
+/*.js
+/*.cmd
+/*.bat
+/*.txt
+/*.log
+*.bak*

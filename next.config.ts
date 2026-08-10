@@ -1,0 +1,54 @@
+import type { NextConfig } from "next";
+import path from "path";
+
+const securityHeaders = [
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  { key: "X-Frame-Options", value: "SAMEORIGIN" },
+  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+  {
+    key: "Permissions-Policy",
+    value: "camera=(), microphone=(), geolocation=(), interest-cohort=()",
+  },
+  // Relaxed CSP, tested on staging before tightening further:
+  {
+    key: "Content-Security-Policy",
+    value: [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.supabase.co https://www.googletagmanager.com",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob: https: https://*.google-analytics.com https://www.googletagmanager.com",
+      "font-src 'self' data: https://fonts.gstatic.com",
+      "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.deepseek.com https://api.openai.com https://generativelanguage.googleapis.com",
+      "frame-src 'self'",
+      "base-uri 'self'",
+      "form-action 'self'",
+    ].join("; "),
+  },
+];
+
+const nextConfig: NextConfig = {
+  poweredByHeader: false,
+  typescript: {
+    ignoreBuildErrors: false,
+  },
+  // Anchors the Turbopack build to the app directory. Prevents Next 16's
+  // workspace-root inference from being fooled by a parent package.json.
+  turbopack: {
+    root: path.resolve(process.cwd()),
+  },
+  experimental: {
+    serverActions: {
+      bodySizeLimit: "50mb",
+    },
+  },
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: securityHeaders,
+      },
+    ];
+  },
+};
+
+export default nextConfig;

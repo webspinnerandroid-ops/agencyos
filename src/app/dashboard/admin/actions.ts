@@ -334,7 +334,11 @@ export async function getAllUsers(): Promise<ActionResponse<UserRecord[]>> {
   }
 }
 
-export async function assignLevel(userId: string, role: string): Promise<ActionResponse> {
+export async function assignLevel(
+  userId: string,
+  role: string,
+  tenantId?: string
+): Promise<ActionResponse> {
   try {
     await requireSuperAdmin();
 
@@ -344,12 +348,46 @@ export async function assignLevel(userId: string, role: string): Promise<ActionR
     }
 
     const supabase = await createServiceClient();
-    const { error } = await supabase
-      .from("user_roles")
-      .update({ role })
-      .eq("user_id", userId);
 
-    if (error) throw new Error(error.message);
+    // Does the user already have a role row? If so, just update the level.
+    const { data: existing } = await supabase
+      .from("user_roles")
+      .select("user_id, tenant_id")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (existing) {
+      const { error } = await supabase
+        .from("user_roles")
+        .update({ role })
+        .eq("user_id", userId);
+      if (error) throw new Error(error.message);
+      return { success: true };
+    }
+
+    // No role row yet ("unassigned"): insert one, which requires a tenant.
+    if (!tenantId) {
+      return {
+        success: false,
+        error: "This user has no tenant yet — select a tenant to assign them to.",
+      };
+    }
+
+    // Verify the tenant exists before inserting (FK would also reject a bad id).
+    const { data: tenant } = await supabase
+      .from("tenants")
+      .select("id")
+      .eq("id", tenantId)
+      .maybeSingle();
+    if (!tenant) {
+      return { success: false, error: "Selected tenant does not exist." };
+    }
+
+    const { error: insertError } = await supabase
+      .from("user_roles")
+      .insert({ user_id: userId, tenant_id: tenantId, role });
+    if (insertError) throw new Error(insertError.message);
+
     return { success: true };
   } catch (err) {
     return { success: false, error: (err as Error).message };

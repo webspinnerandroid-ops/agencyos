@@ -49,6 +49,8 @@ export default function AdminDashboardPage() {
   const [selPlan, setSelPlan] = useState("starter");
   const [seats, setSeats] = useState(5);
   const [expiry, setExpiry] = useState("");
+  // Per-row tenant choice for users who currently have no tenant ("unassigned")
+  const [tenantForUser, setTenantForUser] = useState<Record<string, string>>({});
 
   const loadData = useCallback(() => {
     startLoading(async () => {
@@ -71,11 +73,17 @@ export default function AdminDashboardPage() {
     });
   };
 
-  const handleAssignLevel = (userId: string, role: string) => {
+  const handleAssignLevel = (userId: string, role: string, tenantId?: string) => {
     startTransition(async () => {
-      const r = await assignLevel(userId, role);
+      const r = await assignLevel(userId, role, tenantId);
       if (r.success) {
         setFeedback({ type: "success", message: "Level updated." });
+        // Clear the per-row tenant choice now that the user has one
+        setTenantForUser((prev) => {
+          const next = { ...prev };
+          delete next[userId];
+          return next;
+        });
         loadData();
       } else {
         setFeedback({ type: "error", message: r.error ?? "Failed to update level." });
@@ -123,12 +131,34 @@ export default function AdminDashboardPage() {
               {!u.is_trial && <Badge className={statusColor(u.license_status)}>{u.license_status ?? "none"}</Badge>}
             </td>
             <td className="py-3 px-3">
-              <Select value={u.role} onValueChange={(v) => handleAssignLevel(u.user_id, v)}>
-                <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {LEVELS.map(lvl => <SelectItem key={lvl.id} value={lvl.id}>{lvl.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              {!u.tenant_id ? (
+                <div className="flex items-center gap-2">
+                  <Select
+                    value={tenantForUser[u.user_id] ?? ""}
+                    onValueChange={(v) => setTenantForUser(prev => ({ ...prev, [u.user_id]: v }))}
+                  >
+                    <SelectTrigger className="w-44">
+                      <SelectValue placeholder={tenants.length === 0 ? "No tenants yet" : "Tenant..."} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {tenants.map(t => <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <Select value={u.role} onValueChange={(v) => handleAssignLevel(u.user_id, v, tenantForUser[u.user_id])}>
+                    <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {LEVELS.map(lvl => <SelectItem key={lvl.id} value={lvl.id}>{lvl.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : (
+                <Select value={u.role} onValueChange={(v) => handleAssignLevel(u.user_id, v)}>
+                  <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {LEVELS.map(lvl => <SelectItem key={lvl.id} value={lvl.id}>{lvl.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              )}
             </td>
           </tr>
         ))}

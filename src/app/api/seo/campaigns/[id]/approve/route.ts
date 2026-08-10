@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { getTenantId, getRole, getClientId } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import { approveAndDeploy } from "@/lib/seo/deployCampaign";
+import {
+  assertTenantOwner,
+  tenantScopedClient,
+} from "@/lib/supabase/tenant-scope";
 
 /**
  * POST /api/seo/campaigns/[id]/approve
@@ -50,12 +54,29 @@ export async function POST(
 
         tenantId = campaign.tenant_id;
       } else {
-        // Agency user: use tenant from middleware
+        // Agency user: use tenant from middleware, and verify the campaign
+        // actually belongs to that tenant. The scoped client auto-applies
+        // the tenant_id filter; assertTenantOwner is defense-in-depth for
+        // the by-id fetch.
         tenantId = await getTenantId();
+        const scoped = tenantScopedClient(supabase, tenantId);
+        const { data: campaign } = await scoped
+          .from("seo_campaigns")
+          .select("tenant_id")
+          .eq("id", id)
+          .single();
+
+        assertTenantOwner(campaign, tenantId, "Campaign");
       }
-    } catch {
-      // Fallback: use tenant ID from middleware
-      tenantId = await getTenantId();
+    } catch (error) {
+      // Ownership check failed (missing/foreign campaign) or auth context
+      // missing — reject rather than silently proceeding with a fallback.
+      const message =
+        error instanceof Error ? error.message : "Internal server error";
+      if (message.includes("does not belong") || message.includes("not found")) {
+        return NextResponse.json({ error: message }, { status: 404 });
+      }
+      throw error;
     }
 
     const result = await approveAndDeploy(id, tenantId);

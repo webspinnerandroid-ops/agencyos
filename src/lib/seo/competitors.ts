@@ -176,6 +176,7 @@ export async function addManualCompetitor(
 // ============================================================================
 
 export async function removeManualCompetitor(
+  tenantId: string,
   competitorId: string
 ): Promise<boolean> {
   try {
@@ -184,6 +185,7 @@ export async function removeManualCompetitor(
       .from("competitors")
       .delete()
       .eq("id", competitorId)
+      .eq("tenant_id", tenantId)
       .eq("is_manual", true);
 
     if (error) {

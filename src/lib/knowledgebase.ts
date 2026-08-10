@@ -262,11 +262,13 @@ export async function deleteItem(itemId: string): Promise<ActionResponse> {
     const tenantId = await getTenantId();
     const supabase = getAdminClient();
 
-    // Get storage_path before deleting
+    // Get storage_path before deleting — must be scoped to this tenant or
+    // a tenant could delete another tenant's storage object by item id.
     const { data: item } = await supabase
       .from("knowledgebase_items")
       .select("storage_path")
       .eq("id", itemId)
+      .eq("tenant_id", tenantId)
       .single();
 
     // Delete from storage if file exists
@@ -304,7 +306,8 @@ async function scrapeUrlItem(
     await supabase
       .from("knowledgebase_items")
       .update({ status: "scraping" })
-      .eq("id", itemId);
+      .eq("id", itemId)
+      .eq("tenant_id", tenantId);
 
     const response = await fetch(url, {
       headers: { "User-Agent": "AgencyOS/1.0 Knowledgebase Scraper" },
@@ -339,7 +342,8 @@ async function scrapeUrlItem(
         extracted_metadata: metadata,
         status: "ready",
       })
-      .eq("id", itemId);
+      .eq("id", itemId)
+      .eq("tenant_id", tenantId);
   } catch (err: any) {
     await supabase
       .from("knowledgebase_items")
@@ -347,7 +351,8 @@ async function scrapeUrlItem(
         status: "error",
         error_message: err?.message ?? "Unknown error during scraping",
       })
-      .eq("id", itemId);
+      .eq("id", itemId)
+      .eq("tenant_id", tenantId);
   }
 }
 

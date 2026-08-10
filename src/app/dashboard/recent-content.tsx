@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { FileText, MessageCircle, Clock, Trash2, X, ImageIcon } from "lucide-react";
 import PublishButton from "@/components/PublishButton";
+import PostContent from "@/components/BlogContent";
 
 interface Post {
   id: string;
@@ -188,11 +189,23 @@ export function RecentContentList({ posts: initialPosts }: { posts: Post[] }) {
                 </div>
               )}
 
-              {/* Content */}
+              {/* Content — blog bodies render as markdown so embedded images display */}
               <div>
                 <h4 className="text-sm font-semibold mb-2">Content</h4>
-                <div className="text-sm text-muted-foreground bg-muted/50 rounded-md p-3 whitespace-pre-wrap max-h-80 overflow-y-auto">
-                  {getPostPreview(selectedPost).body || JSON.stringify(selectedPost.content, null, 2) || "No content"}
+                <div className="text-sm text-muted-foreground bg-muted/50 rounded-md p-3 max-h-80 overflow-y-auto">
+                  {getPostPreview(selectedPost).type === "blog" &&
+                  getPostPreview(selectedPost).body ? (
+                    <PostContent
+                      content={getPostPreview(selectedPost).body}
+                      markdown
+                    />
+                  ) : (
+                    <div className="whitespace-pre-wrap">
+                      {getPostPreview(selectedPost).body ||
+                        JSON.stringify(selectedPost.content, null, 2) ||
+                        "No content"}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -204,17 +217,48 @@ export function RecentContentList({ posts: initialPosts }: { posts: Post[] }) {
                 </pre>
               </details>
 
-              {/* Suggested Image Prompt */}
-              {getPostPreview(selectedPost).suggestedImagePrompt && (
-                <div>
-                  <h4 className="text-sm font-semibold mb-2 flex items-center gap-1.5">
-                    <ImageIcon className="size-3.5" /> Suggested Image Prompt
-                  </h4>
-                  <p className="text-sm text-muted-foreground bg-purple-50 dark:bg-purple-950/50 rounded-md p-3 italic">
-                    {getPostPreview(selectedPost).suggestedImagePrompt}
-                  </p>
-                </div>
-              )}
+              {/* Generated images + suggested image prompt */}
+              {(() => {
+                const preview = getPostPreview(selectedPost);
+                const c =
+                  typeof selectedPost.content === "string"
+                    ? (() => { try { return JSON.parse(selectedPost.content); } catch { return null; } })()
+                    : selectedPost.content;
+                const images: { url: string; description?: string; placement?: string }[] =
+                  (c as Record<string, unknown>)?.images as never[] ?? [];
+                return (
+                  <>
+                    {images.length > 0 && (
+                      <div>
+                        <h4 className="text-sm font-semibold mb-2 flex items-center gap-1.5">
+                          <ImageIcon className="size-3.5" /> Generated Images ({images.length})
+                        </h4>
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          {images.map((img, i) => (
+                            /* eslint-disable-next-line @next/next/no-img-element */
+                            <img
+                              key={i}
+                              src={img.url}
+                              alt={img.description || "Generated image"}
+                              className="w-full h-28 object-cover rounded-md border"
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {preview.suggestedImagePrompt && (
+                      <div>
+                        <h4 className="text-sm font-semibold mb-2 flex items-center gap-1.5">
+                          <ImageIcon className="size-3.5" /> Suggested Image Prompt
+                        </h4>
+                        <p className="text-sm text-muted-foreground bg-purple-50 dark:bg-purple-950/50 rounded-md p-3 italic">
+                          {preview.suggestedImagePrompt}
+                        </p>
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
             </div>
             <div className="p-4 border-t flex justify-end gap-2" onClick={(e) => e.stopPropagation()}>
               <button

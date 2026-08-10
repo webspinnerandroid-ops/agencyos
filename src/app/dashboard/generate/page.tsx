@@ -24,6 +24,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Loader2, Copy, Check, Sparkles, FileText } from "lucide-react";
+import PostContent from "@/components/BlogContent";
 
 // ------------------------------------------------------------------
 // Types
@@ -424,28 +425,14 @@ export default function GeneratePage() {
                 </div>
               )}
 
-              {/* Body */}
+              {/* Body — rendered markdown so embedded images display */}
               <div>
                 <Label className="text-xs">Body</Label>
                 <div className="mt-1 p-4 rounded-md bg-muted/50 border max-h-96 overflow-y-auto">
-                  <div
-                    className="prose prose-sm dark:prose-invert max-w-none"
-                    dangerouslySetInnerHTML={{
-                      __html: result.blogPost.body
-                        .replace(/\n/g, "<br/>")
-                        .replace(
-                          /^### (.+)$/gm,
-                          "<h3 class='text-base font-semibold mt-4 mb-1'>$1</h3>"
-                        )
-                        .replace(
-                          /^## (.+)$/gm,
-                          "<h2 class='text-lg font-bold mt-4 mb-1'>$1</h2>"
-                        )
-                        .replace(
-                          /^# (.+)$/gm,
-                          "<h1 class='text-xl font-bold mt-4 mb-1'>$1</h1>"
-                        ),
-                    }}
+                  <PostContent
+                    content={result.blogPost.body}
+                    markdown
+                    className="text-sm"
                   />
                 </div>
               </div>

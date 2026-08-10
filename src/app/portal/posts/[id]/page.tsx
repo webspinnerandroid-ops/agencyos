@@ -4,6 +4,7 @@ import { requireClientRole } from "@/lib/auth"
 import { format, parseISO } from "date-fns"
 import PostComments from "./post-comments"
 import PostActions from "./post-actions"
+import PostContent from "@/components/BlogContent"
 
 // ------------------------------------------------------------------
 // Types
@@ -201,8 +202,8 @@ export default async function PostDetailPage({
         <h2 className="text-sm font-semibold mb-3 text-muted-foreground uppercase tracking-wider">
           Content
         </h2>
-        <div className="text-sm whitespace-pre-wrap leading-relaxed">
-          {postDetail.content ?? "No content provided."}
+        <div className="text-sm leading-relaxed">
+          <PostContent content={postDetail.content} />
         </div>
       </section>
 

@@ -60,6 +60,7 @@ import {
 } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import PostContent from "@/components/BlogContent";
 
 // ------------------------------------------------------------------
 // Types
@@ -663,11 +664,11 @@ export default function ContentCalendar({
                   </div>
                 )}
 
-                {/* Content */}
+                {/* Content — blog bodies render as markdown so images display */}
                 <div>
                   <h4 className="text-sm font-medium mb-1">Content</h4>
-                  <div className="text-sm text-muted-foreground bg-muted/50 rounded-md p-3 max-h-48 overflow-y-auto whitespace-pre-wrap">
-                    {excerptFromContent(selectedPost.content, 2000)}
+                  <div className="text-sm text-muted-foreground bg-muted/50 rounded-md p-3 max-h-48 overflow-y-auto">
+                    <PostContent content={selectedPost.content} />
                   </div>
                 </div>
 

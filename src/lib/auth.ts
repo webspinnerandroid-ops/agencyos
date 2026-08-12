@@ -48,6 +48,15 @@ export async function getRole(): Promise<UserRole> {
 }
 
 // ------------------------------------------------------------------
+// getUserEmail
+// Reads the x-user-email cookie set by the middleware (best-effort; returns
+// null when unavailable, e.g. server contexts without the middleware).
+// ------------------------------------------------------------------
+export async function getUserEmail(): Promise<string | null> {
+  return await getAuthCookie("x-user-email")
+}
+
+// ------------------------------------------------------------------
 // getClientId
 // Reads the x-client-id cookie set by the middleware (only for client
 // role users). Returns null if not set (non-client users).

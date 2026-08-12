@@ -8,7 +8,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Building2, Users, FileText, Key, TrendingUp, Shield, X, UserCog } from "lucide-react";
-import { getDashboardStats, getAllTenants, getLicenses, issueLicense, updateLicensePlan, renewLicense, revokeLicense, deleteLicense, deleteUser, deleteTenant, getAllUsers, assignLevel, type TenantSummary, type LicenseRecord, type UserRecord } from "./actions";
+import { getDashboardStats, getAllTenants, getLicenses, getLicenseAudit, issueLicense, updateLicensePlan, renewLicense, revokeLicense, deleteLicense, deleteUser, deleteTenant, getAllUsers, assignLevel, type TenantSummary, type LicenseRecord, type LicenseAuditEntry, type UserRecord } from "./actions";
 
 const PLANS = [
   { id: "starter", name: "Starter" },
@@ -45,6 +45,8 @@ export default function AdminDashboardPage() {
   const [isLoading, startLoading] = useTransition();
   const [isPending, startTransition] = useTransition();
   const [showForm, setShowForm] = useState(false);
+  const [auditFor, setAuditFor] = useState<Record<string, LicenseAuditEntry[]>>({});
+  const [expandedAudit, setExpandedAudit] = useState<string | null>(null);
   const [selTenant, setSelTenant] = useState("");
   const [selPlan, setSelPlan] = useState("starter");
   const [seats, setSeats] = useState(5);
@@ -83,6 +85,29 @@ export default function AdminDashboardPage() {
         : { type: "error", message: r.error ?? "Failed to delete user." });
       loadData();
     });
+  };
+
+  const handleShowAudit = (licenseId: string) => {
+    const next = expandedAudit === licenseId ? null : licenseId;
+    setExpandedAudit(next);
+    if (next && !auditFor[licenseId]) {
+      startTransition(async () => {
+        const r = await getLicenseAudit(licenseId);
+        if (r.success) setAuditFor((prev) => ({ ...prev, [licenseId]: r.data ?? [] }));
+      });
+    }
+  };
+
+  const auditLabel = (a: LicenseAuditEntry) => {
+    const details = a.details ?? {};
+    switch (a.action) {
+      case "renewed": return `Renewed +${details.days ?? "?"} days → expires ${details.expires_at ? new Date(String(details.expires_at)).toLocaleDateString() : "?"}`;
+      case "plan_changed": return `Plan changed → ${details.planId ?? "?"}`;
+      case "revoked": return "License revoked";
+      case "issued": return `Issued (${details.planId ?? "?"}, ${details.seats ?? "?"} seats)`;
+      case "deleted": return "License permanently deleted";
+      default: return a.action.replace(/_/g, " ");
+    }
   };
 
   const handleDeleteLicense = (licenseId: string, key: string) => {
@@ -252,6 +277,14 @@ export default function AdminDashboardPage() {
               <Button
                 variant="outline"
                 size="sm"
+                onClick={() => handleShowAudit(l.id)}
+                title="View this license's change history"
+              >
+                History
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={() => startTransition(async () => {
                   const r = await renewLicense(l.id, 30);
                   setFeedback(r.success
@@ -265,6 +298,28 @@ export default function AdminDashboardPage() {
               </Button>
               {l.status === "active" && <Button variant="ghost" size="sm" onClick={() => startTransition(async () => { await revokeLicense(l.id); loadData(); })}>Revoke</Button>}
               <Button variant="ghost" size="sm" className="text-destructive" onClick={() => handleDeleteLicense(l.id, l.license_key)}>Delete</Button>
+            </td>
+          </tr>
+        ))}
+        {licenses.map(l => expandedAudit === l.id && (
+          <tr key={l.id + "-audit"}>
+            <td colSpan={7} className="py-2 px-3 bg-muted/30">
+              <div className="text-xs">
+                <p className="font-semibold mb-2">Change History</p>
+                {auditFor[l.id]?.length ? (
+                  <ul className="space-y-1.5">
+                    {auditFor[l.id].map((a) => (
+                      <li key={a.id} className="flex items-center gap-2 flex-wrap">
+                        <span className="font-medium">{auditLabel(a)}</span>
+                        <span className="text-muted-foreground">by {a.actor_email ?? "unknown"}</span>
+                        <span className="text-muted-foreground">· {new Date(a.created_at).toLocaleString()}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-muted-foreground">No changes logged yet.</p>
+                )}
+              </div>
             </td>
           </tr>
         ))}

@@ -52,6 +52,7 @@ export default async function DashboardLayout({
         { href: "/dashboard/ai-team", label: "AI Team" },
         { href: "/dashboard/generate", label: "Generate" },
         { href: "/dashboard/generate-images", label: "Images" },
+        { href: "/dashboard/generate-videos", label: "Videos" },
       ],
     },
     {
@@ -60,6 +61,7 @@ export default async function DashboardLayout({
         { href: "/dashboard/seo", label: "SEO" },
         { href: "/dashboard/calendar", label: "Calendar" },
         { href: "/dashboard/workspaces", label: "Workspaces" },
+        { href: "/dashboard/cms", label: "Website" },
       ],
     },
     {

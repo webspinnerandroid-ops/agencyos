@@ -107,6 +107,7 @@ const PROVIDER_NAME_MAP: Record<string, string> = {
   synthesia: "Synthesia",
   kaiber: "Kaiber",
   wan: "Alibaba Wan",
+  fal: "fal.ai",
   elevenlabs: "ElevenLabs",
   playht: "Play.ht",
   murf: "Murf",
@@ -142,6 +143,7 @@ const PROVIDER_BASE_URLS: Record<string, string> = {
   synthesia: "https://api.synthesia.io/v1",
   kaiber: "https://api.kaiber.ai/v1",
   wan: "https://dashscope.aliyuncs.com/api/v1",
+  fal: "https://queue.fal.run",
   elevenlabs: "https://api.elevenlabs.io/v1",
   playht: "https://api.play.ht/api/v2",
   murf: "https://api.murf.ai/v1",
@@ -225,9 +227,38 @@ async function decryptKey(encryptedHex: string): Promise<string> {
 export async function getModelForTask(
   tenantId: string,
   task: AITask,
-  clientId?: string
+  clientId?: string,
+  preferredModelId?: string
 ): Promise<ModelResolution> {
   const supabase = getServiceSupabase();
+
+  // Step 0: Explicit model override (e.g. the Generate Videos page picker).
+  // Uses this exact model if the tenant has an active key for its provider.
+  if (preferredModelId) {
+    const { data: modelRow } = await supabase
+      .from("ai_models")
+      .select("id, model_identifier, provider_id, provider:ai_providers!inner ( id, name, base_url, type )")
+      .eq("id", preferredModelId)
+      .maybeSingle();
+    if (modelRow) {
+      const provider = modelRow.provider as unknown as {
+        id: string;
+        name: string;
+        base_url: string;
+        type: ProviderType;
+      };
+      const apiKey = await getApiKeyForProviderId(supabase, tenantId, provider.id);
+      if (apiKey) {
+        return {
+          providerName: provider.name,
+          providerType: provider.type,
+          model: modelRow.model_identifier,
+          apiKey,
+          providerBaseUrl: provider.base_url ?? "https://api.openai.com/v1",
+        };
+      }
+    }
+  }
 
   // --- Step 1: Try task_model_mappings with joins ---------------------------
   const { data: allMappings } = await supabase
@@ -1185,9 +1216,16 @@ export async function generateVideo(
     duration?: number;
     resolution?: string;
     clientId?: string;
+    modelId?: string;
+    imageUrl?: string;
   }
 ): Promise<VideoGenerationResult> {
-  const resolution = await getModelForTask(tenantId, "video_generation", options?.clientId);
+  const resolution = await getModelForTask(
+    tenantId,
+    "video_generation",
+    options?.clientId,
+    options?.modelId
+  );
 
   // Route by provider name
   if (resolution.providerName === "Runway") {
@@ -1202,9 +1240,91 @@ export async function generateVideo(
   if (resolution.providerName === "Alibaba Wan" || resolution.providerBaseUrl.includes("dashscope")) {
     return callWanAPI(resolution, prompt, options);
   }
+  if (resolution.providerName === "fal.ai" || resolution.providerBaseUrl.includes("fal.run")) {
+    return callFalAPI(resolution, prompt, options);
+  }
 
   // Default to Runway-compatible
   return callRunwayAPI(resolution, prompt, options);
+}
+
+/**
+ * fal.ai queue API — hosts Wan 2.1/2.2 (and many other models) behind one key.
+ * Submit to https://queue.fal.run/<model-id> with `Authorization: Key <key>`,
+ * poll the returned status_url, then fetch the finished result. Generation
+ * usually takes 1–3 minutes, so we poll up to ~3 minutes and return
+ * "processing" with the request id on timeout for later pickup.
+ */
+async function callFalAPI(
+  resolution: ModelResolution,
+  prompt: string,
+  options?: { duration?: number; imageUrl?: string }
+): Promise<VideoGenerationResult> {
+  const endpoint = `${resolution.providerBaseUrl}/${resolution.model}`;
+  const body: Record<string, unknown> = {
+    prompt,
+    // Wan 2.1/2.2 accept a duration hint (5s default; up to 10s on some hosts).
+    duration: Math.min(options?.duration ?? 5, 10),
+  };
+  if (resolution.model.includes("image-to-video")) {
+    if (!options?.imageUrl) {
+      throw new Error(
+        "This model needs a reference image. Pass an image URL (image-to-video)."
+      );
+    }
+    body.image_url = options.imageUrl;
+  }
+
+  const submitRes = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Key ${resolution.apiKey}`,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!submitRes.ok) {
+    const errorText = await submitRes.text();
+    const error: any = new Error(`fal.ai API error (${submitRes.status}): ${errorText}`);
+    error.status = submitRes.status;
+    throw error;
+  }
+  const submitData = await submitRes.json();
+  const statusUrl = submitData.status_url as string | undefined;
+  const requestId = (submitData.request_id as string) ?? "";
+  if (!statusUrl) {
+    throw new Error(`fal.ai returned no status_url: ${JSON.stringify(submitData)}`);
+  }
+
+  const deadline = Date.now() + 180_000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 5000));
+    const pollRes = await fetch(statusUrl, {
+      headers: { Authorization: `Key ${resolution.apiKey}` },
+    });
+    if (!pollRes.ok) continue;
+    const pollData = await pollRes.json();
+    const status = pollData.status as string;
+    if (status === "COMPLETED") {
+      const resultRes = await fetch(pollData.response_url as string, {
+        headers: { Authorization: `Key ${resolution.apiKey}` },
+      });
+      if (resultRes.ok) {
+        const result = await resultRes.json();
+        const video = result.video?.url ?? result.videos?.[0]?.url ?? result.output?.video?.url;
+        if (video) {
+          return { id: requestId, status: "completed", videoUrl: video, estimatedSeconds: options?.duration ?? 5 };
+        }
+      }
+    } else if (status === "FAILED" || status === "CANCELLED") {
+      const msg = pollData.error ?? pollData.detail ?? "Unknown failure";
+      const error: any = new Error(`fal.ai generation failed: ${JSON.stringify(msg)}`);
+      throw error;
+    }
+    // IN_QUEUE / IN_PROGRESS → keep polling
+  }
+
+  return { id: requestId, status: "processing", estimatedSeconds: options?.duration ?? 5 };
 }
 
 /**

@@ -39,6 +39,7 @@ export async function POST(request: NextRequest) {
       resolution: body.resolution,
       clientId: body.clientId,
       tags: body.tags,
+      modelId: body.modelId,
     });
 
     // Track usage (1 video + a nominal token cost).

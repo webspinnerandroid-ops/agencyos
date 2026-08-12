@@ -1,7 +1,31 @@
 "use server";
 
 import { createServiceClient } from "@/lib/supabase/server";
-import { getTenantId, getRole } from "@/lib/auth";
+import { getTenantId, getRole, getUserEmail } from "@/lib/auth";
+
+/** Append an entry to the license audit log (best-effort, never fails the op). */
+async function auditLicense(
+  supabase: Awaited<ReturnType<typeof createServiceClient>>,
+  entry: {
+    licenseId: string;
+    tenantId?: string | null;
+    action: string;
+    details?: Record<string, unknown>;
+  }
+): Promise<void> {
+  try {
+    const email = await getUserEmail();
+    await supabase.from("license_audit_log").insert({
+      license_id: entry.licenseId,
+      tenant_id: entry.tenantId ?? null,
+      actor_email: email,
+      action: entry.action,
+      details: entry.details ?? {},
+    });
+  } catch (err) {
+    console.error("[admin] audit log write failed:", err);
+  }
+}
 
 export interface ActionResponse<T = void> {
   success: boolean;
@@ -30,6 +54,16 @@ export interface LicenseRecord {
   issued_at: string;
   expires_at: string | null;
   tenant_name?: string;
+}
+
+export interface LicenseAuditEntry {
+  id: string;
+  license_id: string;
+  tenant_id: string | null;
+  actor_email: string | null;
+  action: string;
+  details: Record<string, unknown>;
+  created_at: string;
 }
 
 export interface UserRecord {
@@ -190,7 +224,32 @@ export async function issueLicense(
       .single();
 
     if (error) throw new Error(error.message);
+    await auditLicense(supabase, {
+      licenseId: data.id,
+      tenantId,
+      action: "issued",
+      details: { planId, seats, expiresAt: expiresAt ?? null, licenseKey },
+    });
     return { success: true, data: data as LicenseRecord };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+export async function getLicenseAudit(
+  licenseId: string
+): Promise<ActionResponse<LicenseAuditEntry[]>> {
+  try {
+    await requireSuperAdmin();
+    const supabase = await createServiceClient();
+    const { data, error } = await supabase
+      .from("license_audit_log")
+      .select("id, license_id, tenant_id, actor_email, action, details, created_at")
+      .eq("license_id", licenseId)
+      .order("created_at", { ascending: false })
+      .limit(50);
+    if (error) throw new Error(error.message);
+    return { success: true, data: (data ?? []) as LicenseAuditEntry[] };
   } catch (err) {
     return { success: false, error: (err as Error).message };
   }
@@ -202,6 +261,7 @@ export async function revokeLicense(licenseId: string): Promise<ActionResponse> 
     const supabase = await createServiceClient();
     const { error } = await supabase.from("licenses").update({ status: "cancelled" }).eq("id", licenseId);
     if (error) throw new Error(error.message);
+    await auditLicense(supabase, { licenseId, action: "revoked" });
     return { success: true };
   } catch (err) {
     return { success: false, error: (err as Error).message };
@@ -253,6 +313,13 @@ export async function updateLicensePlan(
         .eq("id", sub.id);
     }
 
+    await auditLicense(supabase, {
+      licenseId,
+      tenantId: existing.tenant_id,
+      action: "plan_changed",
+      details: { planId },
+    });
+
     return { success: true };
   } catch (err) {
     return { success: false, error: (err as Error).message };
@@ -274,7 +341,7 @@ export async function renewLicense(
 
     const { data: existing } = await supabase
       .from("licenses")
-      .select("id, expires_at, metadata")
+      .select("id, tenant_id, expires_at, metadata")
       .eq("id", licenseId)
       .maybeSingle();
     if (!existing) throw new Error("License not found.");
@@ -299,6 +366,13 @@ export async function renewLicense(
       })
       .eq("id", licenseId);
     if (error) throw new Error(error.message);
+
+    await auditLicense(supabase, {
+      licenseId,
+      tenantId: existing.tenant_id ?? null,
+      action: "renewed",
+      details: { days, expires_at: newExpiry.toISOString() },
+    });
 
     return { success: true, data: { expires_at: newExpiry.toISOString() } };
   } catch (err) {

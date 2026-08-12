@@ -39,6 +39,7 @@ export interface CreateVideoOptions {
   resolution?: string;
   clientId?: string;
   tags?: string[];
+  modelId?: string;
 }
 
 export interface CreateVoiceOptions {
@@ -241,6 +242,7 @@ export async function createVideoAsset(
       duration: options?.duration,
       resolution: options?.resolution,
       clientId: options?.clientId,
+      modelId: options?.modelId,
     });
 
     // Video generation is async — store the provider ID and mark as processing

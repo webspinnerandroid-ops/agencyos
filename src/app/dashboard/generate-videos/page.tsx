@@ -56,6 +56,24 @@ function modeLabel(meta?: Record<string, unknown>): string {
   return "Text → Video";
 }
 
+/** mm:ss (or h:mm:ss) from seconds. */
+function formatDuration(seconds?: number): string | null {
+  if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) return null;
+  const s = Math.round(seconds);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+  return `${m}:${String(sec).padStart(2, "0")}`;
+}
+
+/** Human-readable file size from bytes. */
+function formatSize(bytes?: number): string | null {
+  if (bytes == null || !Number.isFinite(bytes) || bytes <= 0) return null;
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
 interface ModelOption {
   id: string;
   model_identifier: string;
@@ -83,6 +101,12 @@ export default function GenerateVideosPage() {
   const [activeTab, setActiveTab] = useState<"generate" | "library">("generate");
   const [libraryLoading, setLibraryLoading] = useState(true);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Poster capture in flight per asset id (manual button spinner).
+  const [capturing, setCapturing] = useState<Record<string, boolean>>({});
+  // Duration + file size badges per asset id.
+  const [videoInfo, setVideoInfo] = useState<
+    Record<string, { duration?: number; sizeBytes?: number }>
+  >({});
 
   // ------------------------------------------------------------------
   // Load video models (from task-model mapping for video_generation)
@@ -309,15 +333,16 @@ export default function GenerateVideosPage() {
     setActiveTab("generate");
   };
 
-  // Captures a poster frame from a completed video that has no thumbnail yet:
-  // seeks to ~0.4s, draws to canvas, uploads the data URL, and refreshes the
-  // library so the poster shows. Client-side only — no ffmpeg on the server.
+  // Captures a poster frame from a completed video: seeks to ~0.4s, draws to
+  // canvas, uploads the data URL, and refreshes the library. Runs automatically
+  // for videos missing a thumbnail, and on demand via the capture button.
   const capturingRef = useRef<Set<string>>(new Set());
-  const capturePoster = async (v: VideoAsset) => {
+  const capturePoster = async (v: VideoAsset, opts?: { force?: boolean }) => {
     if (!v.url || v.status !== "completed") return;
-    if (v.thumbnail_url) return;
+    if (!opts?.force && v.thumbnail_url) return;
     if (capturingRef.current.has(v.id)) return;
     capturingRef.current.add(v.id);
+    setCapturing((prev) => ({ ...prev, [v.id]: true }));
     try {
       const video = document.createElement("video");
       video.src = v.url;
@@ -353,14 +378,51 @@ export default function GenerateVideosPage() {
       // poster is a nice-to-have — never break the library over it
     } finally {
       capturingRef.current.delete(v.id);
+      setCapturing((prev) => ({ ...prev, [v.id]: false }));
     }
   };
 
-  // Kick off poster capture for any completed video missing a thumbnail.
+  // Reads a video's duration + file size (HEAD on the CDN URL) so the card
+  // can show badges. Cached per asset id.
+  const readVideoInfo = async (v: VideoAsset) => {
+    if (!v.url || v.status !== "completed") return;
+    if (videoInfo[v.id]) return;
+    const info: { duration?: number; sizeBytes?: number } = {};
+    try {
+      const res = await fetch(v.url, { method: "HEAD", credentials: "omit" });
+      const len = Number(res.headers.get("content-length"));
+      if (Number.isFinite(len) && len > 0) info.sizeBytes = len;
+    } catch {
+      // ignore
+    }
+    try {
+      const video = document.createElement("video");
+      video.preload = "metadata";
+      video.src = v.url;
+      await new Promise<void>((resolve) => {
+        video.onloadedmetadata = () => resolve();
+        video.onerror = () => resolve();
+        setTimeout(resolve, 6000);
+        video.load();
+      });
+      if (Number.isFinite(video.duration) && video.duration > 0) {
+        info.duration = video.duration;
+      }
+    } catch {
+      // ignore
+    }
+    if (info.duration != null || info.sizeBytes != null) {
+      setVideoInfo((prev) => ({ ...prev, [v.id]: info }));
+    }
+  };
+
+  // Kick off poster capture for any completed video missing a thumbnail, and
+  // read size/duration badges for completed videos.
   useEffect(() => {
     (videos ?? []).forEach((v) => {
-      if (v.status === "completed" && v.url && !v.thumbnail_url) {
-        void capturePoster(v);
+      if (v.status === "completed" && v.url) {
+        if (!v.thumbnail_url) void capturePoster(v);
+        void readVideoInfo(v);
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -687,6 +749,16 @@ export default function GenerateVideosPage() {
                           {v.model}
                         </span>
                       ) : null}
+                      {videoInfo[v.id]?.duration != null && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">
+                          {formatDuration(videoInfo[v.id].duration)}
+                        </span>
+                      )}
+                      {videoInfo[v.id]?.sizeBytes != null && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">
+                          {formatSize(videoInfo[v.id].sizeBytes)}
+                        </span>
+                      )}
                     </div>
                     <p className="text-xs text-muted-foreground line-clamp-2" title={v.prompt}>
                       {v.prompt}
@@ -706,6 +778,20 @@ export default function GenerateVideosPage() {
                           >
                             <Download className="size-3 mr-1" />Open / Download
                           </Button>
+                        )}
+                        {v.status === "completed" && v.url && (
+                          <button
+                            onClick={() => capturePoster(v, { force: true })}
+                            className="p-1.5 rounded hover:bg-amber-100 dark:hover:bg-amber-900 text-amber-600"
+                            title="Capture a new poster frame"
+                            disabled={!!capturing[v.id]}
+                          >
+                            {capturing[v.id] ? (
+                              <Loader2 className="size-3.5 animate-spin" />
+                            ) : (
+                              <ImageUp className="size-3.5" />
+                            )}
+                          </button>
                         )}
                         <button
                           onClick={() => handleReuse(v)}

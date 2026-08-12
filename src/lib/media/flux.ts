@@ -42,6 +42,10 @@ export interface CreateVideoOptions {
   tags?: string[];
   modelId?: string;
   imageUrl?: string;
+  /** Human-readable model identifier (e.g. fal-ai/wan/v2.2-a14b/text-to-video). */
+  modelIdentifier?: string;
+  /** Generation mode — "t2v" (text-to-video) or "i2v" (image-to-video). */
+  mode?: "t2v" | "i2v";
 }
 
 export interface CreateVoiceOptions {
@@ -234,8 +238,14 @@ export async function createVideoAsset(
     tenantId,
     clientId: options?.clientId,
     type: "video",
+    model: options?.modelIdentifier ?? options?.modelId ?? undefined,
     prompt,
     tags: options?.tags,
+    metadata: {
+      mode: options?.mode ?? (options?.imageUrl ? "i2v" : "t2v"),
+      ...(options?.modelIdentifier ? { modelIdentifier: options.modelIdentifier } : {}),
+      requestedAt: new Date().toISOString(),
+    },
     status: "processing",
   });
 

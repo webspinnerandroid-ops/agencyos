@@ -36,11 +36,24 @@ const ASPECTS = [
 interface VideoAsset {
   id: string;
   url?: string | null;
+  thumbnail_url?: string | null;
+  model?: string | null;
   prompt: string;
   status: "processing" | "completed" | "failed";
   provider?: string | null;
   created_at: string;
   metadata?: Record<string, unknown>;
+}
+
+/** Short label for a video's generation mode from its metadata. */
+function modeLabel(meta?: Record<string, unknown>): string {
+  const mode = meta?.mode;
+  if (mode === "i2v") return "Image → Video";
+  if (mode === "t2v") return "Text → Video";
+  // Fall back to inferring from the model id.
+  const model = String(meta?.modelIdentifier ?? "");
+  if (model.includes("i2v") || model.includes("image-to-video")) return "Image → Video";
+  return "Text → Video";
 }
 
 interface ModelOption {
@@ -223,6 +236,8 @@ export default function GenerateVideosPage() {
           duration: Number(duration),
           resolution: aspect,
           modelId: selectedModelId || undefined,
+          modelIdentifier: selectedModel?.model_identifier ?? undefined,
+          mode,
           imageUrl: referenceImage ?? undefined,
         }),
       });
@@ -280,8 +295,76 @@ export default function GenerateVideosPage() {
 
   const handleReuse = (v: VideoAsset) => {
     setPrompt(v.prompt);
+    // Restore the same mode + model the video was generated with.
+    const meta = v.metadata ?? {};
+    const wasI2V =
+      meta.mode === "i2v" ||
+      String(meta.modelIdentifier ?? "").includes("i2v") ||
+      String(meta.modelIdentifier ?? "").includes("image-to-video");
+    setMode(wasI2V ? "i2v" : "t2v");
+    if (meta.modelIdentifier) {
+      const m = models.find((x) => x.model_identifier === meta.modelIdentifier);
+      if (m) setSelectedModelId(m.id);
+    }
     setActiveTab("generate");
   };
+
+  // Captures a poster frame from a completed video that has no thumbnail yet:
+  // seeks to ~0.4s, draws to canvas, uploads the data URL, and refreshes the
+  // library so the poster shows. Client-side only — no ffmpeg on the server.
+  const capturingRef = useRef<Set<string>>(new Set());
+  const capturePoster = async (v: VideoAsset) => {
+    if (!v.url || v.status !== "completed") return;
+    if (v.thumbnail_url) return;
+    if (capturingRef.current.has(v.id)) return;
+    capturingRef.current.add(v.id);
+    try {
+      const video = document.createElement("video");
+      video.src = v.url;
+      video.muted = true;
+      video.crossOrigin = "anonymous";
+      await new Promise<void>((resolve) => {
+        video.onloadeddata = () => resolve();
+        video.onerror = () => resolve();
+        setTimeout(resolve, 8000);
+        video.load();
+      });
+      if (!video.videoWidth) return;
+      video.currentTime = Math.min(0.4, (video.duration || 0.4) / 2);
+      await new Promise<void>((resolve) => {
+        video.onseeked = () => resolve();
+        setTimeout(resolve, 4000);
+      });
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
+      const res = await fetch(`/api/media/videos/${v.id}/thumbnail`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: dataUrl }),
+      });
+      if (res.ok) fetchLibrary();
+    } catch {
+      // poster is a nice-to-have — never break the library over it
+    } finally {
+      capturingRef.current.delete(v.id);
+    }
+  };
+
+  // Kick off poster capture for any completed video missing a thumbnail.
+  useEffect(() => {
+    (videos ?? []).forEach((v) => {
+      if (v.status === "completed" && v.url && !v.thumbnail_url) {
+        void capturePoster(v);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [videos]);
 
   const handleDelete = async (id: string) => {
     if (!confirm("Delete this video from the library?")) return;
@@ -556,14 +639,14 @@ export default function GenerateVideosPage() {
               <Film className="size-12 mx-auto mb-3 opacity-20" />
               <p className="text-sm">No videos in this workspace yet.</p>
             </Card>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          ) : (                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {videos.map((v) => (
                 <Card key={v.id} className="overflow-hidden">
                   <div className="aspect-video bg-muted relative flex items-center justify-center">
                     {v.status === "completed" && v.url ? (
                       <video
                         src={v.url}
+                        poster={v.thumbnail_url ?? undefined}
                         controls
                         className="w-full h-full object-contain"
                         preload="metadata"
@@ -585,6 +668,26 @@ export default function GenerateVideosPage() {
                     )}
                   </div>
                   <div className="p-3 space-y-2">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">
+                        {modeLabel(v.metadata)}
+                      </span>
+                      {v.metadata?.modelIdentifier ? (
+                        <span
+                          className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground font-mono truncate max-w-[220px]"
+                          title={String(v.metadata.modelIdentifier)}
+                        >
+                          {String(v.metadata.modelIdentifier)}
+                        </span>
+                      ) : v.model ? (
+                        <span
+                          className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground font-mono truncate max-w-[220px]"
+                          title={v.model}
+                        >
+                          {v.model}
+                        </span>
+                      ) : null}
+                    </div>
                     <p className="text-xs text-muted-foreground line-clamp-2" title={v.prompt}>
                       {v.prompt}
                     </p>
@@ -607,7 +710,7 @@ export default function GenerateVideosPage() {
                         <button
                           onClick={() => handleReuse(v)}
                           className="p-1.5 rounded hover:bg-blue-100 dark:hover:bg-blue-900 text-blue-600"
-                          title="Reuse prompt"
+                          title="Reuse prompt, mode, and model"
                         >
                           <Pencil className="size-3.5" />
                         </button>

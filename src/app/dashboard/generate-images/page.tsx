@@ -15,6 +15,39 @@ const SIZES = [
 
 const LOCAL_STORAGE_KEY = "agency_os_recent_images";
 
+/** Ad-creative platform presets: auto-selects the right aspect ratio. */
+const AD_PRESETS: Record<string, { label: string; size: string }> = {
+  "meta-feed": { label: "Meta — Feed", size: "1024x1792" },
+  "meta-story": { label: "Meta — Story / Reels", size: "1024x1792" },
+  google: { label: "Google Display", size: "1792x1024" },
+  tiktok: { label: "TikTok", size: "1024x1792" },
+  linkedin: { label: "LinkedIn", size: "1792x1024" },
+  x: { label: "X (Twitter)", size: "1792x1024" },
+  square: { label: "Square", size: "1024x1024" },
+};
+
+/** Compose a professional ad-creative prompt from the structured fields. */
+function buildAdPrompt(
+  platform: string,
+  business: string,
+  headline: string,
+  cta: string
+): string {
+  const preset = AD_PRESETS[platform] ?? AD_PRESETS["meta-feed"];
+  const lines = [
+    `Professional advertising creative for ${preset.label} (aspect ratio ${preset.size}).`,
+    business.trim() ? `Product/service: ${business.trim()}.` : "",
+    headline.trim()
+      ? `Headline text rendered in bold, clean, high-contrast typography: "${headline.trim()}".`
+      : "",
+    cta.trim()
+      ? `Call to action on the creative: "${cta.trim()}" with a subtle button-style badge.`
+      : "",
+    "Composition: single clear focal point, strong hierarchy, generous negative space for copy, premium brand feel, photo-realistic product or lifestyle imagery, no watermark, no placeholder boxes.",
+  ];
+  return lines.filter(Boolean).join(" ");
+}
+
 interface GeneratedImage {
   url: string;
   revisedPrompt: string | null;
@@ -32,6 +65,12 @@ interface MediaAsset {
 export default function GenerateImagesPage() {
   const [prompt, setPrompt] = useState("");
   const [size, setSize] = useState("1024x1024");
+  // Ad-creative mode: structured fields compose the prompt + preset ratio.
+  const [mode, setMode] = useState<"image" | "ad">("image");
+  const [adPlatform, setAdPlatform] = useState("meta-feed");
+  const [adBusiness, setAdBusiness] = useState("");
+  const [adHeadline, setAdHeadline] = useState("");
+  const [adCta, setAdCta] = useState("");
   const [n, setN] = useState(1);
   const [loading, setLoading] = useState(false);
   const [images, setImages] = useState<GeneratedImage[]>([]);
@@ -181,7 +220,15 @@ export default function GenerateImagesPage() {
   // Generate
   // ------------------------------------------------------------------
   const handleGenerate = async () => {
-    if (!prompt.trim()) return;
+    // Ad mode composes a professional creative prompt from the structured
+    // fields (and still lets the user refine the composed prompt).
+    const effectivePrompt =
+      mode === "ad"
+        ? buildAdPrompt(adPlatform, adBusiness, adHeadline, adCta)
+        : prompt.trim();
+    if (!effectivePrompt.trim()) return;
+
+    const effectiveSize = mode === "ad" ? (AD_PRESETS[adPlatform]?.size ?? size) : size;
 
     setLoading(true);
     setError(null);
@@ -192,7 +239,7 @@ export default function GenerateImagesPage() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: prompt.trim(), size, n, referenceImage: referenceImage ?? undefined }),
+        body: JSON.stringify({ prompt: effectivePrompt.trim(), size: effectiveSize, n, referenceImage: referenceImage ?? undefined }),
       });
 
       const data = await res.json();
@@ -336,9 +383,82 @@ export default function GenerateImagesPage() {
           {/* Input Form */}
           <Card className="p-6">
             <div className="space-y-4">
+              {/* Mode toggle: plain image vs ad creative */}
+              <div className="flex items-center gap-1 rounded-lg border border-border p-1 w-fit">
+                <button
+                  onClick={() => setMode("image")}
+                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${mode === "image" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                >
+                  Image
+                </button>
+                <button
+                  onClick={() => setMode("ad")}
+                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${mode === "ad" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                >
+                  Ad Creative
+                </button>
+              </div>
+
+              {mode === "ad" && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 rounded-lg border border-primary/20 bg-primary/5 p-3">
+                  <div className="sm:col-span-2">
+                    <label htmlFor="ad-platform" className="block text-sm font-medium mb-1.5">Platform</label>
+                    <select
+                      id="ad-platform"
+                      value={adPlatform}
+                      onChange={(e) => {
+                        const platform = e.target.value;
+                        setAdPlatform(platform);
+                        // Auto-set the aspect ratio for the chosen platform.
+                        setSize(AD_PRESETS[platform]?.size ?? size);
+                      }}
+                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    >
+                      {Object.entries(AD_PRESETS).map(([key, p]) => (
+                        <option key={key} value={key}>{p.label} ({p.size})</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="ad-business" className="block text-sm font-medium mb-1.5">Business / product</label>
+                    <input
+                      id="ad-business"
+                      value={adBusiness}
+                      onChange={(e) => setAdBusiness(e.target.value)}
+                      placeholder="e.g. Maple & Oak Coffee Roasters"
+                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="ad-headline" className="block text-sm font-medium mb-1.5">Headline (on the creative)</label>
+                    <input
+                      id="ad-headline"
+                      value={adHeadline}
+                      onChange={(e) => setAdHeadline(e.target.value)}
+                      placeholder="e.g. Fresh Roast, Delivered Weekly"
+                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <div className="sm:col-span-2">
+                    <label htmlFor="ad-cta" className="block text-sm font-medium mb-1.5">Call to action</label>
+                    <input
+                      id="ad-cta"
+                      value={adCta}
+                      onChange={(e) => setAdCta(e.target.value)}
+                      placeholder="e.g. Shop Now · Learn More · Get a Quote"
+                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <p className="sm:col-span-2 text-xs text-muted-foreground">
+                    The fields above compose a professional ad prompt (editable below) with the right
+                    aspect ratio for the platform. Generate, then refine the image in the prompt box.
+                  </p>
+                </div>
+              )}
+
               <div>
                 <label htmlFor="prompt" className="block text-sm font-medium mb-1.5">
-                  Image Prompt
+                  {mode === "ad" ? "Image Prompt (auto-composed — tweak freely)" : "Image Prompt"}
                 </label>
                 <textarea
                   id="prompt"
@@ -398,15 +518,17 @@ export default function GenerateImagesPage() {
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label htmlFor="size" className="block text-sm font-medium mb-1.5">Size</label>
-                  <select id="size" value={size} onChange={(e) => setSize(e.target.value)}
-                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
-                    {SIZES.map((s) => (
-                      <option key={s.value} value={s.value}>{s.label}</option>
-                    ))}
-                  </select>
-                </div>
+                {mode !== "ad" && (
+                  <div>
+                    <label htmlFor="size" className="block text-sm font-medium mb-1.5">Size</label>
+                    <select id="size" value={size} onChange={(e) => setSize(e.target.value)}
+                      className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm">
+                      {SIZES.map((s) => (
+                        <option key={s.value} value={s.value}>{s.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <div>
                   <label htmlFor="n" className="block text-sm font-medium mb-1.5">Number of Images</label>
                   <select id="n" value={n} onChange={(e) => setN(Number(e.target.value))}
@@ -427,8 +549,12 @@ export default function GenerateImagesPage() {
               )}
 
               <div className="flex flex-wrap items-center gap-2">
-                <Button onClick={handleGenerate} disabled={loading || !prompt.trim()} className="w-full sm:w-auto">
-                  {loading ? <><Loader2 className="size-4 animate-spin mr-2" />Generating...</> : <><Sparkles className="size-4 mr-2" />Generate</>}
+                <Button
+                  onClick={handleGenerate}
+                  disabled={loading || (mode === "ad" ? !adBusiness.trim() && !adHeadline.trim() : !prompt.trim())}
+                  className="w-full sm:w-auto"
+                >
+                  {loading ? <><Loader2 className="size-4 animate-spin mr-2" />Generating...</> : <><Sparkles className="size-4 mr-2" />{mode === "ad" ? "Generate Ad" : "Generate"}</>}
                 </Button>
                 <Button
                   variant="secondary"

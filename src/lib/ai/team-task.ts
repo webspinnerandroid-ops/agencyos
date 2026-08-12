@@ -44,7 +44,11 @@ import {
   type BlogImageSpec,
   type GeneratedBlogImage,
 } from "@/lib/blog-images";
-import { resolveInternalLinks, buildInternalLinkContext } from "@/lib/content-links";
+import {
+  resolveInternalLinks,
+  buildInternalLinkContext,
+  appendRelatedReading,
+} from "@/lib/content-links";
 import { scoreContent } from "@/lib/rankmath";
 import { incrementUsage } from "@/lib/usage";
 import { checkTrialContentLimit } from "@/lib/trial-limits";
@@ -129,12 +133,38 @@ async function loadLinkablePages(
   tenantId: string,
   workspaceId: string | null
 ): Promise<{ title: string; url: string; text: string }[]> {
-  if (!workspaceId) return [];
-  try {
-    return await getWorkspaceLinkablePages(workspaceId, tenantId);
-  } catch {
-    return [];
+  const pages: { title: string; url: string; text: string }[] = [];
+  if (workspaceId) {
+    try {
+      pages.push(...(await getWorkspaceLinkablePages(workspaceId, tenantId)));
+    } catch {
+      // KB unavailable — fall through to CMS pages below.
+    }
   }
+  // The tenant's OWN published CMS pages are the most important internal
+  // links (they live on the site the blog will be published to).
+  try {
+    const supabase = await createServiceClient();
+    const { data: sitePages } = await supabase
+      .from("site_pages")
+      .select("title, slug, category")
+      .eq("tenant_id", tenantId)
+      .eq("kind", "blog_post")
+      .eq("is_published", true)
+      .order("created_at", { ascending: false })
+      .limit(50);
+    for (const p of sitePages ?? []) {
+      if (!p.title || !p.slug) continue;
+      pages.push({
+        title: p.title,
+        url: `/site/${p.slug}`,
+        text: p.category ?? "",
+      });
+    }
+  } catch {
+    // ignore — internal links are a best-effort enhancement
+  }
+  return pages;
 }
 
 /** Load the tenant's per-employee config (custom instructions etc.). */
@@ -405,8 +435,15 @@ async function cherylGenerateBlog(
     })
   );
 
-  const body = resolveInternalLinks(
-    injectImagesIntoBody(blogPost.body, generated),
+  // Resolve the model's [INTERNAL LINK: …] markers against real pages (KB +
+  // the tenant's own CMS site), then guarantee at least one internal link by
+  // appending a related-reading section when the body has none — automatic
+  // internal linking for posts that will live on the generated site.
+  const body = appendRelatedReading(
+    resolveInternalLinks(
+      injectImagesIntoBody(blogPost.body, generated),
+      linkablePages
+    ),
     linkablePages
   );
 
@@ -620,6 +657,145 @@ interface SetupChecklistItem {
   done: boolean;
   hint: string;
   url: string;
+}
+
+// ----------------------------------------------------------------------------
+// Lana (reputation) + Cyril (legal) — dedicated drafting pipelines.
+// Both produce structured, expert-grade outputs instead of free-form chat so
+// the work is consistently usable (copy-paste ready, flagged for humans).
+// ----------------------------------------------------------------------------
+
+/**
+ * Lana's reputation-response pipeline: drafts a brand-safe public response to
+ * a review / complaint / crisis mention. Structured: summary of the issue,
+ * the recommended response, tone rules, and red flags a human must check.
+ */
+async function lanaDraftResponse(
+  tenantId: string,
+  userMessage: string,
+  workspaceContext: string,
+  chatContext: string
+): Promise<string> {
+  const draft = await generateStructuredOutput<{
+    issueSummary: string;
+    response: string;
+    tone: string;
+    redFlags: string[];
+    escalate: boolean;
+  }>(
+    "team_chat",
+    `You are Lana, the agency's reputation manager — a senior crisis-communications
+professional. You draft public responses to reviews, complaints, and brand
+mentions. Rules: never admit liability in a public post, never argue with the
+customer, always offer a private follow-up path, keep it concise (under 200
+words), and keep the brand's voice. Return JSON:
+{
+  "issueSummary": "2-3 sentence neutral summary of what happened",
+  "response": "the ready-to-post public response (plain text, under 200 words)",
+  "tone": "one line describing the tone used and why",
+  "redFlags": ["legal/security/PR risks a human must review before posting"],
+  "escalate": true|false
+}`,
+    `The situation: ${userMessage}\n\n${workspaceContext ? `Brand context:\n${workspaceContext}` : ""}\n\n${chatContext ? `Chat history:\n${chatContext}` : ""}`,
+    tenantId,
+    {
+      type: "object",
+      properties: {
+        issueSummary: { type: "string" },
+        response: { type: "string" },
+        tone: { type: "string" },
+        redFlags: { type: "array", items: { type: "string" } },
+        escalate: { type: "boolean" },
+      },
+      required: ["issueSummary", "response", "tone", "redFlags", "escalate"],
+    },
+    { functionName: "lana_reputation_response", temperature: 0.5, maxTokens: 1200 }
+  );
+
+  const flags = Array.isArray(draft.redFlags) ? draft.redFlags : [];
+  return [
+    `**Issue:** ${draft.issueSummary}`,
+    "",
+    `**Draft response (ready to post):**`,
+    `> ${draft.response}`,
+    "",
+    `**Tone:** ${draft.tone}`,
+    flags.length > 0
+      ? `**⚠️ Red flags a human must review:**\n${flags.map((f) => `- ${f}`).join("\n")}`
+      : "",
+    draft.escalate
+      ? "**Escalate:** yes — recommend a human sign-off before anything goes live, and loop in Cyril if it touches legal."
+      : "**Escalate:** no — safe to post after a quick human read.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+/**
+ * Cyril's legal-document pipeline: drafts contracts, terms, policies, and
+ * disclaimers conservatively, always flagging what a qualified lawyer must
+ * review. Never final legal advice.
+ */
+async function cyrilDraftDocument(
+  tenantId: string,
+  userMessage: string,
+  workspaceContext: string,
+  chatContext: string
+): Promise<string> {
+  const draft = await generateStructuredOutput<{
+    documentTitle: string;
+    purpose: string;
+    document: string;
+    openQuestions: string[];
+    lawyerReview: string[];
+  }>(
+    "team_chat",
+    `You are Cyril, the agency's legal assistant — a meticulous, conservative
+legal document drafter. Draft contracts, terms of service, privacy policies,
+NDAs, and disclaimers. Rules: write clearly, use standard clause structure,
+never invent party names (use placeholders like [Client] / [Agency]), include a
+jurisdiction/governing-law line, and ALWAYS flag every clause a licensed lawyer
+must review. Return JSON:
+{
+  "documentTitle": "title of the document",
+  "purpose": "one line on what this document does",
+  "document": "the full draft in markdown",
+  "openQuestions": ["facts needed from the user before finalizing"],
+  "lawyerReview": ["clauses/sections a qualified lawyer must review"]
+}`,
+    `The request: ${userMessage}\n\n${workspaceContext ? `Client/brand context:\n${workspaceContext}` : ""}\n\n${chatContext ? `Chat history:\n${chatContext}` : ""}\n\nInclude a 60-day cancellation clause and governing-law line when relevant.`,
+    tenantId,
+    {
+      type: "object",
+      properties: {
+        documentTitle: { type: "string" },
+        purpose: { type: "string" },
+        document: { type: "string" },
+        openQuestions: { type: "array", items: { type: "string" } },
+        lawyerReview: { type: "array", items: { type: "string" } },
+      },
+      required: ["documentTitle", "purpose", "document", "openQuestions", "lawyerReview"],
+    },
+    { functionName: "cyril_legal_document", temperature: 0.4, maxTokens: 3000 }
+  );
+
+  const questions = Array.isArray(draft.openQuestions) ? draft.openQuestions : [];
+  const review = Array.isArray(draft.lawyerReview) ? draft.lawyerReview : [];
+  return [
+    `**${draft.documentTitle}**`,
+    `*${draft.purpose}*`,
+    "",
+    draft.document,
+    questions.length > 0
+      ? `**I need from you before this is final:**\n${questions.map((q) => `- ${q}`).join("\n")}`
+      : "",
+    "",
+    `**⚠️ Lawyer review required:**\n${review.map((r) => `- ${r}`).join("\n")}`,
+    "",
+    "_This is a drafting aid, not legal advice. A qualified lawyer must review before signature._",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 async function buildSetupChecklist(
@@ -1065,6 +1241,41 @@ export async function processTeamTask(payload: TeamTaskPayload): Promise<void> {
           action: "content_failed",
           error: err instanceof Error ? err.message : "unknown",
         };
+      }
+    } else if (targetKey === "juno" && /\b(write|draft|respond|reply|answer|handle|fix)\b/i.test(userMessage)) {
+      // Lana's build: structured reputation-response drafts.
+      try {
+        replyContent = await lanaDraftResponse(
+          tenantId,
+          userMessage,
+          workspaceContext,
+          chatContext
+        );
+        replyMeta = { action: "reputation_draft" };
+      } catch (err) {
+        replyContent = `I hit a snag drafting that response: ${
+          err instanceof Error ? err.message : "unknown error"
+        }. Ask me again or check the AI settings.`;
+        replyMeta = { action: "reputation_failed", error: err instanceof Error ? err.message : "unknown" };
+      }
+    } else if (
+      targetKey === "linda" &&
+      /\b(draft|write|contract|agreement|terms? of service|privacy policy|nda|disclaimer|policy)\b/i.test(userMessage)
+    ) {
+      // Cyril's build: structured legal-document drafting.
+      try {
+        replyContent = await cyrilDraftDocument(
+          tenantId,
+          userMessage,
+          workspaceContext,
+          chatContext
+        );
+        replyMeta = { action: "legal_draft" };
+      } catch (err) {
+        replyContent = `I hit a snag drafting that document: ${
+          err instanceof Error ? err.message : "unknown error"
+        }. Ask me again or check the AI settings.`;
+        replyMeta = { action: "legal_failed", error: err instanceof Error ? err.message : "unknown" };
       }
     } else {
       const config = await loadEmployeeConfig(targetKey, tenantId);

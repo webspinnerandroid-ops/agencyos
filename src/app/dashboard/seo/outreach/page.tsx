@@ -4,7 +4,18 @@ import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Loader2, Radar, Mail, ExternalLink, Trash2, Copy, Check } from "lucide-react";
+import {
+  Loader2,
+  Radar,
+  Mail,
+  Send,
+  ExternalLink,
+  Trash2,
+  Copy,
+  Check,
+  CalendarRange,
+  Reply,
+} from "lucide-react";
 
 interface Target {
   id: string;
@@ -17,6 +28,10 @@ interface Target {
   notes: string | null;
   status: string;
   pitch: string | null;
+  pitch_sent_at: string | null;
+  last_reply_at: string | null;
+  last_reply_text: string | null;
+  reply_count: number;
   created_at: string;
 }
 
@@ -53,6 +68,11 @@ export default function OutreachPage() {
   const [pitchOpen, setPitchOpen] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [pitchSiteName, setPitchSiteName] = useState("");
+  const [sendingId, setSendingId] = useState<string | null>(null);
+  const [campaignDiscovering, setCampaignDiscovering] = useState(false);
+  const [logReplyId, setLogReplyId] = useState<string | null>(null);
+  const [replyFrom, setReplyFrom] = useState("");
+  const [replyText, setReplyText] = useState("");
 
   const load = useCallback(async (status = "") => {
     setLoading(true);
@@ -71,6 +91,14 @@ export default function OutreachPage() {
 
   useEffect(() => {
     load();
+    // Visiting the page counts as reading the replies — clear the dashboard
+    // notification dot for this tenant.
+    fetch("/api/outreach/mark-seen", {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    }).catch(() => {});
   }, [load]);
 
   const discover = async () => {
@@ -98,6 +126,83 @@ export default function OutreachPage() {
       setMessage({ type: "error", text: err.message ?? "Discovery failed" });
     } finally {
       setDiscovering(false);
+    }
+  };
+
+  const sendPitch = async (target: Target) => {
+    setSendingId(target.id);
+    setMessage(null);
+    try {
+      const res = await fetch(`/api/outreach/${target.id}/send`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMessage({ type: "error", text: data.error ?? "Send failed" });
+        return;
+      }
+      setMessage({ type: "success", text: `Pitch sent to ${data.sentTo}. Replies are watched automatically.` });
+      load(statusFilter);
+    } catch (err: any) {
+      setMessage({ type: "error", text: err.message ?? "Send failed" });
+    } finally {
+      setSendingId(null);
+    }
+  };
+
+  const logReply = async (target: Target) => {
+    if (!replyText.trim()) {
+      setMessage({ type: "error", text: "Paste the reply text first." });
+      return;
+    }
+    setMessage(null);
+    try {
+      const res = await fetch("/api/outreach/reply-webhook", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          targetId: target.id,
+          from: replyFrom.trim() || target.blog_name || "unknown",
+          subject: "",
+          text: replyText.trim(),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMessage({ type: "error", text: data.error ?? "Could not log reply" });
+        return;
+      }
+      setMessage({ type: "success", text: `Reply logged — status is now "${data.status}".` });
+      setLogReplyId(null);
+      setReplyText("");
+      setReplyFrom("");
+      load(statusFilter);
+    } catch (err: any) {
+      setMessage({ type: "error", text: err.message ?? "Could not log reply" });
+    }
+  };
+
+  const discoverFromCampaign = async () => {
+    setCampaignDiscovering(true);
+    setMessage(null);
+    try {
+      const res = await fetch("/api/outreach/discover-from-campaign", {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMessage({ type: "error", text: data.error ?? "Discovery failed" });
+        return;
+      }
+      setMessage({ type: "success", text: data.message });
+      load();
+    } catch (err: any) {
+      setMessage({ type: "error", text: err.message ?? "Discovery failed" });
+    } finally {
+      setCampaignDiscovering(false);
     }
   };
 
@@ -184,7 +289,15 @@ export default function OutreachPage() {
             {discovering ? <Loader2 className="size-4 animate-spin mr-1" /> : <Radar className="size-4 mr-1" />}
             Discover
           </Button>
+          <Button variant="outline" onClick={discoverFromCampaign} disabled={campaignDiscovering}>
+            {campaignDiscovering ? <Loader2 className="size-4 animate-spin mr-1" /> : <CalendarRange className="size-4 mr-1" />}
+            Discover from campaign plan
+          </Button>
         </div>
+        <p className="text-xs text-muted-foreground mt-2">
+          "Discover from campaign plan" pulls the blog topics Malory mapped out in your
+          campaigns and finds guest-post targets for those exact topics — outreach follows the roadmap.
+        </p>
       </Card>
 
       {/* Filters */}
@@ -221,8 +334,23 @@ export default function OutreachPage() {
                     <span className={`text-[10px] px-2 py-0.5 rounded-full capitalize ${STATUS_COLORS[t.status] ?? STATUS_COLORS.discovered}`}>
                       {t.status}
                     </span>
+                    {t.reply_count > 0 && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300" title={`Last reply ${t.last_reply_at ? new Date(t.last_reply_at).toLocaleString() : ""}`}>
+                        💬 {t.reply_count} repl{t.reply_count === 1 ? "y" : "ies"}
+                      </span>
+                    )}
+                    {t.pitch_sent_at && (
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300">
+                        Pitched {new Date(t.pitch_sent_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                      </span>
+                    )}
                   </div>
-                  {t.notes && <p className="text-xs text-muted-foreground mt-1 max-w-2xl">{t.notes}</p>}
+                  {t.notes && <p className="text-xs text-muted-foreground mt-1 max-w-2xl whitespace-pre-wrap">{t.notes}</p>}
+                  {t.last_reply_text && (
+                    <p className="text-xs mt-1 max-w-2xl rounded-md bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 p-2 whitespace-pre-wrap">
+                      <span className="font-semibold text-amber-700 dark:text-amber-300">Latest reply:</span> {t.last_reply_text}
+                    </p>
+                  )}
                   <div className="flex items-center gap-4 mt-2 flex-wrap text-xs">
                     <span className="text-muted-foreground">Relevance</span> <ScoreBar value={t.relevance_score} color="bg-blue-500" />
                     <span className="text-muted-foreground">Authority</span> <ScoreBar value={t.authority_score} color="bg-emerald-500" />
@@ -239,6 +367,15 @@ export default function OutreachPage() {
                     {pitchingId === t.id ? <Loader2 className="size-3.5 animate-spin" /> : <Mail className="size-3.5 mr-1" />}
                     {t.pitch ? "Regenerate pitch" : "Draft pitch"}
                   </Button>
+                  {t.pitch && (
+                    <Button size="sm" variant="default" onClick={() => sendPitch(t)} disabled={sendingId === t.id || !t.contact_email} title={!t.contact_email ? "This target has no contact email" : "Email the pitch via the platform"}>
+                      {sendingId === t.id ? <Loader2 className="size-3.5 animate-spin mr-1" /> : <Send className="size-3.5 mr-1" />}
+                      Send
+                    </Button>
+                  )}
+                  <Button size="sm" variant="outline" onClick={() => setLogReplyId(logReplyId === t.id ? null : t.id)}>
+                    <Reply className="size-3.5 mr-1" /> Log reply
+                  </Button>
                   <select value={t.status} onChange={(e) => setStatus(t.id, e.target.value)}
                     className="rounded-md border border-input bg-background px-2 py-1.5 text-xs capitalize">
                     {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
@@ -248,6 +385,25 @@ export default function OutreachPage() {
                   </button>
                 </div>
               </div>
+
+              {logReplyId === t.id && (
+                <div className="mt-3 border-t pt-3 space-y-2">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Log a reply</span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <Input placeholder="From (e.g. editor@theirblog.com)" value={replyFrom} onChange={(e) => setReplyFrom(e.target.value)} className="h-8 text-xs" />
+                    <textarea
+                      placeholder="Paste the reply text…"
+                      value={replyText}
+                      onChange={(e) => setReplyText(e.target.value)}
+                      rows={3}
+                      className="rounded-md border border-input bg-background px-3 py-2 text-sm w-full"
+                    />
+                  </div>
+                  <Button size="sm" onClick={() => logReply(t)}>
+                    <Reply className="size-3.5 mr-1" /> Save reply
+                  </Button>
+                </div>
+              )}
 
               {pitchOpen === t.id && (
                 <div className="mt-3 border-t pt-3">

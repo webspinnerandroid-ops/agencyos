@@ -103,9 +103,12 @@ export default function GenerateVideosPage() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Poster capture in flight per asset id (manual button spinner).
   const [capturing, setCapturing] = useState<Record<string, boolean>>({});
-  // Duration + file size badges per asset id.
+  // Duration, file size, resolution + codec badges per asset id.
   const [videoInfo, setVideoInfo] = useState<
-    Record<string, { duration?: number; sizeBytes?: number }>
+    Record<
+      string,
+      { duration?: number; sizeBytes?: number; resolution?: string; codec?: string }
+    >
   >({});
 
   // ------------------------------------------------------------------
@@ -390,9 +393,16 @@ export default function GenerateVideosPage() {
     if (!v.url || v.status !== "completed") return;
     if (videoInfo[v.id]) return;
     const stored = v.metadata ?? {};
-    const info: { duration?: number; sizeBytes?: number } = {};
+    const info: {
+      duration?: number;
+      sizeBytes?: number;
+      resolution?: string;
+      codec?: string;
+    } = {};
     if (stored.sizeBytes != null) info.sizeBytes = Number(stored.sizeBytes);
     if (stored.durationSeconds != null) info.duration = Number(stored.durationSeconds);
+    if (typeof stored.resolution === "string") info.resolution = stored.resolution;
+    if (typeof stored.codec === "string") info.codec = stored.codec;
 
     if (info.sizeBytes == null) {
       try {
@@ -418,21 +428,41 @@ export default function GenerateVideosPage() {
         if (Number.isFinite(video.duration) && video.duration > 0) {
           info.duration = video.duration;
         }
+        if (video.videoWidth > 0 && video.videoHeight > 0) {
+          info.resolution = `${video.videoWidth}x${video.videoHeight}`;
+        }
+        // getVideoCodec() is a modern Media Capabilities API; fall back to
+        // reading the container codecs string when available.
+        const vWithCodec = video as HTMLVideoElement & {
+          getVideoCodec?: () => string;
+          videoCodec?: string;
+        };
+        const codecs =
+          typeof vWithCodec.getVideoCodec === "function"
+            ? vWithCodec.getVideoCodec()
+            : vWithCodec.videoCodec;
+        if (codecs && typeof codecs === "string" && codecs.trim()) {
+          info.codec = codecs.trim().replace(/^video\//, "");
+        }
       } catch {
         // ignore
       }
     }
 
-    if (info.duration != null || info.sizeBytes != null) {
+    if (info.duration != null || info.sizeBytes != null || info.resolution || info.codec) {
       setVideoInfo((prev) => ({ ...prev, [v.id]: info }));
     }
-    // Persist the freshly-read duration so the next visit is instant.
-    if (info.duration != null && stored.durationSeconds == null) {
+    // Persist freshly-read facts so the next visit is instant.
+    if (info.duration != null || info.resolution || info.codec) {
       fetch(`/api/media/videos/${v.id}`, {
         method: "PATCH",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ duration: info.duration }),
+        body: JSON.stringify({
+          duration: info.duration,
+          resolution: info.resolution,
+          codec: info.codec,
+        }),
       }).catch(() => {});
     }
   };
@@ -801,6 +831,16 @@ export default function GenerateVideosPage() {
                           {formatSize(videoInfo[v.id]?.sizeBytes)}
                         </span>
                       )}
+                      {videoInfo[v.id]?.resolution && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">
+                          {videoInfo[v.id]?.resolution}
+                        </span>
+                      )}
+                      {videoInfo[v.id]?.codec && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">
+                          {videoInfo[v.id]?.codec}
+                        </span>
+                      )}
                     </div>
                     <p className="text-xs text-muted-foreground line-clamp-2" title={v.prompt}>
                       {v.prompt}
@@ -891,6 +931,16 @@ export default function GenerateVideosPage() {
                 {formatSize(videoInfo[lightbox.id]?.sizeBytes) && (
                   <span className="text-[11px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
                     {formatSize(videoInfo[lightbox.id]?.sizeBytes)}
+                  </span>
+                )}
+                {videoInfo[lightbox.id]?.resolution && (
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
+                    {videoInfo[lightbox.id]?.resolution}
+                  </span>
+                )}
+                {videoInfo[lightbox.id]?.codec && (
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
+                    {videoInfo[lightbox.id]?.codec}
                   </span>
                 )}
               </div>

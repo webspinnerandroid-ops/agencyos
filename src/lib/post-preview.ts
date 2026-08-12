@@ -16,6 +16,9 @@ export interface PostRow {
   /** Denormalized Rank Math-style on-page SEO score (migration 025). */
   seo_score?: number | null;
   seo_checks?: unknown;
+  /** Set when the post was published to the tenant's own CMS website. */
+  cms_published_at?: string | null;
+  cms_slug?: string | null;
 }
 
 interface FlatPost {

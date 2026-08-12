@@ -4,11 +4,13 @@ import { createServiceClient } from "@/lib/supabase/server";
 
 /**
  * PATCH /api/media/videos/[id]
- * Body: { duration?: number }
+ * Body: { duration?: number; resolution?: string; codec?: string }
  *
- * Stores the video's real duration (read client-side from the media element —
- * the server has no ffmpeg to probe MP4 metadata) into the asset metadata so
- * the library badge renders instantly on later visits instead of re-probing.
+ * Stores video facts read client-side from the media element (the server has
+ * no ffmpeg to probe MP4 metadata): real duration, resolution (e.g.
+ * "1280x720") and codec. All are optional — whatever the client could read
+ * gets merged into the asset metadata so library badges render instantly on
+ * later visits instead of re-probing the CDN.
  */
 export async function PATCH(
   request: NextRequest,
@@ -22,8 +24,13 @@ export async function PATCH(
     const { id } = await params;
     const body = await request.json().catch(() => ({}));
     const duration = Number(body?.duration);
-    if (!Number.isFinite(duration) || duration <= 0) {
-      return NextResponse.json({ error: "duration (seconds) is required" }, { status: 400 });
+    const resolution = typeof body?.resolution === "string" ? body.resolution.trim() : "";
+    const codec = typeof body?.codec === "string" ? body.codec.trim() : "";
+    if ((!Number.isFinite(duration) || duration <= 0) && !resolution && !codec) {
+      return NextResponse.json(
+        { error: "provide duration, resolution, or codec" },
+        { status: 400 }
+      );
     }
 
     const supabase = await createServiceClient();
@@ -37,10 +44,12 @@ export async function PATCH(
       return NextResponse.json({ error: "Video not found" }, { status: 404 });
     }
 
-    const metadata = {
-      ...(asset.metadata ?? {}),
-      durationSeconds: Math.round(duration * 10) / 10,
-    };
+    const metadata = { ...(asset.metadata ?? {}) } as Record<string, unknown>;
+    if (Number.isFinite(duration) && duration > 0) {
+      metadata.durationSeconds = Math.round(duration * 10) / 10;
+    }
+    if (resolution) metadata.resolution = resolution;
+    if (codec) metadata.codec = codec;
     await supabase
       .from("media_assets")
       .update({ metadata })

@@ -120,6 +120,9 @@ export default function AnalyticsPage() {
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<AnalyticsResponse | null>(null);
+  // View mode: social engagement vs per-workspace SEO monitoring.
+  const [tab, setTab] = useState<"social" | "seo">("social");
+  const [seoData, setSeoData] = useState<any>(null);
 
   // ---- Fetch clients ----
   const fetchClients = useCallback(async () => {
@@ -179,6 +182,22 @@ export default function AnalyticsPage() {
   useEffect(() => {
     fetchAnalytics();
   }, [fetchAnalytics]);
+
+  // ---- Fetch SEO analytics (audits, content scores, publish counts) ----
+  const fetchSeo = useCallback(async () => {
+    try {
+      const params = new URLSearchParams();
+      if (selectedClientId) params.set("clientId", selectedClientId);
+      const res = await fetch(`/api/analytics/seo?${params.toString()}`, { credentials: "include" });
+      if (res.ok) setSeoData(await res.json());
+    } catch {
+      // ignore — SEO view shows empty state
+    }
+  }, [selectedClientId]);
+
+  useEffect(() => {
+    fetchSeo();
+  }, [fetchSeo]);
 
   // ---- Chart data: likes/comments over time (grouped by date) ----
   const chartData = useMemo(() => {
@@ -244,27 +263,46 @@ export default function AnalyticsPage() {
             Analytics
           </h1>
           <p className="text-muted-foreground mt-1">
-            Track post performance across all platforms
-            {data?.workspaceId ? " for the current workspace." : " across the whole tenant."}
+            {tab === "seo"
+              ? "SEO monitoring for client websites — audits, content scores, and publish health."
+              : `Track post performance across all platforms${data?.workspaceId ? " for the current workspace." : " across the whole tenant."}`}
           </p>
         </div>
-        <Button
-          variant="outline"
-          disabled={exporting || !data}
-          onClick={handleExportPDF}
-        >
-          {exporting ? (
-            <>
-              <Loader2 className="size-4 animate-spin" />
-              Exporting…
-            </>
-          ) : (
-            <>
-              <Download className="size-4" />
-              Export Report
-            </>
+        <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1 rounded-lg border border-border p-1">
+            <button
+              onClick={() => setTab("social")}
+              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${tab === "social" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              Social
+            </button>
+            <button
+              onClick={() => setTab("seo")}
+              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${tab === "seo" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              SEO
+            </button>
+          </div>
+          {tab === "social" && (
+            <Button
+              variant="outline"
+              disabled={exporting || !data}
+              onClick={handleExportPDF}
+            >
+              {exporting ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  Exporting…
+                </>
+              ) : (
+                <>
+                  <Download className="size-4" />
+                  Export Report
+                </>
+              )}
+            </Button>
           )}
-        </Button>
+        </div>
       </div>
 
       {/* Filters */}
@@ -339,8 +377,207 @@ export default function AnalyticsPage() {
         </div>
       )}
 
+      {/* SEO view */}
+      {tab === "seo" && (
+        <>
+          {!seoData ? (
+            <div className="flex items-center justify-center py-24 text-muted-foreground">
+              <Loader2 className="size-8 animate-spin mr-3" />
+              Loading SEO analytics…
+            </div>
+          ) : (
+            <>
+              {/* Summary cards */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <Card>
+                  <CardContent className="pt-6">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
+                      <FileText className="size-4" />
+                      Content Pieces
+                    </div>
+                    <p className="text-2xl font-bold">{seoData.summary?.totalPosts ?? 0}</p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="pt-6">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
+                      <TrendingUp className="size-4" />
+                      Avg SEO Score
+                    </div>
+                    <p className="text-2xl font-bold">
+                      {seoData.summary?.avgSeoScore != null ? `${seoData.summary.avgSeoScore}/100` : "—"}
+                    </p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="pt-6">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
+                      <Eye className="size-4" />
+                      Avg AEO/GEO Readiness
+                    </div>
+                    <p className="text-2xl font-bold">
+                      {seoData.summary?.avgAeoGeoScore != null ? `${seoData.summary.avgAeoGeoScore}/100` : "—"}
+                    </p>
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="pt-6">
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground mb-1">
+                      <Share2 className="size-4" />
+                      Published to Website
+                    </div>
+                    <p className="text-2xl font-bold">{seoData.summary?.publishedOnSite ?? 0}</p>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* Score bands + status breakdown */}
+              <div className="grid gap-4 md:grid-cols-2">
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Content Score Health</CardTitle>
+                    <CardDescription>
+                      Rank Math-style bands: green 81+, yellow 50–80, red below 50.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    {(() => {
+                      const bands = seoData.summary?.bands ?? {};
+                      const total = (bands.green ?? 0) + (bands.yellow ?? 0) + (bands.red ?? 0);
+                      const pct = (n: number) => (total > 0 ? Math.round((n / total) * 100) : 0);
+                      return (
+                        <div className="space-y-3">
+                          {[
+                            { label: "Green (81–100)", value: bands.green ?? 0, bar: "bg-green-500" },
+                            { label: "Yellow (50–80)", value: bands.yellow ?? 0, bar: "bg-yellow-500" },
+                            { label: "Red (below 50)", value: bands.red ?? 0, bar: "bg-red-500" },
+                          ].map((b) => (
+                            <div key={b.label} className="space-y-1">
+                              <div className="flex items-center justify-between text-sm">
+                                <span className="text-muted-foreground">{b.label}</span>
+                                <span className="font-medium">{b.value}</span>
+                              </div>
+                              <div className="h-2 rounded-full bg-muted overflow-hidden">
+                                <div className={`h-full rounded-full ${b.bar}`} style={{ width: `${pct(b.value)}%` }} />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })()}
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Publish Status</CardTitle>
+                    <CardDescription>Content pipeline by status.</CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="flex flex-wrap gap-2">
+                      {Object.entries(seoData.summary?.byStatus ?? {}).map(([status, count]) => (
+                        <span key={status} className="text-xs px-2 py-1 rounded-full bg-muted capitalize">
+                          {status}: {String(count)}
+                        </span>
+                      ))}
+                      {Object.keys(seoData.summary?.byStatus ?? {}).length === 0 && (
+                        <p className="text-sm text-muted-foreground">No content yet.</p>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* Recent content scores */}
+              <Card>
+                <CardHeader>
+                  <CardTitle>Recent Content Scores</CardTitle>
+                  <CardDescription>Latest posts with their SEO and AEO/GEO readiness scores.</CardDescription>
+                </CardHeader>
+                <CardContent className="overflow-x-auto">
+                  {(seoData.recent ?? []).length > 0 ? (
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
+                          <th className="py-2 pr-4">Type</th>
+                          <th className="py-2 pr-4">Status</th>
+                          <th className="py-2 pr-4 text-right">SEO</th>
+                          <th className="py-2 pr-4 text-right">AEO/GEO</th>
+                          <th className="py-2 text-right">On site</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(seoData.recent ?? []).map((p: any, i: number) => (
+                          <tr key={i} className="border-b last:border-0">
+                            <td className="py-3 pr-4 capitalize">{p.type}</td>
+                            <td className="py-3 pr-4 capitalize">{p.status}</td>
+                            <td className="py-3 pr-4 text-right">
+                              <span className={p.seo_score != null ? (p.seo_score >= 81 ? "text-green-600 font-medium" : p.seo_score >= 50 ? "text-yellow-600 font-medium" : "text-red-600 font-medium") : "text-muted-foreground"}>
+                                {p.seo_score != null ? p.seo_score : "—"}
+                              </span>
+                            </td>
+                            <td className="py-3 pr-4 text-right">
+                              {p.aeo_geo_score != null ? p.aeo_geo_score : "—"}
+                            </td>
+                            <td className="py-3 text-right">
+                              {p.cms_published_at ? (
+                                <a href={`/site/${p.cms_slug ?? ""}`} target="_blank" rel="noreferrer" className="text-primary hover:underline">
+                                  Live ↗
+                                </a>
+                              ) : (
+                                <span className="text-muted-foreground">—</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <p className="text-center text-muted-foreground py-20">
+                      No content yet — generate your first post to see SEO scores here.
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Audit history */}
+              <Card>
+                <CardHeader>
+                  <CardTitle>SEO Audits</CardTitle>
+                  <CardDescription>Recent site audits (open one to start a campaign from it).</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {(seoData.audits ?? []).length > 0 ? (
+                    <div className="divide-y">
+                      {(seoData.audits ?? []).map((a: any) => (
+                        <a
+                          key={a.id}
+                          href={`/dashboard/seo/campaigns?open=${a.id}`}
+                          className="flex items-center justify-between py-3 hover:bg-muted/30 transition-colors"
+                        >
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium truncate">{a.url ?? a.tier_name ?? "Audit"}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {a.tier_name ?? ""} · {new Date(a.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                            </p>
+                          </div>
+                          <span className="text-xs px-2 py-0.5 rounded-full capitalize bg-muted">{a.status}</span>
+                        </a>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-center text-muted-foreground py-10">
+                      No audits yet — run an SEO audit to start tracking a website.
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+            </>
+          )}
+        </>
+      )}
+
       {/* Data */}
-      {data && (
+      {tab === "social" && data && (
         <>
           {/* Summary Cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">

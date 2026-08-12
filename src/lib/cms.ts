@@ -20,8 +20,15 @@ export interface CmsBlockStyle {
   padding?: "none" | "sm" | "md" | "lg";
   align?: "left" | "center" | "right";
   bg?: string;
+  /** Background image (rows/sections) or video (sections) behind content. */
+  bgImage?: string;
+  bgVideo?: string;
   color?: string;
   width?: "full" | "wide" | "half" | "third";
+  /** Page-level layout: full-bleed rows vs a boxed centered column. */
+  boxed?: boolean;
+  /** Float an image block so neighboring text wraps around it. */
+  float?: "none" | "left" | "right";
 }
 
 export interface CmsBlock {
@@ -95,11 +102,14 @@ function esc(v: unknown): string {
 function markdownToHtml(md: string): string {
   // Minimal, safe subset: paragraphs, ##/### headings (even when a heading
   // follows a paragraph with only a single newline), **bold**, *italic*,
-  // links, and line breaks. NOT a full markdown engine — content is authored
-  // in the builder, and we never execute raw HTML.
+  // links, and line breaks. Images on their own line become figures: the
+  // FIRST one is a centered hero, the rest float left/right alternating so
+  // text wraps around them (never stacked). NOT a full markdown engine —
+  // content is authored in the builder, and we never execute raw HTML.
   const lines = md.split(/\r?\n/);
   const out: string[] = [];
   let para: string[] = [];
+  let imgCount = 0;
   const flush = () => {
     if (para.length > 0) {
       out.push(`<p>${para.join("<br />")}</p>`);
@@ -108,6 +118,19 @@ function markdownToHtml(md: string): string {
   };
   for (const raw of lines) {
     const line = raw.trim();
+    const img = line.match(/^!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)$/);
+    if (img) {
+      flush();
+      imgCount += 1;
+      const cls =
+        imgCount === 1
+          ? "cms-blog-img cms-hero-img"
+          : `cms-blog-img ${imgCount % 2 === 0 ? "cms-float-left" : "cms-float-right"}`;
+      out.push(
+        `<figure class="${cls}"><img src="${esc(img[2])}" alt="${esc(img[1] || "Blog image")}" loading="lazy" /></figure>`
+      );
+      continue;
+    }
     const h = line.match(/^(#{1,3})\s+(.+)$/);
     if (h) {
       flush();
@@ -121,6 +144,8 @@ function markdownToHtml(md: string): string {
     const styled = line
       .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
       .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+      // Inline image inside a paragraph → plain inline <img>, not floated.
+      .replace(/!\[([^\]]*)\]\((https?:\/\/[^)\s]+)\)/g, '<img src="$2" alt="$1" loading="lazy" />')
       .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
     para.push(styled);
   }
@@ -204,28 +229,40 @@ export function renderBlockHtml(block: CmsBlock, pageId?: string): string {
       return block.html
         ? `${blockWrapper(block)}<div class="cms-text">${block.content ?? ""}</div></div>`
         : `${blockWrapper(block)}<div class="cms-text">${markdownToHtml(block.content ?? "")}</div></div>`;
-    case "image":
+    case "image": {
+      const f = block.style?.float;
+      const floatClass =
+        f === "left" || f === "right" ? ` cms-float-${f}` : "";
       return block.url
-        ? `${blockWrapper(block)}<figure class="cms-image"><img src="${esc(block.url)}" alt="${esc(block.alt ?? block.content ?? "")}" loading="lazy" /><figcaption>${esc(block.alt ?? "")}</figcaption></figure></div>`
+        ? `${blockWrapper(block)}<figure class="cms-image${floatClass}"><img src="${esc(block.url)}" alt="${esc(block.alt ?? block.content ?? "")}" loading="lazy" /><figcaption>${esc(block.alt ?? "")}</figcaption></figure></div>`
         : "";
+    }
     case "section": {
       const s = block.style ?? {};
       const inline: string[] = [];
       if (s.bg) inline.push(`background:${s.bg}`);
       if (s.color) inline.push(`color:${s.color}`);
+      if (s.bgImage) inline.push(`background-image:url('${esc(s.bgImage)}');background-size:cover;background-position:center`);
+      if (s.bgVideo) inline.push(`position:relative`);
       const styleAttr = inline.length ? ` style="${inline.join(";")}"` : "";
       const inner = (block.children ?? []).map((c) => renderBlockHtml(c, pageId)).join("\n");
-      return `<section class="cms-section ${PADDING_CLASSES[s.padding ?? "md"]}"${styleAttr}><div class="cms-section-inner">${inner || ""}</div></section>`;
+      const boxed = s.boxed === false ? "cms-section-bleed" : "";
+      const bgVideo = s.bgVideo
+        ? `<video class="cms-section-bg" src="${esc(s.bgVideo)}" autoplay muted loop playsinline></video>`
+        : "";
+      return `<section class="cms-section ${PADDING_CLASSES[s.padding ?? "md"]} ${boxed}"${styleAttr}>${bgVideo}<div class="cms-section-inner">${inner || ""}</div></section>`;
     }
     case "columns": {
       const s = block.style ?? {};
       const inline: string[] = [];
       if (s.bg) inline.push(`background:${s.bg}`);
       if (s.color) inline.push(`color:${s.color}`);
+      if (s.bgImage) inline.push(`background-image:url('${esc(s.bgImage)}');background-size:cover;background-position:center`);
       const styleAttr = inline.length ? ` style="${inline.join(";")}"` : "";
       const cols = [2, 3, 4].includes(block.cols ?? 2) ? (block.cols as number) : 2;
       const inner = (block.children ?? []).map((c) => renderBlockHtml(c, pageId)).join("\n");
-      return `<div class="cms-columns cms-columns-${cols} ${PADDING_CLASSES[s.padding ?? "md"]}"${styleAttr}>${inner || ""}</div>`;
+      const boxed = s.boxed === false ? "cms-section-bleed" : "";
+      return `<div class="cms-columns cms-columns-${cols} ${PADDING_CLASSES[s.padding ?? "md"]} ${boxed}"${styleAttr}>${inner || ""}</div>`;
     }
     case "custom": {
       const cfg = block.config ?? {};
@@ -338,6 +375,14 @@ export const CMS_STYLES = `
 .cms-text h1{font-size:2rem;margin:1rem 0 .5rem}.cms-text h2{font-size:1.5rem;margin:1.2rem 0 .4rem}.cms-text h3{font-size:1.2rem;margin:1rem 0 .3rem}
 .cms-text p{margin:.5rem 0}.cms-text a{color:#2563eb}.cms-text img{max-width:100%;border-radius:8px}
 .cms-image{margin:1.2rem 0}.cms-image img{max-width:100%;border-radius:10px}.cms-image figcaption{font-size:.85rem;color:#666;margin-top:.4rem}
+/* Blog images: hero first, then alternating left/right floats so text wraps
+   around them and they are never stacked. Unfloat on small screens. */
+.cms-blog-img{margin:1.2rem 0}
+.cms-hero-img img{display:block;width:100%;max-width:720px;margin:0 auto;border-radius:12px}
+.cms-float-left{float:left;width:44%;margin:.3rem 1.4rem .8rem 0}
+.cms-float-right{float:right;width:44%;margin:.3rem 0 .8rem 1.4rem}
+.cms-float-left img,.cms-float-right img{width:100%;border-radius:10px}
+.cms-text h1,.cms-text h2,.cms-text h3{clear:both}
 .cms-embed{position:relative;width:100%;padding-top:56.25%;margin:1.2rem 0}.cms-embed iframe{position:absolute;inset:0;width:100%;height:100%;border:0;border-radius:10px}
 .cms-embed.cms-map{padding-top:60%}
 .cms-form{display:grid;gap:.9rem;max-width:520px;margin:1.2rem auto;padding:1.5rem;border:1px solid #e5e7eb;border-radius:12px;background:#fafafa}
@@ -350,11 +395,13 @@ export const CMS_STYLES = `
 .cms-pad-sm{padding:.6rem}.cms-pad-md{padding:1.2rem}.cms-pad-lg{padding:2rem}
 .cms-align-left{text-align:left}.cms-align-center{text-align:center}.cms-align-right{text-align:right}
 .cms-w-wide{width:75%}.cms-w-half{width:50%}.cms-w-third{width:33.33%}
-.cms-section{margin:1.5rem 0;border-radius:12px}.cms-section-inner{max-width:960px;margin:0 auto}
+.cms-section{margin:1.5rem 0;border-radius:12px;overflow:hidden}.cms-section-inner{max-width:960px;margin:0 auto;position:relative;z-index:1}
+.cms-section-bg{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;z-index:0;opacity:.9}
+.cms-section-bleed{border-radius:0;margin-left:calc(50% - 50vw);margin-right:calc(50% - 50vw);width:auto}
 .cms-columns{display:grid;gap:1.4rem;margin:1.5rem 0}
 .cms-columns-2{grid-template-columns:repeat(2,1fr)}
 .cms-columns-3{grid-template-columns:repeat(3,1fr)}
 .cms-columns-4{grid-template-columns:repeat(4,1fr)}
 @media(max-width:720px){.cms-columns-2,.cms-columns-3,.cms-columns-4{grid-template-columns:1fr}}
-@media(max-width:640px){.cms-w-wide,.cms-w-half,.cms-w-third{width:100%}}
+@media(max-width:640px){.cms-w-wide,.cms-w-half,.cms-w-third{width:100%}.cms-float-left,.cms-float-right{float:none;width:100%;margin:.8rem 0}}
 `;

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantId, requireRole } from "@/lib/auth";
 import { createClient } from "@supabase/supabase-js";
+import { createServiceClient } from "@/lib/supabase/server";
 import { generateStructuredOutput, generateText, generateImage } from "@/lib/ai/orchestrator";
 import { getBlogPrompt, getSocialCaptionPrompt, getBlogPostSchema } from "@/lib/ai/seo-prompts";
 import { generateContentSchema } from "@/lib/validations";
@@ -16,6 +17,7 @@ import {
 import {
   resolveInternalLinks,
   buildInternalLinkContext,
+  appendRelatedReading,
 } from "@/lib/content-links";
 import { rateLimitRequest } from "@/lib/rate-limit";
 import { checkTrialContentLimit } from "@/lib/trial-limits";
@@ -331,6 +333,20 @@ export async function POST(request: NextRequest) {
         }
 
         linkablePages = await getWorkspaceLinkablePages(workspaceId, tenantId);
+        // The tenant's own published CMS pages are prime internal-link
+        // targets (the post will live on that site).
+        const sitePagesRes = await (await createServiceClient())
+          .from("site_pages")
+          .select("title, slug")
+          .eq("tenant_id", tenantId)
+          .eq("kind", "blog_post")
+          .eq("is_published", true)
+          .order("created_at", { ascending: false })
+          .limit(50);
+        for (const p of sitePagesRes.data ?? []) {
+          if (!p.title || !p.slug) continue;
+          linkablePages.push({ title: p.title, url: `/site/${p.slug}`, text: "" });
+        }
       } catch (err) {
         console.warn("[generate-content] Could not load workspace context:", err);
       }
@@ -469,8 +485,14 @@ export async function POST(request: NextRequest) {
       blogPost.title
     );
 
-    const bodyWithImages = resolveInternalLinks(
-      injectImagesIntoBody(blogPost.body, generatedImages),
+    // Resolve internal-link markers, then guarantee at least one internal
+    // link (related-reading section) when the body has none — automatic
+    // internal linking for posts that will live on the generated site.
+    const bodyWithImages = appendRelatedReading(
+      resolveInternalLinks(
+        injectImagesIntoBody(blogPost.body, generatedImages),
+        linkablePages
+      ),
       linkablePages
     );
 

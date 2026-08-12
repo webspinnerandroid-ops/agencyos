@@ -491,6 +491,64 @@ export default function CmsPage() {
           </button>
         )}
       </div>
+
+      {b.kind === "image" && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground w-14">Wrap</span>
+          {(["none", "left", "right"] as const).map((f) => (
+            <button key={f} onClick={() => updateBlock(b.id, { style: { ...b.style, float: f } })}
+              className={`px-1.5 py-0.5 rounded text-[11px] border ${(b.style?.float ?? "none") === f ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
+              {f === "none" ? "Inline" : f === "left" ? "Float left" : "Float right"}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {(b.kind === "section" || b.kind === "columns") && (
+        <>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground w-14">Layout</span>
+            {[
+              { v: true, label: "Boxed" },
+              { v: false, label: "Full width" },
+            ].map((o) => (
+              <button key={String(o.v)} onClick={() => updateBlock(b.id, { style: { ...b.style, boxed: o.v } })}
+                className={`px-1.5 py-0.5 rounded text-[11px] border ${(b.style?.boxed ?? true) === o.v ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
+                {o.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              BG image URL
+              <input
+                type="text"
+                value={b.style?.bgImage ?? ""}
+                onChange={(e) => updateBlock(b.id, { style: { ...b.style, bgImage: e.target.value || undefined } })}
+                placeholder="https://…"
+                className="flex-1 rounded border border-input bg-background px-2 py-1 text-xs"
+              />
+            </label>
+            {b.kind === "section" && (
+              <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                BG video URL
+                <input
+                  type="text"
+                  value={b.style?.bgVideo ?? ""}
+                  onChange={(e) => updateBlock(b.id, { style: { ...b.style, bgVideo: e.target.value || undefined } })}
+                  placeholder="https://…/background.mp4"
+                  className="flex-1 rounded border border-input bg-background px-2 py-1 text-xs"
+                />
+              </label>
+            )}
+            {(b.style?.bgImage || b.style?.bgVideo) && (
+              <button onClick={() => updateBlock(b.id, { style: { ...b.style, bgImage: undefined, bgVideo: undefined } })} className="text-[11px] underline text-muted-foreground self-start">
+                Clear backgrounds
+              </button>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 

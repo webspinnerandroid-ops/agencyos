@@ -132,3 +132,62 @@ export function buildInternalLinkContext(
     anchorText: page.title.trim().replace(/\s+/g, " "),
   }));
 }
+
+/** Count of internal links (same-site hrefs) currently in a markdown body. */
+export function countInternalLinks(body: string): number {
+  if (!body) return 0;
+  const matches = body.match(/\]\(([^)]+)\)/g) ?? [];
+  return matches.filter((m) => {
+    const url = m.slice(2, -1).trim();
+    return (
+      url.startsWith("/site/") ||
+      url.startsWith(process.env.NEXT_PUBLIC_SITE_URL ?? "") ||
+      /^\/dashboard\//.test(url)
+    );
+  }).length;
+}
+
+/**
+ * Auto-append a "Related reading" section of internal links when the body
+ * has none. Ranks linkable pages by how well their titles match the body's
+ * most significant words, so the links are topically relevant, then appends
+ * a markdown section with up to `maxLinks` links.
+ */
+export function appendRelatedReading(
+  body: string,
+  pages: LinkablePage[],
+  maxLinks = 3
+): string {
+  if (!body || pages.length === 0) return body;
+  if (countInternalLinks(body) > 0) return body;
+
+  // Most frequent significant words in the body (cap at ~200 words to keep
+  // the scan cheap), excluding the page titles themselves.
+  const tokens = significantWords(body.slice(0, 12000));
+  const freq = new Map<string, number>();
+  for (const t of tokens) freq.set(t, (freq.get(t) ?? 0) + 1);
+  const topWords = [...freq.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 12)
+    .map(([w]) => w);
+  if (topWords.length === 0) return body;
+
+  const scored = pages
+    .map((p) => {
+      const titleWords = new Set(significantWords(p.title));
+      const hits = topWords.filter((w) => titleWords.has(w)).length;
+      return { page: p, hits };
+    })
+    .filter((s) => s.hits > 0)
+    .sort((a, b) => b.hits - a.hits)
+    .slice(0, maxLinks);
+  if (scored.length === 0) return body;
+
+  const list = scored
+    .map(({ page }) => {
+      const anchor = page.title.trim().replace(/\s+/g, " ");
+      return `- [${anchor}](${page.url})`;
+    })
+    .join("\n");
+  return `${body.replace(/\s+$/, "")}\n\n## Related reading\n\n${list}\n`;
+}

@@ -37,7 +37,7 @@ export default async function DashboardPage({ searchParams }: { searchParams?: P
   // detail modal is opened (see recent-content).
   let postsQuery = db
     .from("posts")
-    .select("id, status, ai_generated, scheduled_at, title, type, platform, seo_score")
+    .select("id, status, ai_generated, scheduled_at, title, type, platform, seo_score, cms_published_at, cms_slug")
     .eq("tenant_id", tenantId ?? "")
     .order("created_at", { ascending: false })
     .limit(6);
@@ -64,8 +64,21 @@ export default async function DashboardPage({ searchParams }: { searchParams?: P
         .eq("is_active", true)
     : Promise.resolve({ count: null });
 
-  const [{ data: clients }, { data: posts }, { data: audits }, { count: apiKeyCountResult }] =
-    await Promise.all([clientsQuery, postsQuery, auditsQuery, apiKeyCountQuery]);
+  // Unseen guest-post outreach replies → notification card on the dashboard.
+  // Visiting the Outreach page marks them seen (see outreach page + mark-seen).
+  const repliesQuery = tenantId
+    ? db
+        .from("outreach_targets")
+        .select("id, blog_name, blog_url, last_reply_at, last_reply_text, reply_count")
+        .eq("tenant_id", tenantId)
+        .eq("last_reply_seen", false)
+        .not("last_reply_at", "is", null)
+        .order("last_reply_at", { ascending: false })
+        .limit(5)
+    : Promise.resolve({ data: [] });
+
+  const [{ data: clients }, { data: posts }, { data: audits }, { count: apiKeyCountResult }, { data: replies }] =
+    await Promise.all([clientsQuery, postsQuery, auditsQuery, apiKeyCountQuery, repliesQuery]);
   const clientsArr = (clients ?? []) as { id: string; name: string }[];
   const apiKeyCount = apiKeyCountResult ?? 0;
 
@@ -157,6 +170,44 @@ export default async function DashboardPage({ searchParams }: { searchParams?: P
           </button>
         </form>
       </div>
+
+      {(replies ?? []).length > 0 && (
+        <section className="rounded-xl border bg-amber-50/60 dark:bg-amber-950/20 border-amber-200 dark:border-amber-900 p-5" aria-label="Outreach replies">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-semibold tracking-tight flex items-center gap-2">
+              <span className="text-amber-500">💬</span> Guest-post replies
+              <span className="text-xs font-normal px-2 py-0.5 rounded-full bg-amber-200 dark:bg-amber-900 text-amber-800 dark:text-amber-200">
+                {(replies ?? []).length} unseen
+              </span>
+            </h2>
+            <a href="/dashboard/seo/outreach" className="text-sm text-primary underline hover:underline">Open outreach →</a>
+          </div>
+          <div className="rounded-lg border divide-y bg-background">
+            {(replies ?? []).map((r: any) => (
+              <a
+                key={r.id}
+                href="/dashboard/seo/outreach"
+                className="flex items-center justify-between gap-3 p-3 hover:bg-muted/30 transition-colors"
+              >
+                <div className="min-w-0">
+                  <p className="text-sm font-medium truncate">{r.blog_name ?? r.blog_url}</p>
+                  <p className="text-xs text-muted-foreground truncate">
+                    {(r.last_reply_text ?? "").slice(0, 140)}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900 text-amber-700 dark:text-amber-300">
+                    {r.reply_count} repl{r.reply_count === 1 ? "y" : "ies"}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {r.last_reply_at ? new Date(r.last_reply_at).toLocaleDateString("en-US", { month: "short", day: "numeric" }) : ""}
+                  </span>
+                </div>
+              </a>
+            ))}
+          </div>
+        </section>
+      )}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <a href="/dashboard/seo/campaigns" className="rounded-lg border bg-card p-6 hover:border-primary/50 transition-all">

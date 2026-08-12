@@ -16,10 +16,22 @@ function blogBodyToBlocks(body: string): any[] {
   const imageRe = /!\[([^\]]*)\]\(([^)]+)\)/g;
   let last = 0;
   let m: RegExpExecArray | null;
+  let imgCount = 0;
   while ((m = imageRe.exec(body))) {
     const before = body.slice(last, m.index).trim();
     if (before) blocks.push({ id: newBlockId(), kind: "text", content: before });
-    blocks.push({ id: newBlockId(), kind: "image", url: m[2], alt: m[1] || "" });
+    imgCount += 1;
+    // First image is the featured hero (full-width, centered); the rest float
+    // left/right alternating so text wraps around them instead of stacking.
+    const float =
+      imgCount === 1 ? "none" : imgCount % 2 === 0 ? "left" : "right";
+    blocks.push({
+      id: newBlockId(),
+      kind: "image",
+      url: m[2],
+      alt: m[1] || "",
+      style: { float },
+    });
     last = m.index + m[0].length;
   }
   const after = body.slice(last).trim();
@@ -216,6 +228,16 @@ export async function POST(request: NextRequest) {
       } else {
         await supabase.from("site_pages").insert(patch);
       }
+      // Track the publish on the post itself so content lists can show an
+      // "On site" badge linking to the live page.
+      await supabase
+        .from("posts")
+        .update({
+          cms_published_at: new Date().toISOString(),
+          cms_slug: slug,
+        })
+        .eq("id", postId)
+        .eq("tenant_id", tenantId);
       results.push({ platform: "cms", success: true, url: `/site/${slug}` });
     } else if (platform === "wordpress" || platform === "blog") {
       const wpResult = await publishToWordPress(postId, tenantId, action || "publish", scheduledAt, categoryId);

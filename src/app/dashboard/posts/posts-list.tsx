@@ -211,6 +211,17 @@ export default function PostsList({ posts }: { posts: PostRow[] }) {
                       {preview.type === "blog" && (
                         <ScoreBadge score={getSeoScore(post)} />
                       )}
+                      {post.cms_published_at && (
+                        <a
+                          href={`/site/${post.cms_slug ?? ""}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-[10px] px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300 hover:underline"
+                          title="Published to your website"
+                        >
+                          On site ↗
+                        </a>
+                      )}
                     </div>
                   </div>
                 </div>

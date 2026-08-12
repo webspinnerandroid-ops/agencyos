@@ -1,11 +1,11 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, Send, Calendar } from "lucide-react";
+import { Loader2, Send, Calendar, FolderTree } from "lucide-react";
 
 interface PublishButtonProps {
   postId: string;
@@ -21,6 +21,50 @@ export default function PublishButton({ postId, postType, onPublished }: Publish
   const [feedback, setFeedback] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
+  // WordPress categories for the chosen site (fetched on open when publishing
+  // to WordPress so the post lands in the right category, not Uncategorized).
+  const [wpSites, setWpSites] = useState<
+    {
+      blogPlatformId: string;
+      siteUrl: string;
+      siteName: string;
+      categories: { id: number; name: string; slug: string; count: number }[];
+    }[]
+  >([]);
+  const [wpSiteId, setWpSiteId] = useState<string>("");
+  const [wpCategoryId, setWpCategoryId] = useState<string>("");
+  const [categoriesLoading, setCategoriesLoading] = useState(false);
+
+  // Load categories once the options panel opens for a blog.
+  useEffect(() => {
+    if (!showOptions || postType !== "blog") return;
+    let cancelled = false;
+    setCategoriesLoading(true);
+    (async () => {
+      try {
+        const res = await fetch("/api/wordpress/categories", { credentials: "include" });
+        if (!cancelled && res.ok) {
+          const data = await res.json();
+          setWpSites(data.sites ?? []);
+          if ((data.sites ?? []).length > 0) {
+            setWpSiteId(data.sites[0].blogPlatformId);
+            const cats = data.sites[0].categories ?? [];
+            if (cats.length > 0) setWpCategoryId(String(cats[0].id));
+          }
+        }
+      } catch {
+        // Categories are a convenience — publish still works without them.
+      } finally {
+        if (!cancelled) setCategoriesLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [showOptions, postType]);
+
+  const activeWpSite = wpSites.find((s) => s.blogPlatformId === wpSiteId);
+
   const handlePublish = () => {
     startTransition(async () => {
       try {
@@ -32,6 +76,8 @@ export default function PublishButton({ postId, postType, onPublished }: Publish
             platform,
             action,
             scheduledAt: action === "schedule" ? scheduledDate : undefined,
+            categoryId:
+              platform === "wordpress" && wpCategoryId ? Number(wpCategoryId) : undefined,
           }),
         });
 
@@ -93,6 +139,60 @@ export default function PublishButton({ postId, postType, onPublished }: Publish
               </SelectContent>
             </Select>
           </div>
+
+          {platform === "wordpress" && wpSites.length > 0 && (
+            <div className="space-y-2">
+              <Label className="text-xs">
+                <FolderTree className="size-3 inline mr-1" />
+                Category
+              </Label>
+              {categoriesLoading ? (
+                <p className="text-xs text-muted-foreground flex items-center gap-1">
+                  <Loader2 className="size-3 animate-spin" /> Loading categories…
+                </p>
+              ) : (
+                <>
+                  {wpSites.length > 1 && (
+                    <Select value={wpSiteId} onValueChange={(v) => {
+                      setWpSiteId(v);
+                      const site = wpSites.find((s) => s.blogPlatformId === v);
+                      const cats = site?.categories ?? [];
+                      setWpCategoryId(cats.length > 0 ? String(cats[0].id) : "");
+                    }}>
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue placeholder="Site" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {wpSites.map((s) => (
+                          <SelectItem key={s.blogPlatformId} value={s.blogPlatformId} className="text-xs">
+                            {s.siteName}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  )}
+                  {activeWpSite && activeWpSite.categories.length > 0 ? (
+                    <Select value={wpCategoryId} onValueChange={setWpCategoryId}>
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue placeholder="Select category" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {activeWpSite.categories.map((c) => (
+                          <SelectItem key={c.id} value={String(c.id)} className="text-xs">
+                            {c.name} ({c.count})
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      No categories found — the post will go to Uncategorized.
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
+          )}
 
           <div className="space-y-2">
             <Label className="text-xs">Action</Label>

@@ -208,6 +208,122 @@ export async function revokeLicense(licenseId: string): Promise<ActionResponse> 
   }
 }
 
+/**
+ * Permanently deletes a license row (not just revoke).
+ */
+export async function deleteLicense(licenseId: string): Promise<ActionResponse> {
+  try {
+    await requireSuperAdmin();
+    const supabase = await createServiceClient();
+    const { error } = await supabase.from("licenses").delete().eq("id", licenseId);
+    if (error) throw new Error(error.message);
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+/**
+ * Permanently deletes a user account: their auth identity (auth.admin) and
+ * every user_roles row. Tenant data is untouched — the user's posts etc.
+ * remain with the tenant(s) they worked in.
+ */
+export async function deleteUser(userId: string): Promise<ActionResponse> {
+  try {
+    await requireSuperAdmin();
+    const supabase = await createServiceClient();
+
+    const { error: rolesError } = await supabase
+      .from("user_roles")
+      .delete()
+      .eq("user_id", userId);
+    if (rolesError) throw new Error(rolesError.message);
+
+    const { error: authError } = await supabase.auth.admin.deleteUser(userId);
+    if (authError) throw new Error(authError.message);
+
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+/**
+ * Permanently deletes a tenant and EVERYTHING under it: all rows across all
+ * tenant-scoped tables (via the delete_tenant_data SQL function from
+ * migration 025), the licenses, the media objects in Bunny storage, and the
+ * auth accounts of users who belong ONLY to this tenant. Users who also have
+ * roles in other tenants keep their accounts.
+ */
+export async function deleteTenant(
+  tenantId: string
+): Promise<ActionResponse<{ deletedAccounts: number }>> {
+  try {
+    await requireSuperAdmin();
+    const supabase = await createServiceClient();
+
+    // 1. Users attached to this tenant (to decide auth cleanup afterward).
+    const { data: roleRows } = await supabase
+      .from("user_roles")
+      .select("user_id")
+      .eq("tenant_id", tenantId);
+    const attachedUserIds = [...new Set((roleRows ?? []).map((r) => r.user_id))];
+
+    // 2. Collect media object URLs for Bunny cleanup (best-effort).
+    const mediaUrls: string[] = [];
+    const { data: assets } = await supabase
+      .from("media_assets")
+      .select("url")
+      .eq("tenant_id", tenantId);
+    for (const a of assets ?? []) if (typeof a.url === "string") mediaUrls.push(a.url);
+    // Images embedded in post content (they live in Bunny too).
+    const { data: postRows } = await supabase
+      .from("posts")
+      .select("content")
+      .eq("tenant_id", tenantId);
+    for (const p of postRows ?? []) {
+      try {
+        const c = typeof p.content === "string" ? JSON.parse(p.content) : p.content;
+        for (const img of c?.images ?? []) {
+          if (typeof img?.url === "string") mediaUrls.push(img.url);
+        }
+      } catch { /* skip malformed row */ }
+    }
+
+    // 3. Delete every tenant-scoped row + the tenant itself (SQL function).
+    const { error: rpcError } = await supabase.rpc("delete_tenant_data", {
+      p_tenant_id: tenantId,
+    });
+    if (rpcError) throw new Error(rpcError.message);
+
+    // 4. Remove auth accounts for users with no remaining roles anywhere.
+    let deletedAccounts = 0;
+    for (const userId of attachedUserIds) {
+      const { data: remaining } = await supabase
+        .from("user_roles")
+        .select("user_id")
+        .eq("user_id", userId)
+        .limit(1);
+      if (!remaining || remaining.length === 0) {
+        const { error: authError } = await supabase.auth.admin.deleteUser(userId);
+        if (!authError) deletedAccounts++;
+      }
+    }
+
+    // 5. Best-effort Bunny storage cleanup (never fails the operation).
+    if (process.env.BUNNY_STORAGE_API_KEY) {
+      const { deleteStoredImage } = await import("@/lib/media/storage");
+      await Promise.allSettled(
+        [...new Set(mediaUrls)].map((u) => deleteStoredImage(u))
+      );
+    }
+
+    return { success: true, data: { deletedAccounts } };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
 // ------------------------------------------------------------------
 // User management (levels: client / agency_admin / super_admin)
 // ------------------------------------------------------------------

@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Loader2 } from "lucide-react";
 
 // ============================================================================
 // Types
@@ -21,6 +22,11 @@ interface StoredCampaign {
   audit_json?: AuditJson;
   competitors_json?: CompetitorData[];
   created_at: string;
+  docusign_envelope_id?: string | null;
+  docusign_status?: string | null;
+  docusign_signed_at?: string | null;
+  signer_name?: string | null;
+  signer_email?: string | null;
 }
 
 interface CampaignJson {
@@ -87,6 +93,9 @@ export default function PublicSeoProposalPage() {
   const [error, setError] = useState<string | null>(null);
   const [expandedTier, setExpandedTier] = useState<string | null>(null);
   const [selectedCampaign, setSelectedCampaign] = useState<StoredCampaign | null>(null);
+  const [signing, setSigning] = useState(false);
+  const [signError, setSignError] = useState<string | null>(null);
+  const [signStatus, setSignStatus] = useState<string | null>(null);
 
   const fetchProposals = useCallback(async () => {
     if (!clientId) {
@@ -120,6 +129,66 @@ export default function PublicSeoProposalPage() {
   useEffect(() => {
     fetchProposals();
   }, [fetchProposals]);
+
+  // Load the signing status when a tier is opened.
+  useEffect(() => {
+    if (!selectedCampaign || !clientId) return;
+    setSignStatus(null);
+    setSignError(null);
+    if (selectedCampaign.docusign_status) {
+      setSignStatus(selectedCampaign.docusign_status);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/seo/public-proposal/${selectedCampaign.id}/sign?clientId=${encodeURIComponent(clientId)}`
+        );
+        if (res.ok) {
+          const data = await res.json();
+          if (!cancelled && data.status) setSignStatus(data.status);
+        }
+      } catch {
+        // ignore — DocuSign may simply not be configured
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedCampaign, clientId]);
+
+  // Approve & sign this tier with DocuSign. Opens the embedded signing URL;
+  // once the client completes, the Connect webhook marks the proposal signed
+  // and the agency's campaign auto-starts.
+  const handleSign = async () => {
+    if (!selectedCampaign || !clientId) return;
+    setSigning(true);
+    setSignError(null);
+    try {
+      const res = await fetch(
+        `/api/seo/public-proposal/${selectedCampaign.id}/sign?clientId=${encodeURIComponent(clientId)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        }
+      );
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setSignError(data.error ?? "Could not start e-signature.");
+        return;
+      }
+      setSignStatus(data.status ?? "sent");
+      if (data.signingUrl) {
+        window.open(data.signingUrl, "_blank");
+      }
+    } catch {
+      setSignError("Network error while starting e-signature.");
+    } finally {
+      setSigning(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -263,6 +332,11 @@ export default function PublicSeoProposalPage() {
                   </div>
 
                   <Button className="w-full">Select {cj.tierName}</Button>
+                  {campaign.docusign_status === "completed" && (
+                    <span className="mt-2 inline-flex w-full justify-center rounded-md bg-green-50 px-3 py-1.5 text-xs font-medium text-green-700">
+                      ✓ Signed & approved
+                    </span>
+                  )}
                 </Card>
               );
             })}
@@ -305,6 +379,54 @@ export default function PublicSeoProposalPage() {
             )}
           </div>
         </div>
+
+        {/* Approve & Sign (DocuSign) */}
+        <Card className="p-6 border-primary/40">
+          <h2 className="text-lg font-semibold mb-2">Approve & Start</h2>
+          <p className="text-sm text-muted-foreground mb-4">
+            {signStatus === "completed"
+              ? `This proposal was signed${selectedCampaign.signer_name ? ` by ${selectedCampaign.signer_name}` : ""}${
+                  selectedCampaign.docusign_signed_at
+                    ? ` on ${new Date(selectedCampaign.docusign_signed_at).toLocaleDateString("en-US", {
+                        month: "long",
+                        day: "numeric",
+                        year: "numeric",
+                      })}`
+                    : ""
+                }. Your campaign is now being set up.`
+              : signStatus && signStatus !== "unsigned"
+              ? "This proposal has been sent for your signature. Complete the DocuSign document to approve it — your campaign starts automatically once signed."
+              : "Approve this plan and sign it electronically. Once you sign, your agency is authorized to start the campaign right away."}
+          </p>
+          {signStatus === "completed" ? (
+            <div className="inline-flex items-center gap-2 rounded-md bg-green-50 px-3 py-2 text-sm font-medium text-green-700">
+              <span>✓ Signed & approved</span>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-3">
+              <Button onClick={handleSign} disabled={signing}>
+                {signing ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin mr-2" />
+                    Opening secure signing…
+                  </>
+                ) : signStatus && signStatus !== "unsigned" ? (
+                  "Complete your signature"
+                ) : (
+                  "Approve & Sign with DocuSign"
+                )}
+              </Button>
+              {signStatus && signStatus !== "unsigned" && signStatus !== "completed" && (
+                <span className="text-xs text-muted-foreground capitalize">
+                  Status: {signStatus}
+                </span>
+              )}
+            </div>
+          )}
+          {signError && (
+            <p className="mt-3 text-sm text-red-600">{signError}</p>
+          )}
+        </Card>
 
         {/* Executive Summary */}
         <Card className="p-6">

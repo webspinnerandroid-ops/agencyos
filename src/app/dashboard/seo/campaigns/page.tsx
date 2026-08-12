@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Trash2 } from "lucide-react";
+import { Trash2, Rocket, Loader2 } from "lucide-react";
 
 // ============================================================================
 // Types
@@ -65,6 +65,12 @@ interface StoredCampaign {
   competitors_json: CompetitorData[];
   created_at: string;
   created_by: string | null;
+  location?: string | null;
+  docusign_envelope_id?: string | null;
+  docusign_status?: string | null;
+  docusign_signed_at?: string | null;
+  signer_name?: string | null;
+  signer_email?: string | null;
 }
 
 interface CampaignJson {
@@ -180,6 +186,8 @@ export default function SeoCampaignsPage() {
   const [selectedClientId, setSelectedClientId] = useState("");
   const [customClientName, setCustomClientName] = useState("");
   const [url, setUrl] = useState("");
+  const [location, setLocation] = useState("");
+  const [competitorUrls, setCompetitorUrls] = useState<string[]>(["", "", ""]);
   const [loading, setLoading] = useState(false);
   const [loadingClients, setLoadingClients] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -193,6 +201,8 @@ export default function SeoCampaignsPage() {
   const [expandedAudit, setExpandedAudit] = useState(false);
   const [pastCampaigns, setPastCampaigns] = useState<StoredCampaign[]>([]);
   const [loadingPast, setLoadingPast] = useState(true);
+  const [startingCampaignId, setStartingCampaignId] = useState<string | null>(null);
+  const [sendingSigId, setSendingSigId] = useState<string | null>(null);
 
   // Fetch clients on mount
   useEffect(() => {
@@ -273,11 +283,20 @@ export default function SeoCampaignsPage() {
     setCampaigns([]);
 
     try {
-      const payload: Record<string, string> = { url: url.trim() };
+      const payload: Record<string, unknown> = { url: url.trim() };
+      if (location.trim()) {
+        payload.location = location.trim();
+      }
       if (selectedClientId) {
         payload.clientId = selectedClientId;
       } else {
         payload.clientName = customClientName.trim();
+      }
+      const manualCompetitors = competitorUrls
+        .map((c) => c.trim())
+        .filter(Boolean);
+      if (manualCompetitors.length > 0) {
+        payload.competitors = manualCompetitors;
       }
       const res = await fetch("/api/seo/generate-campaign", {
         method: "POST",
@@ -330,6 +349,123 @@ export default function SeoCampaignsPage() {
       }
     } catch {
       setError("Network error while deleting campaign");
+    }
+  }, []);
+
+  // ------------------------------------------------------------------
+  // Seed a dated campaign plan straight from this proposal tier (no LLM —
+  // the proposal's content calendar is the blueprint). Lands on the Content
+  // Calendar as proposed items.
+  const handleStartCampaign = useCallback(async (campaignId: string) => {
+    setStartingCampaignId(campaignId);
+    try {
+      const res = await fetch("/api/campaign-plans/from-proposal", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        // Auto-create a dedicated workspace for the campaign so its plan,
+        // posts and chat stay isolated — falls back to the current workspace
+        // if the license's workspace quota is reached.
+        body: JSON.stringify({ campaignId, createWorkspace: true }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(data.error ?? "Failed to start campaign");
+        return;
+      }
+      window.location.href = data.planUrl ?? "/dashboard/calendar";
+    } catch {
+      setError("Network error while starting campaign");
+    } finally {
+      setStartingCampaignId(null);
+    }
+  }, []);
+
+  // ------------------------------------------------------------------
+  // Send a proposal for DocuSign signature. If the client has no email on
+  // file, ask for it once so the envelope can be created.
+  const handleSendForSignature = useCallback(async (campaign: StoredCampaign) => {
+    setSendingSigId(campaign.id);
+    setError(null);
+    try {
+      let body: Record<string, string> = {};
+      let res = await fetch(`/api/seo/campaigns/${campaign.id}/docusign`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      let data = await res.json().catch(() => ({}));
+
+      // No signer identity on file → prompt once and retry with the details.
+      if (!res.ok && (data.error ?? "").includes("No signer identity")) {
+        const signerEmail = window.prompt(
+          "DocuSign needs the client's email to send the proposal for signature:",
+          campaign.signer_email ?? ""
+        );
+        if (!signerEmail || !signerEmail.includes("@")) {
+          setSendingSigId(null);
+          return;
+        }
+        body = { signerEmail, signerName: campaign.signer_name ?? "" };
+        res = await fetch(`/api/seo/campaigns/${campaign.id}/docusign`, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        data = await res.json().catch(() => ({}));
+      }
+
+      if (!res.ok) {
+        setError(data.error ?? "Failed to send for signature");
+        return;
+      }
+
+      // Open the one-time embedded signing URL in a new tab; the Connect
+      // webhook flips the status to signed when the client completes.
+      if (data.signingUrl) {
+        window.open(data.signingUrl, "_blank");
+      }
+      setCampaigns((prev) =>
+        prev.map((c) =>
+          c.id === campaign.id
+            ? { ...c, docusign_status: data.status ?? "sent" }
+            : c
+        )
+      );
+      setPastCampaigns((prev) =>
+        prev.map((c) =>
+          c.id === campaign.id
+            ? { ...c, docusign_status: data.status ?? "sent" }
+            : c
+        )
+      );
+    } catch {
+      setError("Network error while sending for signature");
+    } finally {
+      setSendingSigId(null);
+    }
+  }, []);
+
+  // Refresh a proposal's signing status (the Connect webhook normally updates
+  // it; this is the manual pull for when it hasn't fired yet).
+  const handleRefreshSignature = useCallback(async (campaign: StoredCampaign) => {
+    try {
+      const res = await fetch(`/api/seo/campaigns/${campaign.id}/docusign`, {
+        credentials: "include",
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const status = data.status ?? "unsigned";
+      setCampaigns((prev) =>
+        prev.map((c) => (c.id === campaign.id ? { ...c, docusign_status: status } : c))
+      );
+      setPastCampaigns((prev) =>
+        prev.map((c) => (c.id === campaign.id ? { ...c, docusign_status: status } : c))
+      );
+    } catch {
+      // ignore
     }
   }, []);
 
@@ -417,6 +553,57 @@ export default function SeoCampaignsPage() {
               className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
             />
           </div>
+
+          <div>
+            <label
+              htmlFor="location"
+              className="block text-sm font-medium mb-1.5"
+            >
+              Business Location (optional)
+            </label>
+            <input
+              id="location"
+              type="text"
+              placeholder="e.g., Toronto, Ontario, Canada"
+              value={location}
+              onChange={(e) => setLocation(e.target.value)}
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+            <p className="text-xs text-muted-foreground mt-1.5">
+              Helps the auditor qualify competitors, keywords and rankings for
+              the right market (local SEO).
+            </p>
+          </div>
+
+          <div>
+            <label
+              htmlFor="competitors"
+              className="block text-sm font-medium mb-1.5"
+            >
+              Competitors (optional)
+            </label>
+            <div className="space-y-2">
+              {[0, 1, 2].map((i) => (
+                <input
+                  key={i}
+                  type="text"
+                  placeholder={`Competitor website ${i + 1} (optional) — e.g., https://rival.com`}
+                  value={competitorUrls[i] ?? ""}
+                  onChange={(e) => {
+                    const next = [...competitorUrls];
+                    next[i] = e.target.value;
+                    setCompetitorUrls(next);
+                  }}
+                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground mt-1.5">
+              Adding up to three competitors keeps the proposal from being too
+              generic — we'll analyze them against your site. Leave blank to
+              auto-discover.
+            </p>
+          </div>
         </div>
 
         {error && (
@@ -455,6 +642,12 @@ export default function SeoCampaignsPage() {
               <span className="text-muted-foreground">URL:</span>{" "}
               <span className="font-medium">{audit.url}</span>
             </div>
+            {location.trim() && (
+              <div>
+                <span className="text-muted-foreground">Location:</span>{" "}
+                <span className="font-medium">{location.trim()}</span>
+              </div>
+            )}
             <div>
               <span className="text-muted-foreground">Overall Score:</span>{" "}
               <span
@@ -635,8 +828,93 @@ export default function SeoCampaignsPage() {
                         )}
                       </div>
 
+                      {/* DocuSign signature status / send */}
+                      {(campaign.docusign_status === "completed" ||
+                        campaign.docusign_status === "sent" ||
+                        campaign.docusign_status === "delivered" ||
+                        campaign.docusign_status === "declined" ||
+                        campaign.docusign_status === "voided") && (
+                        <div className="mb-3 flex items-center justify-between text-xs">
+                          <span
+                            className={
+                              campaign.docusign_status === "completed"
+                                ? "text-green-600 font-medium"
+                                : campaign.docusign_status === "declined" || campaign.docusign_status === "voided"
+                                ? "text-red-600 font-medium"
+                                : "text-muted-foreground"
+                            }
+                          >
+                            {campaign.docusign_status === "completed"
+                              ? `✓ Signed${campaign.signer_name ? ` by ${campaign.signer_name}` : ""}`
+                              : campaign.docusign_status === "declined"
+                              ? "Signature declined"
+                              : campaign.docusign_status === "voided"
+                              ? "Envelope voided"
+                              : "DocuSign: sent — awaiting signature"}
+                          </span>
+                          {campaign.docusign_status !== "completed" && (
+                            <button
+                              onClick={() => handleRefreshSignature(campaign)}
+                              className="text-primary hover:underline"
+                            >
+                              Refresh status
+                            </button>
+                          )}
+                        </div>
+                      )}
+
                       {/* Actions */}
                       <div className="flex gap-2 mt-auto pt-4 border-t">
+                        <Button
+                          variant="default"
+                          size="sm"
+                          className="flex-1"
+                          disabled={startingCampaignId !== null}
+                          onClick={() => handleStartCampaign(campaign.id)}
+                          title="Seed a dated campaign plan on the Content Calendar from this tier's content calendar — no AI cost, then refine with the team."
+                        >
+                          {startingCampaignId === campaign.id ? (
+                            <>
+                              <Loader2 className="size-3.5 animate-spin mr-1" />
+                              Starting…
+                            </>
+                          ) : (
+                            <>
+                              <Rocket className="size-3.5 mr-1" />
+                              Start Campaign
+                            </>
+                          )}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={sendingSigId !== null || campaign.docusign_status === "completed"}
+                          onClick={() =>
+                            campaign.docusign_status === "completed"
+                              ? undefined
+                              : campaign.docusign_status && campaign.docusign_status !== "declined" && campaign.docusign_status !== "voided"
+                              ? handleRefreshSignature(campaign)
+                              : handleSendForSignature(campaign)
+                          }
+                          title={
+                            campaign.docusign_status === "completed"
+                              ? "This proposal is already signed."
+                              : "Send this proposal to the client for DocuSign e-signature — the campaign auto-starts once signed."
+                          }
+                        >
+                          {sendingSigId === campaign.id ? (
+                            <>
+                              <Loader2 className="size-3.5 animate-spin mr-1" />
+                              Sending…
+                            </>
+                          ) : campaign.docusign_status === "completed" ? (
+                            "✓ Signed"
+                          ) : campaign.docusign_status && campaign.docusign_status !== "declined" && campaign.docusign_status !== "voided" ? (
+                            "Check Signature"
+                          ) : (
+                            "DocuSign Sign"
+                          )}
+                        </Button>
                         <Button
                           variant="outline"
                           size="sm"

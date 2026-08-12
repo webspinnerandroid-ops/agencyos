@@ -23,6 +23,14 @@ export interface SeoContext {
   internalLinks?: { url: string; anchorText: string }[];
   ctaText?: string;
   ctaUrl?: string;
+  /** A user-supplied page title the post must satisfy. */
+  titleHint?: string;
+  /** Web research (questions people ask + trends) that the post must answer. */
+  research?: {
+    questions: string[];
+    trends: string[];
+    source: "web" | "model";
+  };
 }
 
 export interface AuditData {
@@ -81,6 +89,19 @@ export function getBlogPrompt(brandVoice?: string, seoContext?: SeoContext): str
   const readability = seoContext?.readabilityTarget ?? "grade-8";
   const ctaText = seoContext?.ctaText ?? "Contact us today to learn more";
   const ctaUrl = seoContext?.ctaUrl ?? "#";
+  const titleHint = seoContext?.titleHint?.trim();
+  const research = seoContext?.research;
+
+  let researchStr = "";
+  if (research) {
+    const q = research.questions
+      .map((s, i) => `${i + 1}. ${s}`)
+      .join("\n");
+    const t = research.trends
+      .map((s, i) => `${i + 1}. ${s}`)
+      .join("\n");
+    researchStr = `\n\n## REAL QUESTIONS PEOPLE ARE ASKING (WEB RESEARCH — ANSWER THESE)\nThis post MUST directly and helpfully answer each of these questions people are actually searching for — address them explicitly with dedicated sections where natural. Content that answers real questions ranks; content that ignores them does not.\n${q}\n${t ? `\nCURRENT TRENDS & ANGLES TO REFLECT:${t}` : ""}`;
+  }
 
   let internalLinksStr = "";
   if (seoContext?.internalLinks && seoContext.internalLinks.length > 0) {
@@ -93,7 +114,7 @@ export function getBlogPrompt(brandVoice?: string, seoContext?: SeoContext): str
 
 ## SEO REQUIREMENTS
 
-1. **SEO Title**: Craft a compelling, click-worthy title (50-60 characters) that includes the primary keyword "${primaryKw}" near the beginning. The title should evoke curiosity or promise a clear benefit.
+1. **SEO Title**: Craft a compelling, click-worthy title (50-60 characters) that includes the primary keyword "${primaryKw}" near the beginning. The title should evoke curiosity or promise a clear benefit.${titleHint ? `\n\nThe user already supplied a title — the final title must stay close to it while containing the primary keyword: "${titleHint}".` : ""}
 
 2. **Meta Description**: Write a meta description (MAXIMUM 160 characters) that summarizes the post's value proposition, includes the primary keyword naturally, and includes a subtle call to action.
 
@@ -128,7 +149,9 @@ export function getBlogPrompt(brandVoice?: string, seoContext?: SeoContext): str
 
 9. **Call to Action**: End with a natural, contextual call to action: "${ctaText}" linking to ${ctaUrl}.
 
-10. **Images**: Plan the post's images. Every post gets exactly ONE featured image (placement "featured") that captures the overall topic, plus ONE inline image (placement "inline") for every ~500 words of body text, each placed after the H2 section it illustrates. A 1500-2000 word post therefore has 1 featured + 3-4 inline images. Each image must have a distinct, detailed prompt that is RELEVANT to the specific section it accompanies (its topic, examples, and data — never generic filler). Never repeat the same prompt twice. In the body markdown, place each inline image immediately after its section's H2 heading as ![description](IMAGE_URL) — but leave the URL as a placeholder like ![description](IMAGE_URL_2) since the actual image URLs are generated separately; the sectionTitle field tells the system where each image belongs.
+10. **Images**: Plan the post's images. Every post gets exactly ONE featured image (placement "featured") that captures the overall topic, plus AT MOST TWO inline images (placement "inline") — never more than 3 images total. A 1500-2000 word post therefore has 1 featured + 1-2 inline. SPACE THE IMAGES OUT: each image must be separated from every other image by at least one full paragraph of body text — never place two images adjacent to each other, never place an image directly under a heading, and never place an image directly before the next heading. Each image must have a distinct, detailed prompt that is RELEVANT to the specific section it accompanies (its topic, examples, and data — never generic filler). Never repeat the same prompt twice. In the body markdown, place each inline image on its own line, surrounded by blank lines, AFTER at least one paragraph of its section's text, as ![description](IMAGE_URL_N) — keep the URL as a placeholder like ![description](IMAGE_URL_2) since the actual image URLs are generated separately; the sectionTitle field tells the system where each image belongs. IMAGE ALT TEXT IS AN SEO SIGNAL: every image description (the alt text) must be a unique, descriptive sentence that contains the primary keyword "${primaryKw}" naturally where it fits (e.g. "${primaryKw} pour-over station") — never the same alt twice, never a generic "image of coffee".
+
+${researchStr}
 
 ${industry ? `\nINDUSTRY CONTEXT: This post is for the ${industry} industry. Use appropriate terminology and examples relevant to this sector.` : ""}
 
@@ -160,7 +183,7 @@ The JSON must have this structure:
   ]
 }
 
-IMPORTANT: The first entry of "images" MUST be the featured image (placement "featured"). Follow it with one inline image per ~500 words, in body order, each tied to a real H2 section in your headings. The count of inline images must be approximately floor(bodyWordCount / 500) — never fewer than 1 for a post over 500 words, and never more than 5 total (1 featured + 4 inline) for very long posts.
+IMPORTANT: The first entry of "images" MUST be the featured image (placement "featured"). Follow it with at most TWO inline images, in body order, each tied to a real H2 section in your headings. Total images must never exceed 3 (1 featured + 2 inline). Never place two images adjacent — always keep at least one full paragraph of text between them.
 `;
 }
 
@@ -480,10 +503,10 @@ export function getBlogPostSchema() {
           required: ["level", "text"],
         },
       },
-      body: { type: "string", description: "Full blog post body in markdown format, with image placeholders (![description](IMAGE_URL_N)) placed after the relevant H2 sections" },
+      body: { type: "string", description: "Full blog post body in markdown format, with image placeholders (![description](IMAGE_URL_N)) on their own lines, placed after at least one paragraph of the relevant H2 sections" },
       images: {
         type: "array",
-        description: "Exactly one featured image plus one inline image per ~500 words of body text (max 5 total: 1 featured + 4 inline). Each prompt must be relevant to the section it accompanies.",
+        description: "One featured image plus at most two inline images (never more than 3 total). Each prompt must be relevant to the section it accompanies, and images must be spaced apart in the body (never adjacent).",
         items: {
           type: "object",
           properties: {

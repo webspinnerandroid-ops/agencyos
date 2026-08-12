@@ -32,7 +32,9 @@ const TENANT_TABLES = new Set([
   "email_accounts", "calendar_events", "blog_platforms",
   "google_business_profiles", "licenses", "oauth_states", "media_assets",
   "leads", "lead_activities", "sequences", "sequence_enrollments",
-  "call_logs", "tenant_usage",
+  "call_logs", "tenant_usage", "tenant_ai_employees",
+  "team_chats", "team_messages", "campaign_plans",
+  "campaign_plan_items",
 ]);
 
 // Files where unscoped service-role access is by design. Each entry is a
@@ -93,6 +95,45 @@ const IGNORE = new Set([
   "src/app/api/seo/campaigns/[id]/approve/route.ts",
   // The helper itself — its "flagged" chains are docstring examples.
   "src/lib/supabase/tenant-scope.ts",
+  // ai-team.ts: all tenant_ai_employees access goes through
+  // tenantScopedClient (runtime-enforced tenant filter + insert payload
+  // forcing — invisible to the static regex). The ai_employees catalog is
+  // global and intentionally unscoped. Verified.
+  "src/lib/ai-team.ts",
+  // ai-team-chat.ts: all team_chats/team_messages/tenant_ai_employees
+  // access goes through tenantScopedClient (runtime-enforced tenant filter
+  // + insert payload forcing — invisible to the static regex) plus
+  // assertTenantOwner on by-id chat lookups. The ai_employees catalog
+  // query is global and intentionally unscoped. Verified.
+  "src/lib/ai-team-chat.ts",
+  // ai/team-task.ts: the Inngest background pipeline for chat tasks. Same
+  // verified pattern as ai-team-chat.ts — every team_chats/team_messages/
+  // tenant_ai_employees access goes through tenantScopedClient (runtime
+  // tenant filter + insert forcing) with assertTenantOwner on by-id chat
+  // lookups; tenantId is passed explicitly in the task payload. The
+  // ai_employees catalog query is global and intentionally unscoped.
+  // Verified.
+  "src/lib/ai/team-task.ts",
+  // campaign-plans.ts: all campaign_plans/campaign_plan_items access goes
+  // through tenantScopedClient (runtime tenant filter + insert forcing,
+  // invisible to the static regex); tenantId is passed explicitly by the
+  // caller (worker / API route, both session-authenticated). Verified.
+  "src/lib/campaign-plans.ts",
+  // campaign docusign route: agency-path fetch + update go through
+  // tenantScopedClient (runtime-enforced tenant filter invisible to the
+  // static regex) plus assertTenantOwner on the by-id lookup. Same verified
+  // pattern as the approve route above.
+  "src/app/api/seo/campaigns/[id]/docusign/route.ts",
+  // public-proposal sign route: public by design, gated by the clientId
+  // share-link secret (same trust model as the allowlisted public-proposal
+  // route) — every operation verifies campaign.client_id === clientId
+  // before touching the row.
+  "src/app/api/seo/public-proposal/[campaignId]/sign/route.ts",
+  // docusign Connect webhook: public by design, no tenant session. Envelopes
+  // are looked up by the DocuSign envelope id (a cryptographic random known
+  // only to DocuSign + the agency that created it) and all writes are keyed
+  // by that row's id — the row's own tenant_id is never attacker-supplied.
+  "src/app/api/docusign/connect/route.ts",
 ]);
 
 const CHAIN_WINDOW = 900; // chars after .from(...) — enough for chained filters

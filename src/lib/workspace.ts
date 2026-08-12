@@ -41,19 +41,38 @@ import { cookies } from "next/headers";
 
 export async function getCurrentWorkspaceId(): Promise<string | null> {
   try {
+    const tenantId = await getTenantId();
+
+    // Resolve a candidate workspace id from header or cookie, then VALIDATE
+    // that it actually belongs to this tenant before trusting it. A stale
+    // workspace_id cookie can survive a tenant switch (same origin, another
+    // tenant's session) and would otherwise scope this tenant's writes to
+    // another tenant's workspace — a cross-tenant data leak. The proxy also
+    // self-heals the cookie, but this check is the authoritative guard so
+    // no caller ever acts on an unowned workspace id.
     const headersList = await headers();
     const headerWs = headersList.get("x-workspace-id");
-    if (headerWs) return headerWs;
-    // Fallback to cookie (set by WorkspaceSelector component)
     const cookieStore = await cookies();
     const cookieWs = cookieStore.get("workspace_id")?.value;
-    if (cookieWs) return cookieWs;
-    // Final fallback: the tenant default workspace. Ensures pages like
+    const candidate = headerWs || cookieWs;
+
+    if (candidate) {
+      const { data: owned, error: ownedErr } = await getAdminClient()
+        .from("workspaces")
+        .select("id")
+        .eq("tenant_id", tenantId)
+        .eq("id", candidate)
+        .maybeSingle();
+      if (!ownedErr && owned) return owned.id;
+      // Not owned by this tenant — fall through to the tenant default.
+    }
+
+    // Fallback: the tenant default workspace. Ensures pages like
     // Brand Profile work for all roles before the selector has run.
     const { data, error } = await getAdminClient()
       .from("workspaces")
       .select("id")
-      .eq("tenant_id", await getTenantId())
+      .eq("tenant_id", tenantId)
       .eq("is_default", true)
       .maybeSingle();
     if (error) throw error;

@@ -34,6 +34,15 @@ yarn-error.log*
 # env files — never commit (may contain real secrets)
 .env*
 
+# local tooling / scratch
+.freebuff/
+scripts/.tmp-*
+scripts/*.log
+scripts/*.err
+run-capture.ps1
+capture.log
+capture.err
+
 # vercel
 .vercel
 
@@ -57,3 +66,7 @@ next-env.d.ts
 /*.txt
 /*.log
 *.bak*
+
+# screenshot capture session cookies (contains the logged-in dev session)
+scripts/.session-cookies.json
+.edge-profile-*/

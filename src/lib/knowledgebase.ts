@@ -357,6 +357,48 @@ async function scrapeUrlItem(
 }
 
 // ------------------------------------------------------------------
+// Linkable pages (used for internal links in generated content)
+// ------------------------------------------------------------------
+
+/**
+ * Ready URL items in a workspace that can be internal-link targets — the
+ * source of truth for the [INTERNAL LINK] resolution in generated blogs.
+ * Each page carries its real URL (extracted_metadata.url) plus scraped
+ * text for topic matching.
+ */
+export async function getWorkspaceLinkablePages(
+  workspaceId: string,
+  tenantId: string
+): Promise<{ title: string; url: string; text: string }[]> {
+  const supabase = getAdminClient();
+
+  const { data: items } = await supabase
+    .from("knowledgebase_items")
+    .select("name, scraped_text, extracted_metadata")
+    .eq("workspace_id", workspaceId)
+    .eq("tenant_id", tenantId)
+    .eq("type", "url")
+    .eq("status", "ready")
+    .order("created_at", { ascending: false })
+    .limit(50);
+
+  if (!items) return [];
+
+  const pages: { title: string; url: string; text: string }[] = [];
+  for (const item of items) {
+    const meta = (item.extracted_metadata as Record<string, any>) ?? {};
+    const url = typeof meta.url === "string" ? meta.url : "";
+    if (!url) continue;
+    pages.push({
+      title: typeof meta.title === "string" && meta.title ? meta.title : item.name,
+      url,
+      text: item.scraped_text ?? "",
+    });
+  }
+  return pages;
+}
+
+// ------------------------------------------------------------------
 // Get all ready items for a workspace (used by AI orchestrator)
 // ------------------------------------------------------------------
 

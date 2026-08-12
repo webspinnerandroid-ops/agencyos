@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { repairTruncatedJson } from "./json-repair";
 
 // ============================================================================
 // Types
@@ -61,7 +62,8 @@ export type AITask =
   | "voice_synthesis"
   | "embeddings"
   | "seo_audit"
-  | "seo_campaign_generation";
+  | "seo_campaign_generation"
+  | "team_chat";
 
 // Map tasks to their primary provider type for fallback matching
 const TASK_PROVIDER_TYPE_MAP: Record<AITask, ProviderType> = {
@@ -75,6 +77,7 @@ const TASK_PROVIDER_TYPE_MAP: Record<AITask, ProviderType> = {
   embeddings: "embedding",
   seo_audit: "text",
   seo_campaign_generation: "text",
+  team_chat: "text",
 };
 
 // Map legacy AIProvider enum values to DB provider names for backward compat
@@ -656,7 +659,23 @@ export async function generateText(
     })
   );
 
-  const content = result.choices[0]?.message?.content;
+  let content = result.choices[0]?.message?.content;
+  // DeepSeek V4 thinking mode can spend the whole budget on reasoning and
+  // return empty content with finish_reason "length" — retry once with
+  // doubled tokens before failing.
+  if (!content && result.choices[0]?.finish_reason === "length") {
+    const doubled = Math.min((options?.maxTokens ?? 4096) * 2, 32768);
+    console.warn(
+      `[Orchestrator] Empty content (thinking mode exhausted tokens), retrying with ${doubled}...`
+    );
+    const retryResult = await retryWithBackoff(() =>
+      callOpenAICompatibleAPI(providerBaseUrl, apiKey, model, messages, {
+        temperature: options?.temperature,
+        maxTokens: doubled,
+      })
+    );
+    content = retryResult.choices[0]?.message?.content;
+  }
   if (!content) {
     throw new Error("No content returned from AI provider");
   }
@@ -751,6 +770,17 @@ export async function generateStructuredOutput<T>(
       result = await retryWithBackoff(() => makeJsonCall(maxTokens));
       content = result.choices[0]?.message?.content;
     }
+    // DeepSeek V4 thinking mode can burn the entire token budget on reasoning
+    // and finish with an EMPTY message and finish_reason "length". The
+    // truncated-JSON retry below never fires in that case (nothing to parse),
+    // so retry once here with doubled tokens before giving up.
+    if (!content && result.choices[0]?.finish_reason === "length" && maxTokens <= 32768) {
+      console.warn(
+        `[Orchestrator] DeepSeek returned empty content (thinking mode exhausted ${maxTokens} tokens), retrying with ${maxTokens * 2}...`
+      );
+      result = await retryWithBackoff(() => makeJsonCall(maxTokens * 2));
+      content = result.choices[0]?.message?.content;
+    }
     if (!content) {
       throw new Error("No content returned from AI provider in JSON mode");
     }
@@ -768,20 +798,12 @@ export async function generateStructuredOutput<T>(
             // fall through to salvage below
           }
         }
-        // Salvage truncated JSON: walk back from the end until we find a
-        // balanced closing brace/bracket, then parse the prefix. Models
-        // often truncate mid-string when they hit max tokens, leaving a
-        // valid JSON object with a cut-off trailing property.
-        const trimmed = raw.trim();
-        for (let i = trimmed.length - 1; i >= Math.max(0, trimmed.length - 2000); i--) {
-          if (trimmed[i] !== "}" && trimmed[i] !== "]") continue;
-          try {
-            const candidate = trimmed.slice(0, i + 1);
-            return JSON.parse(candidate) as T;
-          } catch {
-            // keep walking back
-          }
-        }
+        // Salvage truncated JSON: drop the broken tail and close any open
+        // containers. Models (esp. DeepSeek thinking mode) exhaust the output
+        // budget mid-structure, so the truncation often has NO closing brace
+        // at all — the old walk-back could only fix tails that ended on one.
+        const repaired = repairTruncatedJson(raw);
+        if (repaired !== null) return repaired as T;
         return null;
       }
     };
@@ -790,9 +812,12 @@ export async function generateStructuredOutput<T>(
     if (parsed) return parsed;
 
     // If the response was truncated (finish_reason: "length") and we haven't
-    // already doubled the token limit, retry with 2x maxTokens once.
+    // already doubled the token limit, retry with 2x maxTokens once. Allow
+    // the retry even at the 32768 cap — a second attempt at the same budget
+    // often lands a complete response, and the repair above already salvages
+    // most truncations.
     const finishReason = result.choices[0]?.finish_reason;
-    if (finishReason === "length" && maxTokens < 32768) {
+    if (finishReason === "length" && maxTokens <= 32768) {
       console.warn(
         `[Orchestrator] JSON truncated at ${maxTokens} tokens, retrying with ${maxTokens * 2}...`
       );
@@ -854,6 +879,22 @@ export interface GeneratedImage {
   revisedPrompt?: string;
 }
 
+/**
+ * Global demographic/cultural guidance appended to every generated image
+ * prompt. Image models default to stock demographics that skew heavily Asian;
+ * this keeps output reflective of the actual (Canadian) market — predominantly
+ * Caucasian with visible diversity, and culturally Canadian settings. It is a
+ * suffix, so an explicit subject in the caller's prompt (e.g. "Japanese tea
+ * ceremony") still wins.
+ */
+const IMAGE_DEMOGRAPHIC_GUIDANCE =
+  " People depicted must reflect a realistic Canadian demographic mix: " +
+  "predominantly white/Caucasian, with visible diversity (South Asian, East " +
+  "Asian, Black, Indigenous, and mixed-race Canadians) — never predominantly " +
+  "Asian unless the subject matter explicitly calls for it. Settings, clothing, " +
+  "and culture should feel authentically Canadian (local coffee shops, patios, " +
+  "snow seasons, neighbourhood streets) unless the subject requires otherwise.";
+
 export async function generateImage(
   tenantId: string,
   prompt: string,
@@ -870,22 +911,23 @@ export async function generateImage(
   }
 ): Promise<GeneratedImage[]> {
   const resolution = await getModelForTask(tenantId, "image_generation", options?.clientId);
+  const fullPrompt = `${prompt}${IMAGE_DEMOGRAPHIC_GUIDANCE}`;
 
   // Route to the appropriate image API based on provider
   if (resolution.providerName === "Google Imagen" || resolution.providerBaseUrl.includes("googleapis")) {
-    return callGoogleImagenAPI(resolution, prompt, options);
+    return callGoogleImagenAPI(resolution, fullPrompt, options);
   }
 
   if (resolution.providerName === "OpenAI Image" || resolution.providerBaseUrl.includes("openai")) {
-    return callDalleImageAPI(resolution, prompt, options);
+    return callDalleImageAPI(resolution, fullPrompt, options);
   }
 
   if (resolution.providerName === "Stability AI" || resolution.providerBaseUrl.includes("stability")) {
-    return callStabilityImageAPI(resolution, prompt, options);
+    return callStabilityImageAPI(resolution, fullPrompt, options);
   }
 
   // Default: OpenAI-compatible image endpoint
-  return callDalleImageAPI(resolution, prompt, options);
+  return callDalleImageAPI(resolution, fullPrompt, options);
 }
 
 async function callDalleImageAPI(

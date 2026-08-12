@@ -2,7 +2,7 @@ import { type NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import { getTenantThemeSafe, encodeTenantTheme } from "@/lib/tenant"
 
-const PUBLIC_ROUTES = ["/login", "/register", "/forgot-password", "/reset-password", "/pending-approval", "/help", "/about", "/contact", "/privacy", "/terms", "/seo/proposal", "/api/webhooks", "/api/auth/callback", "/api/register", "/api/inngest", "/api/seo/public-proposal", "/_next", "/favicon.ico", "/robots.txt", "/sitemap.xml", "/og-image.png", "/"]
+const PUBLIC_ROUTES = ["/login", "/register", "/forgot-password", "/reset-password", "/pending-approval", "/help", "/about", "/contact", "/privacy", "/terms", "/seo/proposal", "/api/webhooks", "/api/auth/callback", "/api/register", "/api/inngest", "/api/docusign/connect", "/api/seo/public-proposal", "/_next", "/favicon.ico", "/robots.txt", "/sitemap.xml", "/og-image.png", "/"]
 
 function isPublicRoute(pathname: string): boolean {
   return PUBLIC_ROUTES.some(
@@ -24,6 +24,15 @@ function isServerAction(request: NextRequest): boolean {
 function authFailureResponse(request: NextRequest) {
   if (isServerAction(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  }
+  // API fetches expect JSON — a redirect to the (HTML) login page makes the
+  // client's res.json() throw `Unexpected token '<'...`. Return a parseable
+  // 401 so the UI can show a clean session-expired message instead.
+  if (request.nextUrl.pathname.startsWith("/api/")) {
+    return NextResponse.json(
+      { error: "Session expired — please log in again.", code: "session_expired" },
+      { status: 401 }
+    )
   }
   const loginUrl = request.nextUrl.clone()
   loginUrl.pathname = "/login"
@@ -57,6 +66,8 @@ const themeCache = new Map<string, { value: string; expiresAt: number }>()
 const WORKSPACE_TTL_MS = 5 * 60_000
 /** null value = tenant has no default workspace yet */
 const workspaceCache = new Map<string, { value: string | null; expiresAt: number }>()
+/** cached set of workspace ids per tenant, used to validate incoming workspace_id cookies */
+const workspaceIdsCache = new Map<string, { value: string[]; expiresAt: number }>()
 
 function cacheGet<T>(
   cache: Map<string, { value: T; expiresAt: number }>,
@@ -113,6 +124,93 @@ function findSupabaseAccessToken(request: NextRequest): string | undefined {
   return candidates[0]
 }
 
+/** Parse access + refresh tokens out of the raw Supabase auth cookie value. */
+function parseAuthCookieValue(cookieValue: string): {
+  accessToken: string
+  refreshToken: string | null
+} {
+  try {
+    const raw = cookieValue.startsWith("base64-")
+      ? Buffer.from(cookieValue.slice("base64-".length), "base64").toString("utf-8")
+      : decodeURIComponent(cookieValue)
+    const parsed = JSON.parse(raw)
+    if (Array.isArray(parsed)) {
+      return { accessToken: parsed[0], refreshToken: parsed[1] ?? null }
+    }
+    return {
+      accessToken: parsed.access_token ?? cookieValue,
+      refreshToken: parsed.refresh_token ?? null,
+    }
+  } catch {
+    return { accessToken: cookieValue, refreshToken: null }
+  }
+}
+
+/** Base cookie name for the Supabase auth token, e.g. sb-<ref>-auth-token. */
+function findAuthCookieName(request: NextRequest): string | undefined {
+  for (const cookie of request.cookies.getAll()) {
+    const base = cookie.name.replace(/\.\d+$/, "")
+    if (base.match(/^sb-.+-auth-token$/)) return base
+  }
+  return undefined
+}
+
+const AUTH_COOKIE_CHUNK_SIZE = 3180
+
+/**
+ * Write a refreshed Supabase session back to the auth-token cookie using the
+ * same `base64-` + base64url(JSON) encoding and chunking scheme @supabase/ssr
+ * uses, so every reader (browser client, server client, this proxy) parses it
+ * identically. Stale chunks from a previous larger session are cleared so the
+ * reassembler never mixes cookie generations.
+ */
+function setSupabaseAuthCookie(
+  request: NextRequest,
+  response: NextResponse,
+  session: { access_token: string; refresh_token: string; expires_at?: number }
+) {
+  const cookieName = findAuthCookieName(request)
+  if (!cookieName) return
+  const value =
+    "base64-" + Buffer.from(JSON.stringify(session), "utf-8").toString("base64url")
+  const encoded = encodeURIComponent(value)
+  const options = {
+    path: "/",
+    sameSite: "lax" as const,
+    httpOnly: false,
+    secure: request.nextUrl.protocol === "https:",
+    maxAge: 60 * 60 * 24 * 30,
+  }
+  // Clear prior chunks so a shrink (e.g. 3 chunks → 1) can't leave stale parts.
+  for (let i = 0; i < 12; i++) {
+    response.cookies.delete({ name: `${cookieName}.${i}`, path: "/" })
+  }
+  if (encoded.length <= AUTH_COOKIE_CHUNK_SIZE) {
+    response.cookies.set(cookieName, value, options)
+    return
+  }
+  // Chunk like @supabase/ssr: split the URL-encoded value at safe boundaries.
+  let remaining = encoded
+  let i = 0
+  while (remaining.length > 0) {
+    let head = remaining.slice(0, AUTH_COOKIE_CHUNK_SIZE)
+    const lastEscape = head.lastIndexOf("%")
+    if (lastEscape > AUTH_COOKIE_CHUNK_SIZE - 3) head = head.slice(0, lastEscape)
+    let chunk = ""
+    while (head.length > 0) {
+      try {
+        chunk = decodeURIComponent(head)
+        break
+      } catch {
+        head = head.slice(0, Math.max(0, head.length - 3))
+      }
+    }
+    if (chunk) response.cookies.set(`${cookieName}.${i}`, chunk, options)
+    remaining = remaining.slice(head.length)
+    i++
+  }
+}
+
 export default async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
@@ -132,36 +230,75 @@ export default async function middleware(request: NextRequest) {
     { auth: { autoRefreshToken: false, persistSession: false } }
   )
 
-  // Extract the token from the cookie. Supabase may store it as:
-  // - Raw JSON array: [access_token, refresh_token, ...]
-  // - base64-prefixed: "base64-<base64_encoded_json>"
-  let token: string
-  try {
-    const raw = accessToken.startsWith("base64-")
-      ? Buffer.from(accessToken.slice("base64-".length), "base64").toString("utf-8")
-      : decodeURIComponent(accessToken)
-    const parsed = JSON.parse(raw)
-    token = Array.isArray(parsed) ? parsed[0] : parsed.access_token ?? accessToken
-  } catch {
-    token = accessToken
-  }
+  // Extract the access + refresh tokens from the cookie. Supabase may store
+  // the value as a raw JSON array or a base64- prefixed session object.
+  const { accessToken: token, refreshToken } = parseAuthCookieValue(accessToken)
 
   // Cached auth context? Keyed by the raw cookie so a refreshed session (new
   // token) re-verifies instead of reusing a stale entry.
   let auth = cacheGet(authCache, accessToken)
 
+  // Set when this request refreshes an expired access token — the new session
+  // is written back to the auth cookie on the response.
+  let refreshedSession: {
+    access_token: string
+    refresh_token: string
+    expires_at?: number
+  } | null = null
+
+  // refreshSession() mutates the client's internal auth state, so any DB
+  // query on that client would then send the USER's JWT (RLS hides rows)
+  // instead of the service key. After a refresh, point this at a fresh
+  // admin client for all subsequent queries.
+  let dbClient = supabaseAdmin
+
   if (auth === undefined) {
-    // Verify the user
-    const { data: { user }, error: userError } = await supabaseAdmin.auth.getUser(token)
+    let userId: string | null = null
+    let userEmail = ""
+
+    const {
+      data: { user },
+      error: userError,
+    } = await supabaseAdmin.auth.getUser(token)
 
     if (userError || !user) {
+      // Access token expired or invalid — try to refresh the session with the
+      // refresh token from the auth cookie before redirecting to login. This
+      // keeps users logged in across the 1-hour access-token TTL (the refresh
+      // token lives up to 30 days and rotates on every use) instead of
+      // booting them to the login page every hour.
+      if (refreshToken) {
+        const { data: refreshed, error: refreshError } =
+          await supabaseAdmin.auth.refreshSession({ refresh_token: refreshToken })
+        if (!refreshError && refreshed.session?.user) {
+          refreshedSession = refreshed.session
+          userId = refreshed.session.user.id
+          userEmail = refreshed.session.user.email ?? ""
+        }
+      }
+      if (!refreshedSession) {
+        return authFailureResponse(request)
+      }
+    } else {
+      userId = user.id
+      userEmail = user.email ?? ""
+    }
+    if (!userId) {
       return authFailureResponse(request)
     }
 
-    const { data: userRole } = await supabaseAdmin
+    if (refreshedSession) {
+      dbClient = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.SUPABASE_SERVICE_ROLE_KEY!,
+        { auth: { autoRefreshToken: false, persistSession: false } }
+      )
+    }
+
+    const { data: userRole } = await dbClient
       .from("user_roles")
       .select("tenant_id, role, client_id")
-      .eq("user_id", user.id)
+      .eq("user_id", userId)
       .single()
 
     if (!userRole) {
@@ -172,8 +309,8 @@ export default async function middleware(request: NextRequest) {
     }
 
     auth = {
-      userId: user.id,
-      email: user.email ?? "",
+      userId,
+      email: userEmail,
       tenantId: userRole.tenant_id,
       role: userRole.role,
       clientId: userRole.client_id ?? null,
@@ -217,27 +354,58 @@ export default async function middleware(request: NextRequest) {
     httpOnly: false,
   })
 
-  // Default workspace (cached per tenant). Setting the `workspace_id` cookie
-  // here means getCurrentWorkspaceId() in pages/actions hits the cookie path
-  // instead of doing a DB query per page render (the fallback that caused
-  // slow first-loads). Only set it when the request doesn't already carry a
-  // workspace_id cookie (i.e. no explicit selection yet) so a user's chosen
-  // workspace from WorkspaceSelector is never clobbered.
-  if (!request.cookies.get("workspace_id")?.value) {
-    let defaultWorkspaceId = cacheGet(workspaceCache, auth.tenantId)
-    if (defaultWorkspaceId === undefined) {
-      const { data: ws } = await supabaseAdmin
+  // Workspace cookie handling. Setting the `workspace_id` cookie here means
+  // getCurrentWorkspaceId() in pages/actions hits the cookie path instead of
+  // doing a DB query per page render (the fallback that caused slow
+  // first-loads).
+  //
+  // Ownership check: a stale workspace_id cookie can survive a tenant switch
+  // (e.g. the same origin was used by another tenant's session), and trusting
+  // it would scope THIS tenant's writes to ANOTHER tenant's workspace — a
+  // cross-tenant data leak. So an incoming cookie is only kept if it belongs
+  // to the authenticated tenant; otherwise it is overwritten with this
+  // tenant's default workspace. A user's legitimately selected workspace
+  // (from WorkspaceSelector) is untouched because it is in the tenant's set.
+  // The same caveat applies to the workspace queries below, so reuse the
+  // (possibly fresh) dbClient for them.
+  let defaultWorkspaceId = cacheGet(workspaceCache, auth.tenantId)
+  if (defaultWorkspaceId === undefined) {
+    const { data: ws } = await dbClient
+      .from("workspaces")
+      .select("id")
+      .eq("tenant_id", auth.tenantId)
+      .eq("is_default", true)
+      .maybeSingle()
+    defaultWorkspaceId = ws?.id ?? null
+    cacheSet(workspaceCache, auth.tenantId, defaultWorkspaceId, WORKSPACE_TTL_MS)
+  }
+
+  const incomingWorkspaceId = request.cookies.get("workspace_id")?.value
+  if (incomingWorkspaceId) {
+    let workspaceIds = cacheGet(workspaceIdsCache, auth.tenantId)
+    if (workspaceIds === undefined) {
+      const { data: wsRows } = await dbClient
         .from("workspaces")
         .select("id")
         .eq("tenant_id", auth.tenantId)
-        .eq("is_default", true)
-        .maybeSingle()
-      defaultWorkspaceId = ws?.id ?? null
-      cacheSet(workspaceCache, auth.tenantId, defaultWorkspaceId, WORKSPACE_TTL_MS)
+      workspaceIds = (wsRows ?? []).map((w) => w.id)
+      cacheSet(workspaceIdsCache, auth.tenantId, workspaceIds, WORKSPACE_TTL_MS)
     }
-    if (defaultWorkspaceId) {
-      response.cookies.set("workspace_id", defaultWorkspaceId, cookieOptions)
+    if (!workspaceIds.includes(incomingWorkspaceId)) {
+      if (defaultWorkspaceId) {
+        response.cookies.set("workspace_id", defaultWorkspaceId, cookieOptions)
+      } else {
+        response.cookies.delete("workspace_id")
+      }
     }
+  } else if (defaultWorkspaceId) {
+    response.cookies.set("workspace_id", defaultWorkspaceId, cookieOptions)
+  }
+
+  // If we refreshed the session, hand the browser the new auth cookie so the
+  // next request carries the fresh access token (the old one is now invalid).
+  if (refreshedSession) {
+    setSupabaseAuthCookie(request, response, refreshedSession)
   }
 
   return response

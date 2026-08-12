@@ -51,30 +51,30 @@ const STATUS: Record<string, { label: string; className: string }> = {
 };
 
 const employees = [
-  { icon: PenTool, name: "Penny", role: "SEO Content Writer", status: "built", desc: "Writes SEO-optimized blog posts, social captions, and content from the AI orchestrator (DeepSeek / OpenAI models).", integrations: "DeepSeek, OpenAI, AI orchestrator" },
-  { icon: MessagesSquare, name: "Eva", role: "Executive Assistant (Inbox & Calendar)", status: "built", desc: "Connects Gmail or Outlook via OAuth, reads and triages unread email, syncs your calendar, and creates events. Drafting/replies and IMAP/POP accounts are on the roadmap.", integrations: "Gmail OAuth, Outlook / Microsoft Graph" },
-  { icon: Users2, name: "Sonny", role: "Social Media Manager", status: "built", desc: "Connects Facebook & Instagram (OAuth), schedules and posts to social platforms, and manages the social inbox via background workers.", integrations: "Facebook, Instagram, Meta API" },
-  { icon: Zap, name: "Stan", role: "Lead Generation", status: "built", desc: "Captures and imports leads (including Apollo enrichment), sends outbound email via Resend, SMS via Twilio, and runs automated follow-up sequences.", integrations: "Apollo, Resend, Twilio, sequences" },
-  { icon: PhoneCall, name: "Rachel", role: "Receptionist", status: "built", desc: "Handles inbound and outbound phone calls via the voice agent (TwiML webhooks). A call-management dashboard UI is planned.", integrations: "Twilio / telephony webhooks" },
-  { icon: Globe, name: "Scout", role: "Technical SEO Auditor", status: "built", desc: "Crawls websites, finds technical and on-page SEO issues, and discovers competitor domains for your campaigns.", integrations: "Site crawler, competitor analysis" },
-  { icon: Search, name: "Dev", role: "Web Developer", status: "built", desc: "Publishes content and web changes to WordPress sites. Webflow publishing is planned in Phase 5.", integrations: "WordPress API (Webflow planned)" },
-  { icon: TrendingUp, name: "Gauge", role: "Performance Marketer", status: "built", desc: "Pulls engagement analytics via background workers. Meta Insights / X Analytics reporting is planned.", integrations: "Analytics workers, Meta/X (planned)" },
-  { icon: Briefcase, name: "Nina", role: "Project Manager", status: "built", desc: "Processes scheduled tasks and follow-up sequences, coordinates blog-generation tasks, and keeps deliverables on track.", integrations: "Inngest workers, task queues" },
-  { icon: Star, name: "Juno", role: "Reputation Manager", status: "built", desc: "Manages Google Business Profile connections. Review monitoring and response automation are planned.", integrations: "Google Business Profile" },
-  { icon: Wrench, name: "Linda", role: "Legal Assistant", status: "planned", desc: "Planned — drafts contracts, answers legal questions, and clarifies fine print for your agency and clients.", integrations: "AI drafting (planned)" },
+  { icon: PenTool, name: "Cheryl", role: "SEO Content Writer", status: "built", desc: "Writes SEO-optimized blog posts, social captions, and content from the AI orchestrator (DeepSeek / OpenAI models). Constantly unhinged and dramatic — churns out chaotic streams of consciousness that somehow get results.", integrations: "DeepSeek, OpenAI, AI orchestrator" },
+  { icon: MessagesSquare, name: "Woodhouse", role: "Executive Assistant (Inbox & Calendar)", status: "built", desc: "Connects Gmail or Outlook via OAuth, reads and triages unread email, syncs your calendar, and creates events. Timeless, deeply long-suffering, entirely accustomed to managing schedules under endless abuse. Drafting/replies and IMAP/POP accounts are on the roadmap.", integrations: "Gmail OAuth, Outlook / Microsoft Graph" },
+  { icon: Users2, name: "Pam", role: "Social Media Manager", status: "built", desc: "Connects Facebook & Instagram (OAuth), schedules and posts to social platforms, and manages the social inbox via background workers. Loud, loves the spotlight, and handles public relations with zero filter.", integrations: "Facebook, Instagram, Meta API" },
+  { icon: Zap, name: "Barry", role: "Lead Generation", status: "built", desc: "Captures and imports leads (including Apollo enrichment), sends outbound email via Resend, SMS via Twilio, and runs automated follow-up sequences. Relentless, aggressive, laser-focused on hunting down targets.", integrations: "Apollo, Resend, Twilio, sequences" },
+  { icon: PhoneCall, name: "Brett", role: "Receptionist", status: "built", desc: "Handles inbound and outbound phone calls via the voice agent (TwiML webhooks). A call-management dashboard UI is planned. Perpetually caught in the line of fire as the primary target for everything going wrong.", integrations: "Twilio / telephony webhooks" },
+  { icon: Globe, name: "AK", role: "Technical SEO Auditor", status: "built", desc: "Crawls websites, finds technical and on-page SEO issues, and discovers competitor domains for your campaigns. Obsessed with bizarre hidden mechanics and performing questionable experiments behind closed doors.", integrations: "Site crawler, competitor analysis" },
+  { icon: Search, name: "Ray", role: "Web Developer", status: "built", desc: "Publishes content and web changes to WordPress sites. Webflow publishing is planned in Phase 5. Constantly dealing with broken infrastructure, putting out fires, and complaining about how underappreciated his technical work is.", integrations: "WordPress API (Webflow planned)" },
+  { icon: TrendingUp, name: "Sterling", role: "Performance Marketer", status: "built", desc: "Pulls engagement analytics via background workers. Meta Insights / X Analytics reporting is planned. Operates on raw ego and reckless luck, with a total disregard for ROI until it somehow works out.", integrations: "Analytics workers, Meta/X (planned)" },
+  { icon: Briefcase, name: "Malory", role: "Project Manager", status: "built", desc: "Processes scheduled tasks and follow-up sequences, coordinates blog-generation tasks, and keeps deliverables on track. Runs a tight, highly toxic ship with an iron fist and a martini in hand.", integrations: "Inngest workers, task queues" },
+  { icon: Star, name: "Lana", role: "Reputation Manager", status: "built", desc: "Manages Google Business Profile connections. Review monitoring and response automation are planned. Constantly doing damage control and yelling about how everyone else is ruining the brand.", integrations: "Google Business Profile" },
+  { icon: Wrench, name: "Cyril", role: "Legal Assistant", status: "planned", desc: "Planned — drafts contracts, answers legal questions, and clarifies fine print for your agency and clients. Chronically nervous, deeply insecure, one minor spreadsheet error away from a complete psychological breakdown.", integrations: "AI drafting (planned)" },
 ];
 
 const caseStudySteps = [
-  { step: "1. Onboarding", icon: Briefcase, agent: "Nina", text: "Nina (Project Manager) builds the client's task plan, milestones, and check-ins. She sets up the workspace, assigns the team, and schedules the kickoff." },
-  { step: "2. Kickoff & comms", icon: MessagesSquare, agent: "Eva + Rachel", text: "Eva (Executive Assistant) handles onboarding emails, triages the client's inbox, and syncs the calendar. Rachel (Receptionist) answers any client calls and books them into the calendar." },
-  { step: "3. Technical audit", icon: Globe, agent: "Scout", text: "Scout (Technical SEO) crawls the client's website, identifies technical and on-page issues (speed, meta, schema, indexing), and flags quick wins and priorities." },
-  { step: "4. Content engine", icon: PenTool, agent: "Penny", text: "Penny (SEO Content Writer) turns Scout's audit + keyword research into SEO-optimized blog posts, captions, and image prompts using the AI orchestrator." },
-  { step: "5. Web deployment", icon: Search, agent: "Dev", text: "Dev (Web Developer) publishes Penny's content and Scout's fixes to the client's WordPress site — and will support Webflow in Phase 5." },
-  { step: "6. Social growth", icon: Users2, agent: "Sonny", text: "Sonny (Social Media Manager) schedules posts, connects Facebook/Instagram, and manages the social inbox so every comment and message gets attention." },
-  { step: "7. Lead machine", icon: Zap, agent: "Stan", text: "Stan (Lead Generation) enriches the client's leads via Apollo, runs email + SMS sequences with Resend/Twilio, and hands qualified leads back to the agency." },
-  { step: "8. Performance", icon: TrendingUp, agent: "Gauge", text: "Gauge (Performance Marketer) pulls engagement analytics and reports on what's working, so budgets shift toward the highest-performing content." },
-  { step: "9. Reputation", icon: Star, agent: "Juno", text: "Juno (Reputation Manager) keeps the Google Business Profile accurate and monitors the client's local presence and reviews." },
-  { step: "10. Legal & wrap", icon: Wrench, agent: "Linda", text: "Linda (Legal Assistant, planned) drafts the engagement contract and any legal page copy, closing out the campaign cleanly." },
+  { step: "1. Onboarding", icon: Briefcase, agent: "Malory", text: "Malory (Project Manager) builds the client's task plan, milestones, and check-ins. She sets up the workspace, assigns the team, and schedules the kickoff." },
+  { step: "2. Kickoff & comms", icon: MessagesSquare, agent: "Woodhouse + Brett", text: "Woodhouse (Executive Assistant) handles onboarding emails, triages the client's inbox, and syncs the calendar. Brett (Receptionist) answers any client calls and books them into the calendar." },
+  { step: "3. Technical audit", icon: Globe, agent: "AK", text: "AK (Technical SEO) crawls the client's website, identifies technical and on-page issues (speed, meta, schema, indexing), and flags quick wins and priorities." },
+  { step: "4. Content engine", icon: PenTool, agent: "Cheryl", text: "Cheryl (SEO Content Writer) turns AK's audit + keyword research into SEO-optimized blog posts, captions, and image prompts using the AI orchestrator." },
+  { step: "5. Web deployment", icon: Search, agent: "Ray", text: "Ray (Web Developer) publishes Cheryl's content and AK's fixes to the client's WordPress site — and will support Webflow in Phase 5." },
+  { step: "6. Social growth", icon: Users2, agent: "Pam", text: "Pam (Social Media Manager) schedules posts, connects Facebook/Instagram, and manages the social inbox so every comment and message gets attention." },
+  { step: "7. Lead machine", icon: Zap, agent: "Barry", text: "Barry (Lead Generation) enriches the client's leads via Apollo, runs email + SMS sequences with Resend/Twilio, and hands qualified leads back to the agency." },
+  { step: "8. Performance", icon: TrendingUp, agent: "Sterling", text: "Sterling (Performance Marketer) pulls engagement analytics and reports on what's working, so budgets shift toward the highest-performing content." },
+  { step: "9. Reputation", icon: Star, agent: "Lana", text: "Lana (Reputation Manager) keeps the Google Business Profile accurate and monitors the client's local presence and reviews." },
+  { step: "10. Legal & wrap", icon: Wrench, agent: "Cyril", text: "Cyril (Legal Assistant, planned) drafts the engagement contract and any legal page copy, closing out the campaign cleanly." },
 ];
 
 const faqs = [
@@ -95,8 +95,8 @@ const faqs = [
     a: "Go to Dashboard → AI settings, pick a provider (DeepSeek, OpenAI), add your API key (encrypted before storage), then map each task (Blog Generation, Social Caption, Image Generation) to a model in Task–Model Mapping. Active keys are used; inactive keys are ignored.",
   },
   {
-    q: "How do I connect my email (Eva)?",
-    a: "Eva connects via Gmail or Outlook OAuth. Today it reads and triages unread email and syncs your calendar. Drafting/replies and IMAP/POP accounts are on the roadmap. Tokens are encrypted at rest.",
+    q: "How do I connect my email (Woodhouse)?",
+    a: "Woodhouse connects via Gmail or Outlook OAuth. Today it reads and triages unread email and syncs your calendar. Drafting/replies and IMAP/POP accounts are on the roadmap. Tokens are encrypted at rest.",
   },
   {
     q: "How do I connect social accounts?",
@@ -104,7 +104,7 @@ const faqs = [
   },
   {
     q: "How do I connect a WordPress blog?",
-    a: "Go to Dashboard → Settings → Blog, add your WordPress site URL and credentials/app password. Dev (Web Developer) can then publish content to that site.",
+    a: "Go to Dashboard → Settings → Blog, add your WordPress site URL and credentials/app password. Ray (Web Developer) can then publish content to that site.",
   },
   {
     q: "What is a Workspace and how do I switch?",
@@ -228,7 +228,7 @@ export default function HelpPage() {
                 ],
               },
               {
-                title: "Set up AI (Penny — required before generating content)",
+                title: "Set up AI (Cheryl — required before generating content)",
                 icon: Key,
                 steps: [
                   "Open Dashboard → AI (settings/ai).",
@@ -239,24 +239,24 @@ export default function HelpPage() {
                 ],
               },
               {
-                title: "Connect your email (Eva)",
+                title: "Connect your email (Woodhouse)",
                 icon: MessagesSquare,
                 steps: [
-                  "Eva connects via Gmail or Outlook OAuth (authorize in the popup).",
-                  "Today she reads and triages unread email and syncs the calendar (tokens encrypted at rest).",
+                  "Woodhouse connects via Gmail or Outlook OAuth (authorize in the popup).",
+                  "Today he reads and triages unread email and syncs the calendar (tokens encrypted at rest).",
                   "Drafting/replies and IMAP/POP accounts are on the roadmap.",
                 ],
               },
               {
-                title: "Connect a blog (Dev)",
+                title: "Connect a blog (Ray)",
                 steps: [
                   "Open Dashboard → Settings → Blog.",
                   "Add your WordPress site URL, site name, and credentials/app password.",
-                  "Once connected, Dev can publish generated content to that site. Webflow is planned.",
+                  "Once connected, Ray can publish generated content to that site. Webflow is planned.",
                 ],
               },
               {
-                title: "Connect social accounts (Sonny)",
+                title: "Connect social accounts (Pam)",
                 steps: [
                   "Open Dashboard → Settings → Social.",
                   "Connect Facebook and Instagram via OAuth (authorize in the popup).",
@@ -264,7 +264,7 @@ export default function HelpPage() {
                 ],
               },
               {
-                title: "Connect Google Business Profile (Juno)",
+                title: "Connect Google Business Profile (Lana)",
                 steps: [
                   "Open Dashboard → Settings → GBP.",
                   "Click connect and authorize with the Google account that manages the business profile.",
@@ -305,9 +305,9 @@ export default function HelpPage() {
           <TabsContent value="manual" className="space-y-6">
             {[
               { title: "Dashboard", icon: LayoutDashboard, desc: "Overview of your agency activity. Filter by client, jump to Generate Content / Content Calendar / Generate Images, and see Recent Content, Recent Images, and Recent SEO Audits." },
-              { title: "Generate Content (Penny)", icon: Zap, desc: "Enter a Topic, optional Brand Voice, optional Client, and pick Social Platforms (Instagram, Twitter/X, LinkedIn, Facebook, TikTok, Threads). Click Generate Content — you get a full blog post (title, slug, meta description, heading structure, body with 2,500-word check, suggested image prompt) plus per-platform captions, hashtags, first comments, and image descriptions." },
+              { title: "Generate Content (Cheryl)", icon: Zap, desc: "Enter a Topic, optional Brand Voice, optional Client, and pick Social Platforms (Instagram, Twitter/X, LinkedIn, Facebook, TikTok, Threads). Click Generate Content — you get a full blog post (title, slug, meta description, heading structure, body with 2,500-word check, suggested image prompt) plus per-platform captions, hashtags, first comments, and image descriptions." },
               { title: "Generate Images", icon: Film, desc: "AI image generation with prompt enhancement. Describe what you want; the platform enhances the prompt and generates an image you can reuse in content." },
-              { title: "SEO Audits (Scout + Penny)", icon: Megaphone, desc: "Run a site audit by entering a URL and clicking Run Audit. View generated audits and tiered proposals under Audits. Competitor discovery is included. Rankings tracking is coming soon (Google Search Console)." },
+              { title: "SEO Audits (AK + Cheryl)", icon: Megaphone, desc: "Run a site audit by entering a URL and clicking Run Audit. View generated audits and tiered proposals under Audits. Competitor discovery is included. Rankings tracking is coming soon (Google Search Console)." },
               { title: "Content Calendar", icon: Calendar, desc: "Plan and schedule posts across platforms in one view." },
               { title: "Workspaces", icon: Settings2, desc: "Manage workspaces per client/brand. Switch workspaces in the header. Each workspace has a Brand Profile and Knowledge Base for consistent, on-brand content." },
               { title: "Client Portal", icon: Users2, desc: "Clients log into a branded portal to review and approve posts and SEO proposals. They never see your internal dashboard." },
@@ -345,7 +345,7 @@ export default function HelpPage() {
                     </div>
                   ))}
                 </div>
-                <p className="text-xs text-muted-foreground mt-4">Email integration note: Eva connects via Gmail/Outlook OAuth to read and triage email and sync the calendar. Drafting & replying from the connected inbox, and IMAP/POP support, are on the roadmap.</p>
+                <p className="text-xs text-muted-foreground mt-4">Email integration note: Woodhouse connects via Gmail/Outlook OAuth to read and triage email and sync the calendar. Drafting & replying from the connected inbox, and IMAP/POP support, are on the roadmap.</p>
               </CardContent>
             </Card>
           </TabsContent>
@@ -370,7 +370,7 @@ export default function HelpPage() {
                   </div>
                 ))}
                 <div className="rounded-lg bg-muted/50 border p-4 text-sm text-muted-foreground">
-                  <span className="font-semibold text-foreground">The result:</span> The client's site is technically sound (Scout + Dev), publishing on-brand SEO content every week (Penny + Dev), active on social (Sonny), triaging email and calls (Eva + Rachel), generating and converting leads (Stan), tracked for performance (Gauge), protected locally (Juno), contract-backed (Linda), and coordinated end-to-end (Nina).
+                  <span className="font-semibold text-foreground">The result:</span> The client's site is technically sound (AK + Ray), publishing on-brand SEO content every week (Cheryl + Ray), active on social (Pam), triaging email and calls (Woodhouse + Brett), generating and converting leads (Barry), tracked for performance (Sterling), protected locally (Lana), contract-backed (Cyril), and coordinated end-to-end (Malory).
                 </div>
               </CardContent>
             </Card>

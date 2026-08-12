@@ -30,6 +30,7 @@ export interface WpPublishTarget {
   };
   action: "draft" | "publish" | "schedule";
   scheduledAt?: string;     // ISO date for scheduling
+  categoryId?: number | string; // WP category to post into (default: Uncategorized)
 }
 
 export interface WpPublishResult {
@@ -56,7 +57,7 @@ function createServiceSupabase() {
 // ------------------------------------------------------------------
 
 async function postToWordPress(target: WpPublishTarget): Promise<WpPublishResult> {
-  const { siteUrl, credentials, content, action, scheduledAt } = target;
+  const { siteUrl, credentials, content, action, scheduledAt, categoryId } = target;
 
   // Build auth header based on credential type
   let authHeader = "";
@@ -82,6 +83,12 @@ async function postToWordPress(target: WpPublishTarget): Promise<WpPublishResult
     slug: content.slug || content.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
     status: action === "publish" ? "publish" : "draft",
   };
+
+  // Put the post into the chosen category (default: WordPress's own
+  // "Uncategorized" when none is picked — the API accepts category IDs).
+  if (categoryId !== undefined && categoryId !== null && categoryId !== "") {
+    body.categories = [Number(categoryId)];
+  }
 
   // Handle scheduling
   if (action === "schedule" && scheduledAt) {
@@ -128,7 +135,8 @@ export async function publishToWordPress(
   postId: string,
   tenantId: string,
   action: "draft" | "publish" | "schedule" = "publish",
-  scheduledAt?: string
+  scheduledAt?: string,
+  categoryId?: number | string
 ): Promise<{ allSucceeded: boolean; results: WpPublishResult[] }> {
   const supabase = createServiceSupabase();
 
@@ -200,6 +208,7 @@ export async function publishToWordPress(
       },
       action,
       scheduledAt,
+      categoryId,
     });
 
     results.push(result);

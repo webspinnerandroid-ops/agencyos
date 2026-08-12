@@ -15,14 +15,6 @@ import {
   parseISO,
 } from "date-fns";
 import {
-  DragDropContext,
-  Droppable,
-  Draggable,
-  type DropResult,
-  type DroppableProvided,
-  type DroppableStateSnapshot,
-} from "@hello-pangea/dnd";
-import {
   ChevronLeft,
   ChevronRight,
   Calendar as CalendarIcon,
@@ -33,6 +25,9 @@ import {
   Share2,
   Eye,
   Loader2,
+  RefreshCw,
+  RotateCcw,
+  AlertTriangle,
 } from "lucide-react";
 import {
   LineChart,
@@ -61,6 +56,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import PostContent from "@/components/BlogContent";
+import ScoreBadge from "@/components/ScoreBadge";
 
 // ------------------------------------------------------------------
 // Types
@@ -88,6 +84,9 @@ export interface CalendarPost {
   ai_generated: boolean;
   tier_level: number | null;
   client_id: string | null;
+  revision_reason?: string | null;
+  seo_score?: number | null;
+  seo_checks?: unknown;
   post_platforms: PostPlatform[] | null;
 }
 
@@ -99,6 +98,21 @@ export type PostStatus =
   | "scheduled"
   | "published"
   | "failed";
+
+/** A proposed piece from a campaign plan (Malory's mapped-out campaign). */
+export interface ProposedItem {
+  id: string;
+  date: string; // yyyy-MM-dd
+  title: string;
+  kind: "blog" | "social";
+  planId: string;
+  planTitle: string;
+  platform?: string | null;
+  owner?: string | null;
+  keywords?: string[] | null;
+  internalLink?: string | null;
+  externalLinks?: string[] | null;
+}
 
 interface Client {
   id: string;
@@ -168,6 +182,21 @@ const PLATFORM_ICONS: Record<string, string> = {
   pinterest: "📌",
 };
 
+/** Employee key → display name for the owner chip on proposed items. */
+const OWNER_NAMES: Record<string, string> = {
+  penny: "Cheryl",
+  eva: "Woodhouse",
+  sonny: "Pam",
+  stan: "Barry",
+  rachel: "Brett",
+  scout: "AK",
+  dev: "Ray",
+  gauge: "Sterling",
+  nina: "Malory",
+  juno: "Lana",
+  linda: "Cyril",
+};
+
 // ------------------------------------------------------------------
 // Helpers
 // ------------------------------------------------------------------
@@ -182,6 +211,24 @@ interface AnalyticsSnapshot {
   impressions: number;
   reach: number;
   fetched_at: string;
+}
+
+/** A blog whose body never generated (empty body / legacy placeholder). */
+function isBrokenBlogPost(post: CalendarPost): boolean {
+  if (!post.content) return false;
+  let parsed: Record<string, unknown> | null = null;
+  if (typeof post.content === "string") {
+    try {
+      parsed = JSON.parse(post.content);
+    } catch {
+      return false;
+    }
+  } else if (typeof post.content === "object") {
+    parsed = post.content as Record<string, unknown>;
+  }
+  if (!parsed || parsed.type !== "blog") return false;
+  const body = parsed.body;
+  return typeof body !== "string" || body.trim().length === 0;
 }
 
 function getPlatformsForPost(post: CalendarPost): string[] {
@@ -226,30 +273,170 @@ function formatNumber(n: number): string {
 
 interface ContentCalendarProps {
   posts: CalendarPost[];
+  proposedItems?: ProposedItem[];
   clients: Client[];
   selectedClientId: string | null;
   selectedStatuses: PostStatus[];
   onClientChange: (clientId: string | null) => void;
   onStatusesChange: (statuses: PostStatus[]) => void;
-  onPostReschedule: (postId: string, newDate: string) => Promise<void>;
-  onPostUpdate: (postId: string, data: Partial<Pick<CalendarPost, "status">>) => Promise<void>;
+  onPostUpdate: (
+    postId: string,
+    data: Partial<Pick<CalendarPost, "status" | "revision_reason">>
+  ) => Promise<void>;
+  onApproveProposed: (item: ProposedItem, mediaKind: "image" | "video") => Promise<void>;
   onRefresh: () => void;
 }
 
 export default function ContentCalendar({
   posts,
+  proposedItems = [],
   clients,
   selectedClientId,
   selectedStatuses,
   onClientChange,
   onStatusesChange,
-  onPostReschedule,
   onPostUpdate,
+  onApproveProposed,
   onRefresh,
 }: ContentCalendarProps) {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedPost, setSelectedPost] = useState<CalendarPost | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
+  const [selectedProposed, setSelectedProposed] = useState<ProposedItem | null>(null);
+  const [approving, setApproving] = useState(false);
+  const [mediaKind, setMediaKind] = useState<"image" | "video">("image");
+  const [revisionPost, setRevisionPost] = useState<CalendarPost | null>(null);
+  const [revisionReason, setRevisionReason] = useState("");
+  const [revisionSaving, setRevisionSaving] = useState(false);
+  const [revisionTarget, setRevisionTarget] = useState<"text" | "images" | "both">("text");
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+  const [postAttempts, setPostAttempts] = useState<
+    { id: string; platform: string; success: boolean; error_message: string | null; attempt_at: string }[]
+  >([]);
+  const [attemptsLoading, setAttemptsLoading] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const [publishError, setPublishError] = useState<string | null>(null);
+
+  // Retry a failed publish — targets the platform of the last failed attempt
+  // so the user can see the exact error and try again without leaving the page.
+  const retryPublish = useCallback(async () => {
+    if (!selectedPost || retrying) return;
+    setRetrying(true);
+    setPublishError(null);
+    try {
+      const lastFailed = postAttempts.find((a) => !a.success);
+      const platform =
+        lastFailed?.platform ||
+        getPlatformsForPost(selectedPost)[0] ||
+        "all";
+      const res = await fetch("/api/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          postId: selectedPost.id,
+          platform,
+          action: "publish",
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setPublishError(
+          data?.error ??
+            (data?.code === "score_gate"
+              ? "This post's SEO score is below the publish minimum. Improve or regenerate the content first."
+              : "Publish failed — see details below.")
+        );
+        return;
+      }
+      // Refresh the attempt log so the new attempt shows up.
+      const attRes = await fetch(`/api/posts/${selectedPost.id}/attempts`);
+      if (attRes.ok) {
+        const attData = await attRes.json();
+        setPostAttempts(attData.attempts ?? []);
+      }
+      if (data?.success === false) {
+        setPublishError("Some platforms failed — see the attempt log below.");
+      }
+    } catch {
+      setPublishError("Retry failed — please try again.");
+    } finally {
+      setRetrying(false);
+    }
+  }, [selectedPost, retrying, postAttempts]);
+
+  // Regenerate a broken/empty blog through Cheryl's pipeline.
+  const regeneratePost = useCallback(async () => {
+    if (!selectedPost || regenerating) return;
+    setRegenerating(true);
+    setPublishError(null);
+    try {
+      const res = await fetch(`/api/posts/${selectedPost.id}/regenerate`, {
+        method: "POST",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setPublishError(data?.error ?? "Regeneration failed.");
+        return;
+      }
+      await onPostUpdate(selectedPost.id, {}); // refresh list
+      setSelectedPost(null);
+    } catch {
+      setPublishError("Regeneration failed — please try again.");
+    } finally {
+      setRegenerating(false);
+    }
+  }, [selectedPost, regenerating, onPostUpdate]);
+
+  // Render the SEO checklist stored on the post (seo_checks JSONB).
+  const renderSeoChecks = useCallback(() => {
+    if (!selectedPost?.seo_checks) return null;
+    const raw = Array.isArray(selectedPost.seo_checks)
+      ? selectedPost.seo_checks
+      : typeof selectedPost.seo_checks === "string"
+        ? (() => {
+            try {
+              return JSON.parse(selectedPost.seo_checks);
+            } catch {
+              return [];
+            }
+          })()
+        : [];
+    const checks = (raw as { label?: string; passed?: boolean; detail?: string }[]).filter(
+      (c) => typeof c?.label === "string"
+    );
+    if (checks.length === 0) return null;
+    return (
+      <div className="space-y-1">
+        {checks.map((c, i) => (
+          <div
+            key={i}
+            className="flex items-start gap-2 text-xs"
+            title={c.detail ?? ""}
+          >
+            <span
+              className={cn(
+                "mt-0.5 inline-flex size-3.5 shrink-0 items-center justify-center rounded-full text-[9px] font-bold",
+                c.passed
+                  ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400"
+                  : "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400"
+              )}
+            >
+              {c.passed ? "✓" : "✗"}
+            </span>
+            <span
+              className={cn(
+                c.passed
+                  ? "text-muted-foreground"
+                  : "text-red-700 dark:text-red-400"
+              )}
+            >
+              {c.label}
+            </span>
+          </div>
+        ))}
+      </div>
+    );
+  }, [selectedPost]);
 
   // ---- Calendar grid generation ----
   const days = useMemo(() => {
@@ -273,6 +460,17 @@ export default function ContentCalendar({
     return map;
   }, [posts]);
 
+  // Group proposed campaign-plan items by day.
+  const proposedByDay = useMemo(() => {
+    const map = new Map<string, ProposedItem[]>();
+    for (const item of proposedItems) {
+      const existing = map.get(item.date) ?? [];
+      existing.push(item);
+      map.set(item.date, existing);
+    }
+    return map;
+  }, [proposedItems]);
+
   // ---- Navigation ----
   const prevMonth = useCallback(() => {
     setCurrentMonth((m) => subMonths(m, 1));
@@ -285,29 +483,6 @@ export default function ContentCalendar({
   const goToToday = useCallback(() => {
     setCurrentMonth(new Date());
   }, []);
-
-  // ---- Drag & Drop ----
-  const handleDragStart = useCallback(() => {
-    setIsDragging(true);
-  }, []);
-
-  const handleDragEnd = useCallback(
-    async (result: DropResult) => {
-      setIsDragging(false);
-
-      const { draggableId, destination } = result;
-      if (!destination) return;
-
-      // draggableId format: "post-{id}"
-      const postId = draggableId.replace("post-", "");
-      // destination.droppableId format: "day-{yyyy-MM-dd}"
-      const newDate = destination.droppableId.replace("day-", "");
-
-      await onPostReschedule(postId, newDate);
-      onRefresh();
-    },
-    [onPostReschedule, onRefresh]
-  );
 
   // ---- Status toggle ----
   const toggleStatus = useCallback(
@@ -325,10 +500,11 @@ export default function ContentCalendar({
   const [postAnalytics, setPostAnalytics] = useState<AnalyticsSnapshot[] | null>(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
 
-  // Fetch analytics snapshots when the selected post changes
+  // Fetch analytics snapshots + publish attempts when the selected post changes
   useEffect(() => {
     if (!selectedPost) {
       setPostAnalytics(null);
+      setPostAttempts([]);
       return;
     }
 
@@ -336,19 +512,35 @@ export default function ContentCalendar({
 
     async function load() {
       setAnalyticsLoading(true);
+      setAttemptsLoading(true);
       try {
-        const res = await fetch(`/api/analytics?postId=${selectedPost!.id}`);
+        const [anaRes, attRes] = await Promise.all([
+          fetch(`/api/analytics?postId=${selectedPost!.id}`),
+          fetch(`/api/posts/${selectedPost!.id}/attempts`),
+        ]);
         if (cancelled) return;
-        if (res.ok) {
-          const data = await res.json();
+        if (anaRes.ok) {
+          const data = await anaRes.json();
           setPostAnalytics(data.snapshots ?? []);
         } else {
           setPostAnalytics(null);
         }
+        if (attRes.ok) {
+          const data = await attRes.json();
+          setPostAttempts(data.attempts ?? []);
+        } else {
+          setPostAttempts([]);
+        }
       } catch {
-        if (!cancelled) setPostAnalytics(null);
+        if (!cancelled) {
+          setPostAnalytics(null);
+          setPostAttempts([]);
+        }
       } finally {
-        if (!cancelled) setAnalyticsLoading(false);
+        if (!cancelled) {
+          setAnalyticsLoading(false);
+          setAttemptsLoading(false);
+        }
       }
     }
 
@@ -412,12 +604,40 @@ export default function ContentCalendar({
     onRefresh();
   }, [selectedPost, onPostUpdate, onRefresh]);
 
-  const handleRequestRevision = useCallback(async () => {
+  // Request Revision: ask WHY before sending content back — the reason is
+  // persisted and shown on the post so the team knows what to change.
+  const openRevisionDialog = useCallback(() => {
     if (!selectedPost) return;
-    await onPostUpdate(selectedPost.id, { status: "revision_requested" });
-    setSelectedPost(null);
-    onRefresh();
-  }, [selectedPost, onPostUpdate, onRefresh]);
+    setRevisionPost(selectedPost);
+    setRevisionReason("");
+    setRevisionTarget("text");
+  }, [selectedPost]);
+
+  const submitRevision = useCallback(async () => {
+    if (!revisionPost) return;
+    const reason = revisionReason.trim();
+    if (!reason) return;
+    setRevisionSaving(true);
+    try {
+      // Scope prefix so the team knows what to change: [Text], [Images], or
+      // [Text + Images]. Kept in the reason string — no schema change needed.
+      const targetLabel =
+        revisionTarget === "images"
+          ? "[Images]"
+          : revisionTarget === "both"
+            ? "[Text + Images]"
+            : "[Text]";
+      await onPostUpdate(revisionPost.id, {
+        status: "revision_requested",
+        revision_reason: `${targetLabel} ${reason}`,
+      });
+      setRevisionPost(null);
+      setSelectedPost(null);
+      onRefresh();
+    } finally {
+      setRevisionSaving(false);
+    }
+  }, [revisionPost, revisionReason, revisionTarget, onPostUpdate, onRefresh]);
 
   return (
     <div className="flex gap-6 h-full">
@@ -506,105 +726,119 @@ export default function ContentCalendar({
           ))}
         </div>
 
-        {/* Drag-and-Drop Context */}
-        <DragDropContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-          <div className="grid grid-cols-7 border-l border-t">
+        <div className="grid grid-cols-7 border-l border-t">
             {days.map((day) => {
               const dateKey = format(day, "yyyy-MM-dd");
               const dayPosts = postsByDay.get(dateKey) ?? [];
+              const dayProposed = proposedByDay.get(dateKey) ?? [];
               const isCurrentMonth = isSameMonth(day, currentMonth);
               const isToday = isSameDay(day, new Date());
 
               return (
-                <Droppable droppableId={`day-${dateKey}`} key={dateKey}>
-                  {(provided: DroppableProvided, snapshot: DroppableStateSnapshot) => (
-                    <div
-                      ref={provided.innerRef}
-                      {...provided.droppableProps}
-                      className={cn(
-                        "min-h-[110px] border-r border-b p-1.5 transition-colors",
-                        !isCurrentMonth && "bg-muted/30 text-muted-foreground",
-                        isToday && "bg-accent/20",
-                        snapshot.isDraggingOver &&
-                          "bg-primary/10 ring-2 ring-primary/30"
-                      )}
-                    >
-                      <span
-                        className={cn(
-                          "text-xs font-medium mb-1 inline-block px-1 py-0.5 rounded",
-                          isToday &&
-                            "bg-primary text-primary-foreground"
-                        )}
-                      >
-                        {format(day, "d")}
-                      </span>
-
-                      <div className="space-y-0.5">
-                        {dayPosts.map((post, index) => {
-                          const platforms = getPlatformsForPost(post);
-                          return (
-                            <Draggable
-                              key={post.id}
-                              draggableId={`post-${post.id}`}
-                              index={index}
-                            >
-                              {(provided, snapshot) => (
-                                <div
-                                  ref={provided.innerRef}
-                                  {...provided.draggableProps}
-                                  {...provided.dragHandleProps}
-                                  className={cn(
-                                    "bg-card border rounded-md px-2 py-1.5 cursor-pointer hover:shadow-md transition-shadow text-xs",
-                                    snapshot.isDragging &&
-                                      "shadow-lg ring-2 ring-primary/50 rotate-1"
-                                  )}
-                                  onClick={() => setSelectedPost(post)}
-                                >
-                                  <div className="flex items-center gap-1 mb-0.5">
-                                    {platforms.map((p) => (
-                                      <span
-                                        key={p}
-                                        title={p}
-                                        className="text-[10px] leading-none"
-                                      >
-                                        {PLATFORM_ICONS[p] ?? p}
-                                      </span>
-                                    ))}
-                                  </div>
-                                  <p className="truncate text-muted-foreground leading-tight">
-                                    {excerptFromContent(post.content)}
-                                  </p>
-                                  <span
-                                    className={cn(
-                                      "inline-block mt-1 px-1.5 py-px rounded-full text-[10px] font-medium",
-                                      STATUS_CONFIG[post.status]?.className ??
-                                        "bg-gray-100 text-gray-700"
-                                    )}
-                                  >
-                                    {STATUS_CONFIG[post.status]?.label ??
-                                      post.status}
-                                  </span>
-                                </div>
-                              )}
-                            </Draggable>
-                          );
-                        })}
-                        {provided.placeholder}
-                      </div>
-                    </div>
+                <div
+                  key={dateKey}
+                  className={cn(
+                    "min-h-[110px] border-r border-b p-1.5 transition-colors",
+                    !isCurrentMonth && "bg-muted/30 text-muted-foreground",
+                    isToday && "bg-accent/20"
                   )}
-                </Droppable>
-              );
-            })}
-          </div>
-        </DragDropContext>
+                >
+                  <span
+                    className={cn(
+                      "text-xs font-medium mb-1 inline-block px-1 py-0.5 rounded",
+                      isToday &&
+                        "bg-primary text-primary-foreground"
+                    )}
+                  >
+                    {format(day, "d")}
+                  </span>
+
+                  <div className="space-y-0.5">
+                    {dayPosts.map((post) => {
+                      const platforms = getPlatformsForPost(post);
+                      return (
+                        <div
+                          key={post.id}
+                          className="bg-card border rounded-md px-2 py-1.5 cursor-pointer hover:shadow-md transition-shadow text-xs"
+                          onClick={() => setSelectedPost(post)}
+                        >
+                          <div className="flex items-center gap-1 mb-0.5">
+                            {platforms.map((p) => (
+                              <span
+                                key={p}
+                                title={p}
+                                className="text-[10px] leading-none"
+                              >
+                                {PLATFORM_ICONS[p] ?? p}
+                              </span>
+                            ))}
+                          </div>
+                          <p className="truncate text-muted-foreground leading-tight">
+                            {excerptFromContent(post.content)}
+                          </p>
+                          <span
+                            className={cn(
+                              "inline-block mt-1 px-1.5 py-px rounded-full text-[10px] font-medium",
+                              STATUS_CONFIG[post.status]?.className ??
+                                "bg-gray-100 text-gray-700"
+                            )}
+                          >
+                            {STATUS_CONFIG[post.status]?.label ??
+                              post.status}
+                          </span>
+                        </div>
+                      );
+                    })}
+
+                        {/* Proposed pieces from campaign plans — dashed until approved. */}
+                        {dayProposed.map((item) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            title={`${item.planTitle} — proposed ${item.kind}. Click to open.`}
+                            onClick={() => setSelectedProposed(item)}
+                            className="w-full text-left border border-dashed rounded-md px-2 py-1 text-xs opacity-80 hover:opacity-100 hover:border-violet-400 hover:bg-violet-50 dark:hover:bg-violet-950/40 cursor-pointer transition-colors"
+                          >
+                            <div className="flex items-center gap-1 mb-0.5">
+                              <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                                {item.kind === "blog" ? "📝" : (PLATFORM_ICONS[item.platform ?? ""] ?? "📣")}
+                              </span>
+                              <span className="text-[10px] font-medium text-muted-foreground">
+                                {item.kind === "blog" ? "Proposed blog" : "Proposed social"}
+                              </span>
+                            </div>
+                            <p className="truncate text-muted-foreground leading-tight">
+                              {item.title}
+                            </p>
+                            <span className="inline-flex items-center gap-1.5 mt-1">
+                              <span className="px-1.5 py-px rounded-full text-[10px] font-medium bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300">
+                                Proposed
+                              </span>
+                              {item.owner && (
+                                <span className="px-1.5 py-px rounded-full text-[10px] font-medium bg-muted text-muted-foreground">
+                                  {OWNER_NAMES[item.owner] ?? item.owner}
+                                </span>
+                              )}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                  </div>
+                );
+              })}
+            </div>
 
         {/* Legend */}
-        {isDragging && (
-          <div className="mt-3 text-xs text-muted-foreground text-center animate-in fade-in">
-            Dragging… drop onto any day cell to reschedule.
-          </div>
-        )}
+        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+          <span className="inline-flex items-center gap-1.5">
+            <span className="inline-block size-2.5 rounded-sm bg-violet-200 dark:bg-violet-800 border border-dashed border-violet-400" />
+            Proposed (campaign plan)
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="inline-block size-2.5 rounded-sm bg-card border" />
+            Post (click to view)
+          </span>
+        </div>
       </div>
 
       {/* ---- Post Detail Dialog ---- */}
@@ -650,6 +884,18 @@ export default function ContentCalendar({
                   </span>
                 </div>
 
+                {/* Why it was sent back — so the team can actually fix it */}
+                {selectedPost.revision_reason && (
+                  <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-sm dark:bg-amber-950/30 dark:border-amber-800">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
+                      Revision requested
+                    </span>
+                    <p className="mt-0.5 text-amber-900 dark:text-amber-200">
+                      {selectedPost.revision_reason}
+                    </p>
+                  </div>
+                )}
+
                 {/* Platforms */}
                 {getPlatformsForPost(selectedPost).length > 0 && (
                   <div className="flex items-center gap-2">
@@ -672,18 +918,101 @@ export default function ContentCalendar({
                   </div>
                 </div>
 
-                {/* Media */}
+                {/* SEO score + checklist (Rank Math-style) */}
+                {selectedPost.seo_score != null && (
+                  <div className="rounded-md bg-muted/50 border px-3 py-2">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <h4 className="text-sm font-medium">SEO Score</h4>
+                      <ScoreBadge score={selectedPost.seo_score} />
+                    </div>
+                    <p
+                      className={cn(
+                        "text-[11px] font-medium mb-2",
+                        (selectedPost.seo_score ?? 0) >= 80
+                          ? "text-green-600 dark:text-green-400"
+                          : (selectedPost.seo_score ?? 0) >= 50
+                            ? "text-amber-600 dark:text-amber-400"
+                            : "text-red-600 dark:text-red-400"
+                      )}
+                    >
+                      {(selectedPost.seo_score ?? 0) >= 80
+                        ? "Strong — ready to publish."
+                        : (selectedPost.seo_score ?? 0) >= 50
+                          ? "Passable — publishable, but improvement helps."
+                          : "Below the publish minimum — regenerate or improve before publishing."}
+                    </p>
+                    {renderSeoChecks()}
+                  </div>
+                )}
+
+                {/* Publish attempt log — why and when it failed */}
+                {attemptsLoading ? (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Loader2 className="size-3 animate-spin" />
+                    Loading publish history…
+                  </div>
+                ) : postAttempts.length > 0 ? (
+                  <div>
+                    <h4 className="text-sm font-medium mb-1.5">
+                      Publish History
+                    </h4>
+                    <div className="space-y-1.5 max-h-36 overflow-y-auto">
+                      {postAttempts.map((a) => (
+                        <div
+                          key={a.id}
+                          className={cn(
+                            "rounded-md border px-2.5 py-1.5 text-xs",
+                            a.success
+                              ? "bg-green-50 border-green-200 dark:bg-green-950/30 dark:border-green-800"
+                              : "bg-red-50 border-red-200 dark:bg-red-950/30 dark:border-red-800"
+                          )}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-medium capitalize">
+                              {a.platform} —{" "}
+                              {a.success ? "Succeeded" : "Failed"}
+                            </span>
+                            <span className="text-muted-foreground">
+                              {format(parseISO(a.attempt_at), "MMM d, h:mm a")}
+                            </span>
+                          </div>
+                          {!a.success && a.error_message && (
+                            <p className="mt-0.5 text-red-700 dark:text-red-400 break-words">
+                              {a.error_message}
+                            </p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                {publishError && (
+                  <div className="flex items-start gap-2 rounded-md bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700 dark:bg-red-950/30 dark:border-red-800 dark:text-red-400">
+                    <AlertTriangle className="size-3.5 mt-0.5 shrink-0" />
+                    <span>{publishError}</span>
+                  </div>
+                )}
+
+                {/* Media — click any thumbnail to view full size */}
                 {selectedPost.media_urls && selectedPost.media_urls.length > 0 && (
                   <div>
                     <h4 className="text-sm font-medium mb-1">Media</h4>
                     <div className="flex gap-2 flex-wrap">
                       {selectedPost.media_urls.map((url, i) => (
-                        <img
+                        <button
                           key={i}
-                          src={url}
-                          alt={`Media ${i + 1}`}
-                          className="size-16 object-cover rounded-md border"
-                        />
+                          type="button"
+                          onClick={() => setLightboxUrl(url)}
+                          title="Click to view full size"
+                          className="rounded-md border overflow-hidden hover:ring-2 hover:ring-primary/40 transition-shadow"
+                        >
+                          <img
+                            src={url}
+                            alt={`Media ${i + 1} — click to enlarge`}
+                            className="size-16 object-cover"
+                          />
+                        </button>
                       ))}
                     </div>
                   </div>
@@ -826,14 +1155,350 @@ export default function ContentCalendar({
               </Button>
             )}
             {(selectedPost?.status === "pending_approval" ||
-              selectedPost?.status === "approved") && (
-              <Button variant="outline" onClick={handleRequestRevision}>
+              selectedPost?.status === "approved" ||
+              selectedPost?.status === "draft" ||
+              selectedPost?.status === "revision_requested" ||
+              selectedPost?.status === "failed" ||
+              selectedPost?.status === "published") && (
+              <Button variant="outline" onClick={openRevisionDialog}>
                 Request Revision
               </Button>
             )}
+            {selectedPost?.status === "failed" && (
+              <>
+                <Button
+                  variant="outline"
+                  onClick={retryPublish}
+                  disabled={retrying}
+                >
+                  {retrying ? (
+                    <Loader2 className="size-4 animate-spin mr-1" />
+                  ) : (
+                    <RotateCcw className="size-4 mr-1" />
+                  )}
+                  Retry Publish
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={regeneratePost}
+                  disabled={regenerating}
+                >
+                  {regenerating ? (
+                    <Loader2 className="size-4 animate-spin mr-1" />
+                  ) : (
+                    <RefreshCw className="size-4 mr-1" />
+                  )}
+                  Regenerate
+                </Button>
+              </>
+            )}
+            {selectedPost?.status === "draft" &&
+              isBrokenBlogPost(selectedPost) && (
+                <Button
+                  variant="outline"
+                  onClick={regeneratePost}
+                  disabled={regenerating}
+                >
+                  {regenerating ? (
+                    <Loader2 className="size-4 animate-spin mr-1" />
+                  ) : (
+                    <RefreshCw className="size-4 mr-1" />
+                  )}
+                  Regenerate broken draft
+                </Button>
+              )}
             <Button
               variant="ghost"
               onClick={() => setSelectedPost(null)}
+            >
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Image lightbox — full-size media preview */}
+      <Dialog
+        open={!!lightboxUrl}
+        onOpenChange={(open) => !open && setLightboxUrl(null)}
+      >
+        <DialogContent className="sm:max-w-3xl">
+          {lightboxUrl && (
+            <div className="flex flex-col items-center gap-3">
+              <div className="flex items-center justify-center w-full">
+                <img
+                  src={lightboxUrl}
+                  alt="Full-size media"
+                  className="max-h-[70vh] w-auto rounded-md border"
+                />
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setLightboxUrl(null)}
+              >
+                Close image
+              </Button>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Request Revision — ask WHY before sending content back */}
+      <Dialog
+        open={!!revisionPost}
+        onOpenChange={(open) => !open && setRevisionPost(null)}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Request Revision</DialogTitle>
+            <DialogDescription>
+              Tell the team what needs to change — the reason is saved on the
+              post so the revision actually gets addressed.
+            </DialogDescription>
+          </DialogHeader>
+          <div>
+            <span className="text-xs font-medium text-muted-foreground">
+              What needs revising?
+            </span>
+            <div className="flex gap-2 mt-1.5">
+              {(
+                [
+                  { id: "text" as const, label: "✍️ Text" },
+                  { id: "images" as const, label: "🖼️ Images" },
+                  { id: "both" as const, label: "✍️🖼️ Both" },
+                ]
+              ).map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setRevisionTarget(opt.id)}
+                  className={`flex-1 rounded-md border px-3 py-2 text-xs font-medium transition-colors ${
+                    revisionTarget === opt.id
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "hover:bg-muted"
+                  }`}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <textarea
+            value={revisionReason}
+            onChange={(e) => setRevisionReason(e.target.value)}
+            rows={4}
+            placeholder={
+              revisionTarget === "images"
+                ? "e.g. The featured image doesn't match the topic — use a photo of the actual product and add alt text."
+                : revisionTarget === "both"
+                  ? "e.g. Tighten the intro and swap the hero image for a real product shot."
+                  : "e.g. The opening hook is weak — lead with the 2026 stats. Add more detail on the amenities section and fix the CTA."
+            }
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+          <DialogFooter className="gap-2">
+            <Button
+              variant="default"
+              disabled={!revisionReason.trim() || revisionSaving}
+              onClick={submitRevision}
+            >
+              {revisionSaving ? (
+                <Loader2 className="size-4 animate-spin mr-1" />
+              ) : (
+                <ThumbsUp className="size-4 mr-1" />
+              )}
+              Send Back for Revision
+            </Button>
+            <Button variant="ghost" onClick={() => setRevisionPost(null)}>
+              Cancel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Proposed campaign item — click to open, approve to turn it into a
+          real draft post on its due date. */}
+      <Dialog
+        open={!!selectedProposed}
+        onOpenChange={(open) => !open && setSelectedProposed(null)}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Proposed {selectedProposed?.kind}</DialogTitle>
+            <DialogDescription>
+              {selectedProposed
+                ? `${selectedProposed.planTitle} — ${format(
+                    parseISO(selectedProposed.date),
+                    "MMMM d, yyyy"
+                  )}`
+                : ""}
+            </DialogDescription>
+          </DialogHeader>
+
+          {selectedProposed && (
+            <div className="space-y-3 text-sm">
+              <div>
+                <span className="text-muted-foreground text-xs uppercase tracking-wide font-semibold">
+                  Topic
+                </span>
+                <p className="font-medium mt-0.5">{selectedProposed.title}</p>
+              </div>
+              <div className="flex flex-wrap gap-x-6 gap-y-2">
+                <div>
+                  <span className="text-muted-foreground text-xs uppercase tracking-wide font-semibold">
+                    Type
+                  </span>
+                  <p className="mt-0.5 capitalize">{selectedProposed.kind}</p>
+                </div>
+                {selectedProposed.platform && (
+                  <div>
+                    <span className="text-muted-foreground text-xs uppercase tracking-wide font-semibold">
+                      Platform
+                    </span>
+                    <p className="mt-0.5 capitalize">{selectedProposed.platform}</p>
+                  </div>
+                )}
+                {selectedProposed.owner && (
+                  <div>
+                    <span className="text-muted-foreground text-xs uppercase tracking-wide font-semibold">
+                      Owner
+                    </span>
+                    <p className="mt-0.5">
+                      {OWNER_NAMES[selectedProposed.owner] ?? selectedProposed.owner}
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Approved keywords — the piece will target these */}
+              {selectedProposed.keywords && selectedProposed.keywords.length > 0 && (
+                <div>
+                  <span className="text-muted-foreground text-xs uppercase tracking-wide font-semibold">
+                    Target keywords
+                  </span>
+                  <div className="flex flex-wrap gap-1.5 mt-1.5">
+                    {selectedProposed.keywords.map((kw) => (
+                      <span
+                        key={kw}
+                        className="inline-flex items-center rounded-full border border-primary/30 bg-primary/5 px-2.5 py-0.5 text-xs font-medium text-primary"
+                      >
+                        {kw}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Internal link target — content should link here */}
+              {selectedProposed.internalLink && (
+                <div>
+                  <span className="text-muted-foreground text-xs uppercase tracking-wide font-semibold">
+                    Links to internally
+                  </span>
+                  <p className="mt-0.5 text-primary break-all">
+                    {selectedProposed.internalLink}
+                  </p>
+                </div>
+              )}
+
+              {/* External link targets — reputable sources to cite */}
+              {selectedProposed.externalLinks && selectedProposed.externalLinks.length > 0 && (
+                <div>
+                  <span className="text-muted-foreground text-xs uppercase tracking-wide font-semibold">
+                    Suggested external sources
+                  </span>
+                  <div className="flex flex-wrap gap-1.5 mt-1.5">
+                    {selectedProposed.externalLinks.map((link) => (
+                      <span
+                        key={link}
+                        className="inline-flex items-center rounded-full bg-muted px-2.5 py-0.5 text-xs text-muted-foreground break-all"
+                      >
+                        {link}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Media kind — socials default to image today; video ships later */}
+              {selectedProposed.kind === "social" && (
+                <div>
+                  <span className="text-muted-foreground text-xs uppercase tracking-wide font-semibold">
+                    Media
+                  </span>
+                  <div className="flex gap-2 mt-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setMediaKind("image")}
+                      className={`flex-1 rounded-md border px-3 py-2 text-xs font-medium transition-colors ${
+                        mediaKind === "image"
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "hover:bg-muted"
+                      }`}
+                    >
+                      🖼️ Image
+                      <span className="block font-normal text-muted-foreground mt-0.5">Available now</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMediaKind("video")}
+                      className={`flex-1 rounded-md border px-3 py-2 text-xs font-medium transition-colors ${
+                        mediaKind === "video"
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "hover:bg-muted"
+                      }`}
+                    >
+                      🎬 Video
+                      <span className="block font-normal text-muted-foreground mt-0.5">Coming soon — image used until then</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="rounded-md bg-muted/50 border px-3 py-2 text-xs text-muted-foreground space-y-1">
+                <p>
+                  Approving this idea generates the content now (Cheryl writes
+                  blogs with images, Pam writes social captions) and lands it as
+                  pending approval. The generated content needs a second, human
+                  approval before it can be scheduled or published.
+                </p>
+                <p className="pt-1">
+                  The generated piece is scored against the SEO checklist
+                  (keywords in title/meta/slug/body, image alt text, internal &
+                  external links, readability) and the score shows on the post
+                  before you approve it for publishing.
+                </p>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter className="gap-2">
+            <Button
+              variant="default"
+              disabled={approving}
+              onClick={async () => {
+                if (!selectedProposed) return;
+                setApproving(true);
+                try {
+                  await onApproveProposed(selectedProposed, mediaKind);
+                  setSelectedProposed(null);
+                  setMediaKind("image");
+                } finally {
+                  setApproving(false);
+                }
+              }}
+            >
+              {approving ? (
+                <Loader2 className="size-4 animate-spin mr-1" />
+              ) : (
+                <ThumbsUp className="size-4 mr-1" />
+              )}
+              Approve & Generate
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => setSelectedProposed(null)}
             >
               Close
             </Button>

@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
-import { Key, Palette, Globe, Users, Link2, Store } from "lucide-react";
+import { Key, Palette, Globe, Users, Link2, Store, Clapperboard } from "lucide-react";
 
 const links = [
   { href: "/dashboard/settings/ai", icon: Key, title: "AI Settings", description: "Manage API keys and task-model mappings." },
@@ -8,6 +8,7 @@ const links = [
   { href: "/dashboard/settings/social", icon: Users, title: "Social Accounts", description: "Connect social media platforms." },
   { href: "/dashboard/settings/blog", icon: Link2, title: "Blog Platforms", description: "Connect WordPress, Joomla, and more." },
   { href: "/dashboard/settings/gbp", icon: Store, title: "Google Business Profile", description: "Manage GBP listings." },
+  { href: "/dashboard/settings/site", icon: Clapperboard, title: "Website / Landing Page", description: "Switch the sales page product tour between slideshow and video." },
 ];
 
 export default function SettingsIndexPage() {

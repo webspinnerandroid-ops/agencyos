@@ -1,6 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantId } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
+import { getCurrentWorkspaceId } from "@/lib/workspace";
+
+/** Post content is a JSON blob (blog) or a string (social) — normalize to text. */
+function postContentText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (content && typeof content === "object") {
+    const c = content as Record<string, unknown>;
+    if (typeof c.title === "string" && c.title) return c.title;
+    if (typeof c.caption === "string" && c.caption) return c.caption;
+    if (typeof c.body === "string" && c.body) return c.body;
+  }
+  return "";
+}
+
+function topPostExcerpt(content: unknown): string {
+  return postContentText(content).slice(0, 120) ?? "";
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -44,7 +61,9 @@ export async function GET(request: NextRequest) {
     }
 
     // Otherwise, build an aggregate query for all published posts within the
-    // tenant, optionally filtered by client and date range.
+    // tenant, optionally filtered by client and date range. When a workspace
+    // is active (x-workspace-id / cookie), the dashboard is scoped to it so
+    // each workspace sees its own numbers — same model as the calendar.
     let postQuery = supabase
       .from("posts")
       .select(
@@ -54,6 +73,7 @@ export async function GET(request: NextRequest) {
         scheduled_at,
         status,
         client_id,
+        workspace_id,
         post_platforms (
           id,
           social_accounts (
@@ -76,6 +96,15 @@ export async function GET(request: NextRequest) {
       .eq("tenant_id", tenantId)
       .eq("status", "published")
       .order("scheduled_at", { ascending: true });
+
+    const workspaceId = await getCurrentWorkspaceId();
+    if (workspaceId) {
+      // Same model as /api/clients: legacy posts with workspace_id = NULL
+      // appear in every workspace view, alongside posts scoped to this one.
+      postQuery = postQuery.or(
+        `workspace_id.is.null,workspace_id.eq.${workspaceId}`
+      );
+    }
 
     if (clientId) {
       postQuery = postQuery.eq("client_id", clientId);
@@ -129,7 +158,7 @@ export async function GET(request: NextRequest) {
 
       return {
         id: post.id,
-        content: post.content,
+        content: postContentText(post.content),
         scheduled_at: post.scheduled_at,
         client_id: post.client_id,
         platforms:
@@ -175,6 +204,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       posts: enriched,
+      workspaceId: workspaceId ?? null,
       summary: {
         totalPosts,
         totalLikes,
@@ -186,7 +216,7 @@ export async function GET(request: NextRequest) {
         topPost: topPost
           ? {
               id: topPost.id,
-              content: topPost.content?.slice(0, 120) ?? "",
+              content: topPostExcerpt(topPost.content),
               totalLikes: topPost.totalLikes,
               totalComments: topPost.totalComments,
               totalShares: topPost.totalShares,

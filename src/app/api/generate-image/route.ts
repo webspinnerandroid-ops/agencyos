@@ -5,6 +5,7 @@ import { incrementUsage } from "@/lib/usage";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getCurrentWorkspaceId } from "@/lib/workspace";
 import { rateLimitRequest } from "@/lib/rate-limit";
+import { persistImageToStorage } from "@/lib/media/storage";
 
 export async function POST(request: NextRequest) {
   try {
@@ -42,12 +43,23 @@ export async function POST(request: NextRequest) {
     }
 
     // Generate images using configured provider (DALL-E, Stability, Google Imagen)
-    const images = await generateImage(tenantId, prompt.trim(), {
+    const rawImages = await generateImage(tenantId, prompt.trim(), {
       size: (size as any) ?? "1024x1024",
       n: n ?? 1,
       clientId: clientId ?? undefined,
       referenceImage: referenceImage ?? undefined,
     });
+
+    // Persist to Supabase Storage. Providers like Google Imagen return base64
+    // data-URLs (~2-3 MB each); storing those raw in media_assets made the
+    // Recent Images API a 50 MB response and the page take ~25s. The DB row
+    // now stores only the short public URL.
+    const images = await Promise.all(
+      rawImages.map(async (img) => ({
+        ...img,
+        url: await persistImageToStorage(tenantId, img.url),
+      }))
+    );
 
     // Track usage
     void incrementUsage(tenantId, "ai_tokens", images.length * 1000);

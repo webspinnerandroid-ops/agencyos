@@ -87,6 +87,48 @@ const SUPPORTED_PLATFORMS = [
       { name: "apiToken", label: "API Token", type: "password", hint: "Generate in Webflow Dashboard → Integrations" },
     ],
   },
+  {
+    id: "shopify",
+    name: "Shopify",
+    icon: "🛍️",
+    description: "Connect via Shopify Admin API (Blogs & Articles)",
+    authMethod: "api_key",
+    authFields: [
+      { name: "apiKey", label: "Admin API Access Token", type: "password", hint: "Create in Shopify Admin → Settings → Apps → Admin API access token" },
+      { name: "apiToken", label: "Store Subdomain", type: "text", hint: "e.g. yourstore (from yourstore.myshopify.com)" },
+    ],
+  },
+  {
+    id: "medium",
+    name: "Medium",
+    icon: "📰",
+    description: "Connect via Medium REST API",
+    authMethod: "api_key",
+    authFields: [
+      { name: "apiToken", label: "Integration Token", type: "password", hint: "Create in Medium Settings → Security → Integration tokens" },
+    ],
+  },
+  {
+    id: "blogger",
+    name: "Blogger",
+    icon: "✍️",
+    description: "Connect via Google Blogger API",
+    authMethod: "api_key",
+    authFields: [
+      { name: "apiKey", label: "Blogger API Key", type: "password", hint: "Create in Google Cloud Console → APIs → Blogger API" },
+      { name: "apiToken", label: "Blog ID", type: "text", hint: "Found in Blogger settings → Blog ID (or in the URL when editing)" },
+    ],
+  },
+  {
+    id: "wix",
+    name: "Wix",
+    icon: "🎨",
+    description: "Connect via Wix site API (verify write support first)",
+    authMethod: "api_key",
+    authFields: [
+      { name: "apiKey", label: "API Key", type: "password", hint: "Wix Dev Center → Site API keys" },
+    ],
+  },
 ] as const;
 
 export type SupportedBlogPlatform = (typeof SUPPORTED_PLATFORMS)[number];

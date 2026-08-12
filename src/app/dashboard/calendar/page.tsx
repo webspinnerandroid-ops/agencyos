@@ -1,10 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import ContentCalendar, {
   type CalendarPost,
   type PostStatus,
+  type ProposedItem,
 } from "@/components/ContentCalendar";
+import { CalendarRange, Map, Sparkles, Loader2 } from "lucide-react";
 
 // ------------------------------------------------------------------
 // Types
@@ -13,6 +15,27 @@ import ContentCalendar, {
 interface Client {
   id: string;
   name: string;
+}
+
+interface CampaignPlan {
+  id: string;
+  title: string;
+  summary: string;
+  status: string;
+  created_at: string;
+  items: {
+    id: string;
+    kind: "blog" | "social";
+    topic: string;
+    due_date: string;
+    platform: string | null;
+    owner: string | null;
+    status: string;
+    linked_post_id: string | null;
+    keywords: string[] | null;
+    internal_link: string | null;
+    external_links: string[] | null;
+  }[];
 }
 
 const DEFAULT_STATUSES: PostStatus[] = [
@@ -32,11 +55,63 @@ const DEFAULT_STATUSES: PostStatus[] = [
 export default function CalendarPage() {
   const [posts, setPosts] = useState<CalendarPost[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
+  const [campaignPlans, setCampaignPlans] = useState<CampaignPlan[]>([]);
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [selectedStatuses, setSelectedStatuses] =
     useState<PostStatus[]>(DEFAULT_STATUSES);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [refiningPlanId, setRefiningPlanId] = useState<string | null>(null);
+  const [refineNote, setRefineNote] = useState<string | null>(null);
+
+  // ---- Campaign plans (proposed items from the AI team) ----
+  const fetchCampaignPlans = useCallback(async () => {
+    try {
+      const res = await fetch("/api/campaign-plans", { credentials: "include" });
+      if (res.ok) {
+        const data = await res.json();
+        setCampaignPlans(data.plans ?? []);
+      }
+    } catch {
+      // calendar still works without plans
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchCampaignPlans();
+  }, [fetchCampaignPlans]);
+
+  // Highlight the plan deep-linked from the chat (?plan=<id>).
+  const focusedPlanId = useMemo(() => {
+    if (typeof window === "undefined") return null;
+    return new URLSearchParams(window.location.search).get("plan");
+  }, []);
+
+  // Flatten plan items into the calendar's ProposedItem shape.
+  const proposedItems: ProposedItem[] = useMemo(() => {
+    const out: ProposedItem[] = [];
+    for (const plan of campaignPlans) {
+      for (const item of plan.items ?? []) {
+        // Only un-approved items render as dashed "proposed" chips — once
+        // approved the item is represented by its linked draft post.
+        if (item.status !== "proposed") continue;
+        out.push({
+          id: item.id,
+          date: item.due_date,
+          title: item.topic,
+          kind: item.kind,
+          planId: plan.id,
+          planTitle: plan.title,
+          platform: item.platform,
+          owner: item.owner,
+          keywords: item.keywords,
+          internalLink: item.internal_link,
+          externalLinks: item.external_links,
+        });
+      }
+    }
+    return out;
+  }, [campaignPlans]);
 
   // ---- Fetch clients ----
   const fetchClients = useCallback(async () => {
@@ -130,23 +205,12 @@ export default function CalendarPage() {
     fetchPosts();
   }, [fetchPosts]);
 
-  // ---- Reschedule handler ----
-  const handlePostReschedule = useCallback(
-    async (postId: string, newDate: string) => {
-      const newScheduledAt = new Date(newDate).toISOString();
-      await fetch(`/api/posts/${postId}`, {
-        method: "PATCH",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ scheduled_at: newScheduledAt }),
-      });
-    },
-    []
-  );
-
   // ---- Post update (status changes from modal) ----
   const handlePostUpdate = useCallback(
-    async (postId: string, data: Partial<Pick<CalendarPost, "status">>) => {
+    async (
+      postId: string,
+      data: Partial<Pick<CalendarPost, "status" | "revision_reason">>
+    ) => {
       await fetch(`/api/posts/${postId}`, {
         method: "PATCH",
         credentials: "include",
@@ -156,6 +220,70 @@ export default function CalendarPage() {
     },
     []
   );
+
+  // ---- Approve a proposed campaign item (creates a draft post) ----
+  const handleApproveProposed = useCallback(
+    async (item: ProposedItem, mediaKind: "image" | "video" = "image") => {
+      const res = await fetch("/api/campaign-plans", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ itemId: item.id, mediaKind }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.error ?? "Failed to approve item");
+      }
+      await Promise.all([fetchCampaignPlans(), fetchPosts()]);
+    },
+    [fetchCampaignPlans, fetchPosts]
+  );
+
+  // ---- Refine with Malory: one cheap call that polishes the plan ----
+  const handleRefinePlan = useCallback(
+    async (planId: string) => {
+      setRefiningPlanId(planId);
+      setRefineNote(null);
+      try {
+        const res = await fetch("/api/campaign-plans/refine", {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ planId }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setError(data.error ?? "Refine failed");
+          return;
+        }
+        setRefineNote(data.note ?? "Malory refined the plan.");
+        await fetchCampaignPlans();
+      } catch {
+        setError("Network error while refining");
+      } finally {
+        setRefiningPlanId(null);
+      }
+    },
+    [fetchCampaignPlans]
+  );
+
+  // While any campaign item is "draft" (content generating after idea
+  // approval), poll so the generated post appears the moment it's ready.
+  const anyGenerating = useMemo(
+    () =>
+      campaignPlans.some((plan) =>
+        (plan.items ?? []).some((i) => i.status === "draft")
+      ),
+    [campaignPlans]
+  );
+  useEffect(() => {
+    if (!anyGenerating) return;
+    const iv = setInterval(() => {
+      fetchCampaignPlans();
+      fetchPosts();
+    }, 8000);
+    return () => clearInterval(iv);
+  }, [anyGenerating, fetchCampaignPlans, fetchPosts]);
 
   // ---- Refresh after mutations ----
   const handleRefresh = useCallback(() => {
@@ -169,7 +297,7 @@ export default function CalendarPage() {
           Content Calendar
         </h1>
         <p className="text-muted-foreground mt-1">
-          Drag and drop posts to reschedule. Click a post to view details.
+          Click a post to view details.
         </p>
       </div>
 
@@ -185,6 +313,73 @@ export default function CalendarPage() {
         </div>
       )}
 
+      {/* Campaign plans from the AI team — the proposed side of the calendar */}
+      {campaignPlans.length > 0 && (
+        <div className="rounded-xl border bg-card p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Map className="size-4 text-primary" />
+            <h2 className="font-semibold">Campaign plans</h2>
+            <span className="text-xs text-muted-foreground">
+              Mapped out by the AI team — proposed pieces appear on the calendar as dashed entries
+            </span>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {campaignPlans.map((plan) => {
+              const blogCount =
+                plan.items?.filter((i) => i.kind === "blog").length ?? 0;
+              const socialCount =
+                plan.items?.filter((i) => i.kind === "social").length ?? 0;
+              const focused = plan.id === focusedPlanId;
+              return (
+                <div
+                  key={plan.id}
+                  className={`rounded-lg border p-3 text-sm ${
+                    focused
+                      ? "border-primary ring-2 ring-primary/40"
+                      : "bg-muted/30"
+                  }`}
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <CalendarRange className="size-4 text-primary shrink-0" />
+                    <span className="font-medium truncate">{plan.title}</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground line-clamp-2 mb-2">
+                    {plan.summary || "No summary"}
+                  </p>
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300 rounded-full px-2 py-0.5">
+                      {plan.status}
+                    </span>
+                    <span className="text-muted-foreground">
+                      {blogCount} blogs · {socialCount} socials
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={refiningPlanId !== null}
+                    onClick={() => handleRefinePlan(plan.id)}
+                    className="mt-2 inline-flex items-center gap-1.5 text-[11px] font-medium text-primary border border-primary/30 rounded-md px-2 py-1 hover:bg-primary/10 disabled:opacity-50 transition-colors"
+                    title="One cheap call — Malory tightens titles, dates and spacing while keeping the agreed scope."
+                  >
+                    {refiningPlanId === plan.id ? (
+                      <>
+                        <Loader2 className="size-3 animate-spin" />
+                        Malory is refining…
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="size-3" />
+                        Refine with Malory
+                      </>
+                    )}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {loading && posts.length === 0 ? (
         <div className="flex items-center justify-center py-24 text-muted-foreground">
           <div className="animate-spin rounded-full size-8 border-2 border-primary border-t-transparent mr-3" />
@@ -193,13 +388,14 @@ export default function CalendarPage() {
       ) : (
         <ContentCalendar
           posts={posts}
+          proposedItems={proposedItems}
           clients={clients}
           selectedClientId={selectedClientId}
           selectedStatuses={selectedStatuses}
           onClientChange={setSelectedClientId}
           onStatusesChange={setSelectedStatuses}
-          onPostReschedule={handlePostReschedule}
           onPostUpdate={handlePostUpdate}
+          onApproveProposed={handleApproveProposed}
           onRefresh={handleRefresh}
         />
       )}

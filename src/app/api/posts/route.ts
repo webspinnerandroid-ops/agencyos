@@ -27,6 +27,9 @@ export async function GET(request: NextRequest) {
         ai_generated,
         tier_level,
         client_id,
+        revision_reason,
+        seo_score,
+        seo_checks,
         post_platforms (
           id,
           social_account_id,

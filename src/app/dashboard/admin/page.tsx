@@ -8,7 +8,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Building2, Users, FileText, Key, TrendingUp, Shield, X, UserCog } from "lucide-react";
-import { getDashboardStats, getAllTenants, getLicenses, issueLicense, revokeLicense, getAllUsers, assignLevel, type TenantSummary, type LicenseRecord, type UserRecord } from "./actions";
+import { getDashboardStats, getAllTenants, getLicenses, issueLicense, revokeLicense, deleteLicense, deleteUser, deleteTenant, getAllUsers, assignLevel, type TenantSummary, type LicenseRecord, type UserRecord } from "./actions";
 
 const PLANS = [
   { id: "starter", name: "Starter" },
@@ -73,6 +73,42 @@ export default function AdminDashboardPage() {
     });
   };
 
+  const handleDeleteUser = (userId: string, email: string) => {
+    if (!confirm(`Permanently delete user ${email}?\n\nThis removes their auth account and all role assignments. Their posts remain with the tenant. This cannot be undone.`)) return;
+    if (!confirm("Are you absolutely sure? There is no recovery.")) return;
+    startTransition(async () => {
+      const r = await deleteUser(userId);
+      setFeedback(r.success
+        ? { type: "success", message: "User permanently deleted." }
+        : { type: "error", message: r.error ?? "Failed to delete user." });
+      loadData();
+    });
+  };
+
+  const handleDeleteLicense = (licenseId: string, key: string) => {
+    if (!confirm(`Permanently delete license ${key}?\n\nThis removes the row entirely (not just revoke). Cannot be undone.`)) return;
+    startTransition(async () => {
+      const r = await deleteLicense(licenseId);
+      setFeedback(r.success
+        ? { type: "success", message: "License permanently deleted." }
+        : { type: "error", message: r.error ?? "Failed to delete license." });
+      loadData();
+    });
+  };
+
+  const handleDeleteTenant = (tenant: TenantSummary) => {
+    const typed = prompt(`Permanently delete tenant "${tenant.name}"?\n\nThis deletes ALL of its clients, posts, media, chats, campaigns, licenses, and the auth accounts of its users. Type the tenant name to confirm:`);
+    if (typed === null || typed.trim() !== tenant.name) return;
+    if (!confirm(`Final warning: deleting "${tenant.name}" cannot be undone. Continue?`)) return;
+    startTransition(async () => {
+      const r = await deleteTenant(tenant.id);
+      setFeedback(r.success
+        ? { type: "success", message: `Tenant permanently deleted${r.data?.deletedAccounts ? ` (${r.data.deletedAccounts} user accounts removed)` : ""}.` }
+        : { type: "error", message: r.error ?? "Failed to delete tenant." });
+      loadData();
+    });
+  };
+
   const handleAssignLevel = (userId: string, role: string, tenantId?: string) => {
     startTransition(async () => {
       const r = await assignLevel(userId, role, tenantId);
@@ -115,7 +151,7 @@ export default function AdminDashboardPage() {
       </div>
 
       <Card><CardHeader><CardTitle className="flex items-center gap-2"><UserCog className="size-5 text-primary" /> All Users</CardTitle></CardHeader><CardContent>
-        <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b text-left"><th className="py-2 px-3 text-muted-foreground">Email</th><th className="py-2 px-3 text-muted-foreground">Level</th><th className="py-2 px-3 text-muted-foreground">Tenant</th><th className="py-2 px-3 text-muted-foreground">Plan</th><th className="py-2 px-3 text-muted-foreground">Status</th><th className="py-2 px-3 text-muted-foreground">Assign Level</th></tr></thead><tbody>
+        <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b text-left"><th className="py-2 px-3 text-muted-foreground">Email</th><th className="py-2 px-3 text-muted-foreground">Level</th><th className="py-2 px-3 text-muted-foreground">Tenant</th><th className="py-2 px-3 text-muted-foreground">Plan</th><th className="py-2 px-3 text-muted-foreground">Status</th><th className="py-2 px-3 text-muted-foreground">Assign Level</th><th className="py-2 px-3 text-muted-foreground">Delete</th></tr></thead><tbody>
         {users.map(u => (
           <tr key={u.user_id} className="border-b last:border-0">
             <td className="py-3 px-3 font-medium">{u.email}</td>
@@ -129,6 +165,9 @@ export default function AdminDashboardPage() {
             <td className="py-3 px-3">
               {u.is_trial && <Badge className="bg-blue-100 text-blue-700">Trial</Badge>}
               {!u.is_trial && <Badge className={statusColor(u.license_status)}>{u.license_status ?? "none"}</Badge>}
+            </td>
+            <td className="py-3 px-3">
+              <Button variant="ghost" size="sm" className="text-destructive" onClick={() => handleDeleteUser(u.user_id, u.email)}>Delete</Button>
             </td>
             <td className="py-3 px-3">
               {!u.tenant_id ? (
@@ -163,7 +202,7 @@ export default function AdminDashboardPage() {
           </tr>
         ))}
         {users.length === 0 && (
-          <tr><td colSpan={6} className="py-3 px-3 text-muted-foreground text-center">No users found.</td></tr>
+          <tr><td colSpan={7} className="py-3 px-3 text-muted-foreground text-center">No users found.</td></tr>
         )}
         </tbody></table></div>
       </CardContent></Card>
@@ -192,20 +231,24 @@ export default function AdminDashboardPage() {
             <td className="py-3 px-3"><Badge variant="outline">{l.plan_id}</Badge></td>
             <td className="py-3 px-3">{l.seats_used}/{l.seats_total}</td>
             <td className="py-3 px-3"><Badge className={statusColor(l.status)}>{l.status}</Badge></td>
-            <td className="py-3 px-3">{l.status === "active" && <Button variant="ghost" size="sm" className="text-destructive" onClick={() => startTransition(async () => { await revokeLicense(l.id); loadData(); })}>Revoke</Button>}</td>
+            <td className="py-3 px-3 flex gap-1">
+              {l.status === "active" && <Button variant="ghost" size="sm" onClick={() => startTransition(async () => { await revokeLicense(l.id); loadData(); })}>Revoke</Button>}
+              <Button variant="ghost" size="sm" className="text-destructive" onClick={() => handleDeleteLicense(l.id, l.license_key)}>Delete</Button>
+            </td>
           </tr>
         ))}
         </tbody></table></div>
       </CardContent></Card>
 
       <Card><CardHeader><CardTitle className="flex items-center gap-2"><Building2 className="size-5 text-primary" /> All Tenants</CardTitle></CardHeader><CardContent>
-        <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b text-left"><th className="py-2 px-3 text-muted-foreground">Name</th><th className="py-2 px-3 text-muted-foreground">Slug</th><th className="py-2 px-3 text-muted-foreground">Clients</th><th className="py-2 px-3 text-muted-foreground">Plan</th><th className="py-2 px-3 text-muted-foreground">Status</th><th className="py-2 px-3 text-muted-foreground">Joined</th></tr></thead><tbody>
+        <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b text-left"><th className="py-2 px-3 text-muted-foreground">Name</th><th className="py-2 px-3 text-muted-foreground">Slug</th><th className="py-2 px-3 text-muted-foreground">Clients</th><th className="py-2 px-3 text-muted-foreground">Plan</th><th className="py-2 px-3 text-muted-foreground">Status</th><th className="py-2 px-3 text-muted-foreground">Joined</th><th className="py-2 px-3 text-muted-foreground">Actions</th></tr></thead><tbody>
         {tenants.map(t => (
           <tr key={t.id} className="border-b last:border-0">
             <td className="py-3 px-3 font-medium">{t.name}</td><td className="py-3 px-3 text-muted-foreground">{t.slug}</td><td className="py-3 px-3">{t.client_count}</td>
             <td className="py-3 px-3"><Badge variant="outline">{t.plan_id ?? "-"}</Badge></td>
             <td className="py-3 px-3"><Badge className={statusColor(t.subscription_status)}>{t.subscription_status ?? "none"}</Badge></td>
             <td className="py-3 px-3 text-muted-foreground">{new Date(t.created_at).toLocaleDateString()}</td>
+            <td className="py-3 px-3"><Button variant="ghost" size="sm" className="text-destructive" onClick={() => handleDeleteTenant(t)}>Delete</Button></td>
           </tr>
         ))}
         </tbody></table></div>

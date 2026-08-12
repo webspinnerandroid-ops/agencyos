@@ -190,6 +190,12 @@ export async function POST(request: NextRequest) {
     }
 
     const { clientId, clientName, url } = body as any;
+    // Business location (optional) — lets the auditor qualify keywords,
+    // competitors and rankings for the right market instead of being generic.
+    const location =
+      typeof (body as any).location === "string"
+        ? (body as any).location.trim().slice(0, 120)
+        : "";
 
     let resolvedClientId: string | null = null;
 
@@ -270,13 +276,28 @@ export async function POST(request: NextRequest) {
     }
 
     const auditData = toAuditData(siteAudit);
+    if (location) {
+      (auditData as any).location = location;
+    }
 
     // ------------------------------------------------------------------
     // 4. Discover competitors (defensive)
     // ------------------------------------------------------------------
     let competitorData: any[] = [];
+    // Optional manual competitors from the form (up to 3) — they anchor the
+    // proposal so it isn't generic; discovered ones fill in the rest.
+    const manualCompetitors: string[] = Array.isArray((body as any).competitors)
+      ? (body as any).competitors
+          .filter((c: unknown): c is string => typeof c === "string")
+          .map((c: string) => {
+            const t = c.trim();
+            if (!t) return "";
+            return /^https?:\/\//.test(t) ? t : `https://${t}`;
+          })
+          .filter(Boolean)
+      : [];
     try {
-      const competitorUrls = await discoverCompetitors(
+      const discovered = await discoverCompetitors(
         new URL(siteAudit.url).hostname,
         tenantId,
         {
@@ -286,7 +307,16 @@ export async function POST(request: NextRequest) {
           overallScore: auditData.overallScore,
         }
       );
-      competitorData = await toCompetitorData(competitorUrls, {
+      // Manual first, then discovered, deduped — manual wins on tie.
+      const seen = new Set<string>();
+      const merged: string[] = [];
+      for (const u of [...manualCompetitors, ...discovered]) {
+        const norm = u.replace(/\/$/, "").toLowerCase();
+        if (seen.has(norm)) continue;
+        seen.add(norm);
+        merged.push(u);
+      }
+      competitorData = await toCompetitorData(merged, {
         url: siteAudit.url,
         homepageTitle: siteAudit?.homepage?.title,
         metaDescription: siteAudit?.homepage?.metaDescription,
@@ -335,7 +365,7 @@ export async function POST(request: NextRequest) {
       tiers
     );
 
-    const userPrompt = `Generate detailed SEO campaign plans for ${url}.
+    const userPrompt = `Generate detailed SEO campaign plans for ${url}.${location ? `\nThe business serves ${location} — tailor target keywords, competitor benchmarks, and any local-SEO strategy to that market (e.g. location-qualified keywords, Google Business Profile focus, local competitors).` : ""}
 The website audit revealed an overall score of ${auditData.overallScore}/100 with ${auditData.technicalIssues?.length ?? 0} technical issues and ${auditData.onPageIssues?.length ?? 0} on-page issues.
 Competitors include: ${competitorData.map((c: any) => c.competitorUrl).join(", ") || "none detected"}.
 
@@ -500,8 +530,9 @@ Create one campaign per tier that is realistic, actionable, and tailored to the 
             tier_price: campaign.tierPrice,
             status: "proposed",
             campaign_json: campaign,
-            audit_json: siteAudit,
+            audit_json: location ? { ...siteAudit, location } : siteAudit,
             competitors_json: competitorData,
+            location: location || null,
             created_by: userId,
           })
           .select("*")

@@ -23,8 +23,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Loader2, Copy, Check, Sparkles, FileText } from "lucide-react";
+import { Loader2, Copy, Check, Sparkles, FileText, Search, AlertTriangle } from "lucide-react";
 import PostContent from "@/components/BlogContent";
+import ScoreBadge from "@/components/ScoreBadge";
 
 // ------------------------------------------------------------------
 // Types
@@ -68,7 +69,16 @@ interface SocialPost {
 
 interface GenerateResponse {
   success: boolean;
-  blogPost: BlogPost;
+  blogPost: BlogPost & {
+    seo?: {
+      score: number;
+      grade: "red" | "yellow" | "green";
+      keyword: string;
+      wordCount: number;
+      checks: { id: string; label: string; category: string; maxPoints: number; earned: number; passed: boolean; detail: string }[];
+    };
+    research?: { questions: string[]; trends: string[]; source: "web" | "model" };
+  };
   socialPosts: SocialPost[];
 }
 
@@ -108,6 +118,7 @@ export default function GeneratePage() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<GenerateResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [keywordsText, setKeywordsText] = useState("");
   const { copied, copy } = useCopy();
 
   const {
@@ -118,6 +129,7 @@ export default function GeneratePage() {
   } = useForm<GenerateContentInput>({
     resolver: zodResolver(generateContentSchema),
     defaultValues: {
+      title: "",
       topic: "",
       brandVoice: "",
       platforms: ["instagram"],
@@ -145,6 +157,14 @@ export default function GeneratePage() {
   }, [clients.length, loadClients]);
 
   const onSubmit = async (data: GenerateContentInput) => {
+    const keywords = keywordsText
+      .split(",")
+      .map((k) => k.trim())
+      .filter(Boolean);
+    if (!data.title && !data.topic && keywords.length === 0) {
+      setError("Provide a title, keywords, or a topic to generate from.");
+      return;
+    }
     setLoading(true);
     setError(null);
     setResult(null);
@@ -154,7 +174,7 @@ export default function GeneratePage() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
+        body: JSON.stringify({ ...data, keywords }),
       });
 
       const json = await res.json();
@@ -189,14 +209,44 @@ export default function GeneratePage() {
             New Blog Post
           </CardTitle>
           <CardDescription>
-            Enter a topic and choose the social platforms to generate content for.
+            Give a title, keywords, or a topic — we research what people are asking first, then write the post to answer it.
           </CardDescription>
         </CardHeader>
         <form onSubmit={handleSubmit(onSubmit)}>
           <CardContent className="space-y-5">
-            {/* Topic */}
+            {/* Title OR keywords OR topic */}
             <div className="space-y-2">
-              <Label htmlFor="topic">Topic</Label>
+              <Label htmlFor="title">Title (optional)</Label>
+              <Input
+                id="title"
+                placeholder="e.g. Why Seasonal Coffee Menus Build Loyalty"
+                disabled={loading}
+                {...register("title")}
+              />
+              <p className="text-xs text-muted-foreground">
+                Have a page title in mind? We&apos;ll write the post to satisfy it.
+              </p>
+              {errors.title && (
+                <p className="text-sm text-destructive">{errors.title.message}</p>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="keywords">Keywords / Topics (optional)</Label>
+              <Input
+                id="keywords"
+                placeholder="seasonal coffee menu, coffee loyalty program, local roastery"
+                disabled={loading}
+                value={keywordsText}
+                onChange={(e) => setKeywordsText(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                Comma-separated. The first keyword is the focus keyword for SEO scoring.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="topic">Topic (optional)</Label>
               <Input
                 id="topic"
                 placeholder="Best social media strategies for 2026"
@@ -367,21 +417,81 @@ export default function GeneratePage() {
                     <span className="font-medium">
                       {result.blogPost.wordCount.toLocaleString()} words
                     </span>
-                    {result.blogPost.wordCount < 2500 && (
-                      <span className="text-amber-500 ml-1" title="Below 2500 word minimum">
-                        ⚠
-                      </span>
-                    )}
-                    {result.blogPost.wordCount >= 2500 && (
-                      <span className="text-green-500 ml-1" title="Meets 2500 word minimum">
-                        ✓
-                      </span>
-                    )}
                   </>
+                )}
+                {result.blogPost.seo && (
+                  <span className="mt-1 inline-block">
+                    <ScoreBadge score={result.blogPost.seo.score} />
+                  </span>
                 )}
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
+              {/* Research summary — what people are asking */}
+              {result.blogPost.research &&
+                (result.blogPost.research.questions.length > 0 ||
+                  result.blogPost.research.trends.length > 0) && (
+                  <div className="rounded-md border bg-muted/40 p-3">
+                    <div className="flex items-center gap-2 text-xs font-semibold mb-2">
+                      <Search className="size-3.5 text-primary" />
+                      Research: what people are asking
+                      <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded-full bg-background border">
+                        {result.blogPost.research.source === "web"
+                          ? "Live web search"
+                          : "Model knowledge (no web key)"}
+                      </span>
+                    </div>
+                    {result.blogPost.research.questions.length > 0 && (
+                      <ul className="space-y-1">
+                        {result.blogPost.research.questions.map((q, i) => (
+                          <li key={i} className="text-xs text-muted-foreground flex gap-1.5">
+                            <span className="text-primary">•</span>
+                            {q}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {result.blogPost.research.trends.length > 0 && (
+                      <p className="text-[11px] text-muted-foreground mt-2">
+                        <span className="font-medium text-foreground">Trends reflected: </span>
+                        {result.blogPost.research.trends.join(" · ")}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+              {/* SEO score checklist */}
+              {result.blogPost.seo && (
+                <details className="rounded-md border p-3">
+                  <summary className="text-xs font-semibold cursor-pointer flex items-center gap-2">
+                    <AlertTriangle className="size-3.5 text-amber-500" />
+                    On-page SEO score — {result.blogPost.seo.score}/100
+                    <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded-full bg-muted">
+                      focus keyword: “{result.blogPost.seo.keyword}”
+                    </span>
+                  </summary>
+                  <ul className="mt-2 space-y-1.5">
+                    {result.blogPost.seo.checks.map((c) => (
+                      <li
+                        key={c.id}
+                        className={`text-xs flex items-start gap-2 ${
+                          c.passed ? "text-muted-foreground" : "text-destructive"
+                        }`}
+                      >
+                        <span>{c.passed ? "✓" : "✗"}</span>
+                        <span>
+                          <span className="font-medium">{c.label}</span>
+                          <span className="block text-[11px] opacity-70">{c.detail}</span>
+                        </span>
+                        <span className="ml-auto shrink-0">
+                          {c.earned}/{c.maxPoints}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+
               <div>
                 <Label className="text-xs">Title</Label>
                 <h3 className="text-lg font-semibold mt-0.5">

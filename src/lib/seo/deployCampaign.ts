@@ -101,7 +101,7 @@ function getTierLevel(tierName: string): number {
   return TIER_LEVELS.default;
 }
 
-function getFrequency(tierName: string): number {
+export function getFrequency(tierName: string): number {
   const key = tierName.toLowerCase();
   // Partial match: "Bronze – Essentials" → "bronze", "Silver – Growth" → "silver"
   for (const tierKey of Object.keys(TIER_FREQUENCIES)) {

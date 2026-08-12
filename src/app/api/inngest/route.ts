@@ -6,6 +6,7 @@ import { monthlyBillingReset } from "@/lib/inngest/functions/monthlyBillingReset
 import { syncInboxes } from "@/lib/inngest/functions/syncInboxes";
 import { syncSocialInbox } from "@/lib/inngest/functions/syncSocialInbox";
 import { processSequences } from "@/lib/inngest/functions/processSequences";
+import { teamChatTask } from "@/lib/inngest/functions/teamChatTask";
 
 /**
  * Inngest API handler — serves all registered functions.
@@ -17,5 +18,5 @@ import { processSequences } from "@/lib/inngest/functions/processSequences";
  */
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [publishScheduledPosts, fetchAnalytics, monthlyBillingReset, syncInboxes, syncSocialInbox, processSequences],
+  functions: [publishScheduledPosts, fetchAnalytics, monthlyBillingReset, syncInboxes, syncSocialInbox, processSequences, teamChatTask],
 });

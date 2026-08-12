@@ -29,11 +29,17 @@ export default async function DashboardPage({ searchParams }: { searchParams?: P
     ? db.from("clients").select("id, name").eq("tenant_id", tenantId).order("name").limit(200)
     : Promise.resolve({ data: [] });
 
+  // Lightweight list query: posts carry megabytes of base64 image bodies, and
+  // dragging those through PostgREST made this page take 20+ seconds and fail
+  // intermittently. The list only needs title/type/platform — plain
+  // denormalized columns (see migration 021), never JSON-path projections
+  // into the content blob. The full body is lazy-loaded per post when the
+  // detail modal is opened (see recent-content).
   let postsQuery = db
     .from("posts")
-    .select("id, content, status, ai_generated, scheduled_at")
+    .select("id, status, ai_generated, scheduled_at, title, type, platform, seo_score")
     .eq("tenant_id", tenantId ?? "")
-    .order("scheduled_at", { ascending: false })
+    .order("created_at", { ascending: false })
     .limit(6);
 
   let auditsQuery = db
@@ -152,7 +158,11 @@ export default async function DashboardPage({ searchParams }: { searchParams?: P
         </form>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <a href="/dashboard/seo/campaigns" className="rounded-lg border bg-card p-6 hover:border-primary/50 transition-all">
+          <h3 className="font-semibold">Start a Campaign →</h3>
+          <p className="text-sm text-muted-foreground mt-1">Audit a site, pick a tier, launch an isolated campaign.</p>
+        </a>
         <a href="/dashboard/generate" className="rounded-lg border bg-card p-6 hover:border-primary/50 transition-all">
           <h3 className="font-semibold">Generate Content →</h3>
           <p className="text-sm text-muted-foreground mt-1">AI blog posts and captions.</p>

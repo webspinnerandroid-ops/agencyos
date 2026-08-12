@@ -1,6 +1,87 @@
 import Link from "next/link";
+import { createClient } from "@supabase/supabase-js";
 import { Button } from "@/components/ui/button";
+import MobileNav from "@/components/MobileNav";
+import ThemeToggle from "@/components/ThemeToggle";
+import ScreenshotSlideshow from "@/components/ScreenshotSlideshow";
 import { Check, ArrowRight, Zap, Users, Globe, Shield, Brain, Calendar } from "lucide-react";
+
+export const dynamic = "force-dynamic";
+
+/**
+ * Global hero-media setting (managed in Dashboard → Settings → Website /
+ * Landing Page): 'slideshow' (default) or an inline 'video' URL.
+ */
+async function getHeroMedia(): Promise<{ mode: string; videoUrl: string }> {
+  try {
+    const db = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!,
+      { auth: { autoRefreshToken: false, persistSession: false } }
+    );
+    const { data } = await db
+      .from("site_settings")
+      .select("hero_mode, hero_video_url")
+      .eq("id", 1)
+      .maybeSingle();
+    return {
+      mode: data?.hero_mode === "video" ? "video" : "slideshow",
+      videoUrl: data?.hero_video_url ?? "",
+    };
+  } catch {
+    return { mode: "slideshow", videoUrl: "" };
+  }
+}
+
+const productSlides = [
+  {
+    src: "/screenshots/slide-dashboard.png",
+    title: "Command Center",
+    description: "Every client, campaign, and recent activity in one dashboard — recent content, media, and SEO campaign status at a glance.",
+  },
+  {
+    src: "/screenshots/slide-generate.png",
+    title: "AI Content Studio",
+    description: "Brief a blog post and your AI team writes it end-to-end — SEO structure, relevant inline images, and internal links pulled from your client's knowledge base.",
+  },
+  {
+    src: "/screenshots/slide-images.png",
+    title: "Image Studio",
+    description: "Generate brand-consistent visuals on demand, then drop them straight into your posts and calendar.",
+  },
+  {
+    src: "/screenshots/slide-ai-team.png",
+    title: "Your AI Team",
+    description: "Eleven specialists — content, social, SEO, legal, performance, and more — each with their own tools, guidelines, and workspaces.",
+  },
+  {
+    src: "/screenshots/slide-chat.png",
+    title: "Team Chat",
+    description: "Talk to your project manager, get handed off to the right specialist, and watch work land in the thread — all in one chat.",
+  },
+  {
+    src: "/screenshots/slide-calendar.png",
+    title: "Content Calendar",
+    description: "Proposed campaigns, drafts, scheduled posts, and published content side by side — one view of everything your clients are getting.",
+  },
+  {
+    src: "/screenshots/slide-seo.png",
+    title: "SEO Audits & Proposals",
+    description: "Honest, estimate-labeled campaign proposals your clients can actually act on — no invented rankings or fake ROI.",
+  },
+];
+
+const landingNavSections = [
+  {
+    label: "Menu",
+    items: [
+      { href: "#features", label: "Features" },
+      { href: "#how-it-works", label: "How it works" },
+      { href: "#pricing", label: "Pricing" },
+      { href: "#faq", label: "FAQ" },
+    ],
+  },
+];
 
 const plans = [
   {
@@ -56,7 +137,9 @@ const faqs = [
   { q: "Can I white-label the portal for my clients?", a: "Yes. Each client gets a branded portal to review and approve content — no Agency OS branding required." },
 ];
 
-export default function LandingPage() {
+export default async function LandingPage() {
+  const hero = await getHeroMedia();
+
   return (
     <div className="min-h-screen bg-background">
       {/* Nav */}
@@ -73,6 +156,10 @@ export default function LandingPage() {
             <a href="#faq" className="text-sm text-muted-foreground hover:text-foreground transition-colors">FAQ</a>
           </div>
           <div className="flex items-center gap-4">
+            <div className="sm:hidden">
+              <MobileNav sections={landingNavSections} breakpointClass="sm:hidden" />
+            </div>
+            <ThemeToggle />
             <Link href="/login"><Button variant="ghost">Sign In</Button></Link>
             <Link href="/register"><Button>Get Started <ArrowRight className="size-4 ml-2" /></Button></Link>
           </div>
@@ -96,19 +183,31 @@ export default function LandingPage() {
         </div>
       </section>
 
-      {/* Product preview (placeholder — replace with real screenshots) */}
+      {/* Product tour — live screenshots */}
       <section className="pb-20">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="rounded-xl border bg-muted/30 p-8 text-center">
+          <div className="text-center mb-10">
             <div className="text-sm font-semibold text-muted-foreground uppercase tracking-widest mb-2">Product tour</div>
-            <h2 className="text-2xl font-bold">See Agency OS in action</h2>
-            <p className="mt-2 text-muted-foreground max-w-xl mx-auto">
-              [Replace this placeholder with a screenshot of your dashboard, content calendar, or generate page.]
+            <h2 className="text-3xl font-bold tracking-tight">See Agency OS in action</h2>
+            <p className="mt-3 text-muted-foreground max-w-xl mx-auto">
+              From campaign brief to published content — here&apos;s what your clients get.
             </p>
-            <div className="mt-6 mx-auto max-w-3xl aspect-video rounded-lg border-2 border-dashed flex items-center justify-center text-muted-foreground text-sm bg-background">
-              Screenshot placeholder — drop in your dashboard/calendar/generate view
-            </div>
           </div>
+          {hero.mode === "video" && hero.videoUrl ? (
+            <div className="overflow-hidden rounded-lg border bg-black shadow-sm aspect-video">
+              <video
+                src={hero.videoUrl}
+                controls
+                autoPlay
+                muted
+                loop
+                playsInline
+                className="w-full h-full object-cover"
+              />
+            </div>
+          ) : (
+            <ScreenshotSlideshow slides={productSlides} />
+          )}
         </div>
       </section>
 

@@ -1,0 +1,402 @@
+"use server";
+
+// ============================================================================
+// AI Team Chat — server actions + send pipeline.
+//
+// Phase 1 of the AI Team Chat:
+//   - A chat instance per (tenant, workspace, client, kind) — the Team Room
+//     where Malory dispatches, plus per-employee DMs.
+//   - Messages are authored by a user or an AI employee (employee_key), so the
+//     UI renders visible sender handoffs (Malory → Pam → Cheryl).
+//   - Malory (nina) dispatches: a structured call classifies the request and
+//     hands it to the right employee. Content requests go to Cheryl (penny),
+//     who runs the real blog pipeline (text + images + draft post) and replies
+//     with a link to the draft.
+//
+// All access goes through tenantScopedClient (tenant_id forced on write,
+// auto-filtered on read) + assertTenantOwner for by-id lookups.
+// ============================================================================
+
+import { getTenantId, requireRole } from "@/lib/auth";
+import { createServiceClient } from "@/lib/supabase/server";
+import {
+  tenantScopedClient,
+  assertTenantOwner,
+} from "@/lib/supabase/tenant-scope";
+import { getCurrentWorkspaceId } from "@/lib/workspace";
+import { EMPLOYEE_KEYS } from "@/lib/ai/employee-keys";
+import { inngest } from "@/lib/inngest/client";
+import {
+  enqueueOrRun,
+  processTeamTask,
+  type TeamTaskPayload,
+} from "@/lib/ai/team-task";
+
+// ----------------------------------------------------------------------------
+// Types
+// ----------------------------------------------------------------------------
+
+export interface TeamChat {
+  id: string;
+  tenant_id: string;
+  workspace_id: string | null;
+  client_id: string | null;
+  title: string;
+  kind: "team" | "employee" | "room";
+  employee_key: string | null;
+  created_at: string;
+}
+
+export interface TeamMessage {
+  id: string;
+  chat_id: string;
+  tenant_id: string;
+  role: "user" | "employee" | "system";
+  employee_key: string | null;
+  content: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface ActionResponse<T = void> {
+  success: boolean;
+  data?: T;
+  error?: string;
+}
+
+/** All known employee keys — defined in src/lib/ai/employee-keys.ts (client-safe). */
+// ----------------------------------------------------------------------------
+// Chat helpers
+// ----------------------------------------------------------------------------
+
+/** Get-or-create the Team Room for the current tenant + workspace. */
+export async function getOrCreateTeamChat(): Promise<ActionResponse<TeamChat>> {
+  try {
+    const tenantId = await getTenantId();
+    const supabase = tenantScopedClient(await createServiceClient(), tenantId);
+    const workspaceId = await getCurrentWorkspaceId();
+
+    const { data: existing } = await supabase
+      .from("team_chats")
+      .select("*")
+      .eq("workspace_id", workspaceId)
+      .eq("kind", "team")
+      .maybeSingle();
+    if (existing) return { success: true, data: existing as TeamChat };
+
+    const { data, error } = await supabase
+      .from("team_chats")
+      .insert({
+        workspace_id: workspaceId,
+        client_id: null,
+        title: "Team Room",
+        kind: "team",
+        employee_key: null,
+      })
+      .select("*")
+      .single();
+    if (error) throw new Error(error.message);
+    return { success: true, data: data as TeamChat };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+/** Get-or-create the DM chat with one employee for this tenant + workspace. */
+export async function getOrCreateEmployeeChat(
+  employeeKey: string
+): Promise<ActionResponse<TeamChat>> {
+  try {
+    const tenantId = await getTenantId();
+    const supabase = tenantScopedClient(await createServiceClient(), tenantId);
+    const workspaceId = await getCurrentWorkspaceId();
+
+    if (!(EMPLOYEE_KEYS as readonly string[]).includes(employeeKey)) {
+      return { success: false, error: `Unknown AI employee: ${employeeKey}` };
+    }
+
+    const { data: existing } = await supabase
+      .from("team_chats")
+      .select("*")
+      .eq("workspace_id", workspaceId)
+      .eq("kind", "employee")
+      .eq("employee_key", employeeKey)
+      .maybeSingle();
+    if (existing) return { success: true, data: existing as TeamChat };
+
+    const { data, error } = await supabase
+      .from("team_chats")
+      .insert({
+        workspace_id: workspaceId,
+        client_id: null,
+        title: employeeKey,
+        kind: "employee",
+        employee_key: employeeKey,
+      })
+      .select("*")
+      .single();
+    if (error) throw new Error(error.message);
+    return { success: true, data: data as TeamChat };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+/** List this tenant's chats (team room + DMs) for the current workspace. */
+export async function getChats(): Promise<ActionResponse<TeamChat[]>> {
+  try {
+    const tenantId = await getTenantId();
+    const supabase = tenantScopedClient(await createServiceClient(), tenantId);
+    const workspaceId = await getCurrentWorkspaceId();
+
+    const { data, error } = await supabase
+      .from("team_chats")
+      .select("*")
+      .eq("workspace_id", workspaceId)
+      .order("created_at");
+    if (error) throw new Error(error.message);
+    return { success: true, data: (data ?? []) as TeamChat[] };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+/** Load the messages of one chat (tenant-ownership enforced). */
+export async function getMessages(
+  chatId: string
+): Promise<ActionResponse<TeamMessage[]>> {
+  try {
+    const tenantId = await getTenantId();
+    const supabase = tenantScopedClient(await createServiceClient(), tenantId);
+
+    const { data: chat } = await supabase
+      .from("team_chats")
+      .select("*")
+      .eq("id", chatId)
+      .maybeSingle();
+    assertTenantOwner(chat as TeamChat | null, tenantId, "chat");
+
+    const { data, error } = await supabase
+      .from("team_messages")
+      .select("*")
+      .eq("chat_id", chatId)
+      .order("created_at");
+    if (error) throw new Error(error.message);
+    return { success: true, data: (data ?? []) as TeamMessage[] };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Workspace organization — chats are isolated per workspace (the unique
+// constraint on team_chats scopes them by workspace_id). Move lets the owner
+// relocate a chat to another workspace for per-client campaign organization.
+// ----------------------------------------------------------------------------
+
+/**
+ * Create a new named chat room in the current workspace. Rooms are unlimited
+ * per workspace (kind 'room') — the Team Room and DMs stay unique, but users
+ * can spin up topic/client-specific chats and revisit their history later.
+ */
+export async function createChatRoom(
+  title: string
+): Promise<ActionResponse<TeamChat>> {
+  try {
+    const tenantId = await getTenantId();
+    const supabase = tenantScopedClient(await createServiceClient(), tenantId);
+    const workspaceId = await getCurrentWorkspaceId();
+
+    const clean = title.trim().replace(/\s+/g, " ").slice(0, 80);
+    if (!clean) return { success: false, error: "Chat title is required" };
+
+    const { data, error } = await supabase
+      .from("team_chats")
+      .insert({
+        workspace_id: workspaceId,
+        client_id: null,
+        title: clean,
+        kind: "room",
+        employee_key: null,
+      })
+      .select("*")
+      .single();
+    if (error) throw new Error(error.message);
+    return { success: true, data: data as TeamChat };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+/** List the tenant's workspaces (for the chat move control). */
+export async function getTenantWorkspaces(): Promise<
+  ActionResponse<{ id: string; name: string }[]>
+> {
+  try {
+    const tenantId = await getTenantId();
+    const supabase = await createServiceClient();
+    const { data, error } = await supabase
+      .from("workspaces")
+      .select("id, name")
+      .eq("tenant_id", tenantId)
+      .order("name");
+    if (error) throw new Error(error.message);
+    return {
+      success: true,
+      data: (data ?? []) as { id: string; name: string }[],
+    };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+/**
+ * Move a chat (and all its messages, which reference chat_id) to another of
+ * the tenant's workspaces. Enforces tenant ownership on both sides and the
+ * unique (workspace, kind, employee) constraint in the destination.
+ */
+export async function moveChatToWorkspace(
+  chatId: string,
+  targetWorkspaceId: string
+): Promise<ActionResponse<TeamChat>> {
+  try {
+    const tenantId = await getTenantId();
+    await requireRole("agency_editor");
+    const supabase = tenantScopedClient(await createServiceClient(), tenantId);
+
+    // Load + verify the chat belongs to this tenant.
+    const { data: chat } = await supabase
+      .from("team_chats")
+      .select("*")
+      .eq("id", chatId)
+      .maybeSingle();
+    assertTenantOwner(chat as TeamChat | null, tenantId, "chat");
+    const room = chat as TeamChat;
+
+    if (targetWorkspaceId === room.workspace_id) {
+      return { success: false, error: "This chat is already in that workspace." };
+    }
+
+    // The target workspace must exist and belong to this tenant.
+    const { data: target } = await supabase
+      .from("workspaces")
+      .select("id")
+      .eq("id", targetWorkspaceId)
+      .eq("tenant_id", tenantId)
+      .maybeSingle();
+    if (!target) {
+      return { success: false, error: "Target workspace not found." };
+    }
+
+    // Destination must not already hold a chat with the same identity
+    // (tenant, workspace, client, kind, employee) — the unique constraints
+    // would reject the move anyway; fail with a helpful message instead.
+    // Rooms are exempt: unlimited named rooms may coexist in any workspace.
+    if (room.kind !== "room") {
+      const { data: conflict } = await supabase
+        .from("team_chats")
+        .select("id")
+        .eq("workspace_id", targetWorkspaceId)
+        .eq("kind", room.kind)
+        .eq("employee_key", room.employee_key)
+        .eq("client_id", room.client_id)
+        .maybeSingle();
+      if (conflict) {
+        return {
+          success: false,
+          error:
+            room.kind === "team"
+              ? "That workspace already has a Team Room."
+              : "That workspace already has a chat with this employee.",
+        };
+      }
+    }
+
+    const { data, error } = await supabase
+      .from("team_chats")
+      .update({ workspace_id: targetWorkspaceId })
+      .eq("id", chatId)
+      .select("*")
+      .single();
+    if (error) throw new Error(error.message);
+    return { success: true, data: data as TeamChat };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Malory dispatch — classify the request and hand it to the right employee.
+// ----------------------------------------------------------------------------
+
+// ----------------------------------------------------------------------------
+// sendChatMessage — enqueue the employee task and return immediately.
+//
+// The heavy pipeline (Malory dispatch → handoff → employee work → reply) runs
+// in the Inngest background worker (src/lib/ai/team-task.ts). This function
+// only authenticates, verifies the chat, inserts the user's message + a
+// "reviewing" status, and enqueues the task — the HTTP request returns in
+// milliseconds and the UI polls the thread for progress. When Inngest is not
+// configured (local dev), the same pipeline runs inline, fire-and-forget, so
+// the experience is identical either way.
+// ----------------------------------------------------------------------------
+
+export async function sendChatMessage(
+  chatId: string,
+  content: string
+): Promise<ActionResponse<{ messages: TeamMessage[]; taskId: string }>> {
+  try {
+    const tenantId = await getTenantId();
+    await requireRole("agency_editor");
+    const message = content.trim();
+    if (!message) return { success: false, error: "Message cannot be empty" };
+
+    const supabase = tenantScopedClient(await createServiceClient(), tenantId);
+    const { data: chat } = await supabase
+      .from("team_chats")
+      .select("*")
+      .eq("id", chatId)
+      .maybeSingle();
+    assertTenantOwner(chat as TeamChat | null, tenantId, "chat");
+    const room = chat as TeamChat;
+
+    const result = await enqueueOrRun({
+      chatId,
+      tenantId,
+      workspaceId: room.workspace_id,
+      content: message,
+      queue: async (payload: TeamTaskPayload) => {
+        // Production enqueues to the Inngest worker; dev runs the same
+        // pipeline inline (fire-and-forget) so the local server needs no
+        // deployed worker to receive the event.
+        if (process.env.NODE_ENV === "production" && process.env.INNGEST_EVENT_KEY) {
+          try {
+            await inngest.send({
+              name: "ai-team/employee-task",
+              data: payload,
+            });
+            return;
+          } catch (err) {
+            console.warn(
+              "[sendChatMessage] Inngest send failed — running task inline:",
+              err
+            );
+          }
+        }
+        // Same pipeline, but don't hold the request open: the UI polls the
+        // thread and sees each stage land live.
+        void processTeamTask(payload);
+      },
+    });
+    if (!result.success) return { success: false, error: result.error };
+    return {
+      success: true,
+      data: {
+        messages: result.messages ?? [],
+        taskId: result.taskId ?? "",
+      },
+    };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}

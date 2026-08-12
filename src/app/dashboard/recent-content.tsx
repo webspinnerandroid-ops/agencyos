@@ -1,44 +1,20 @@
 "use client";
 
 import { useState } from "react";
-import { FileText, MessageCircle, Clock, Trash2, X, ImageIcon } from "lucide-react";
+import { FileText, MessageCircle, Clock, Trash2 } from "lucide-react";
 import PublishButton from "@/components/PublishButton";
-import PostContent from "@/components/BlogContent";
+import PostDetailModal from "@/components/PostDetailModal";
+import ScoreBadge from "@/components/ScoreBadge";
+import { getPostPreview, getSeoScore, statusBadgeClass, type PostRow } from "@/lib/post-preview";
 
-interface Post {
-  id: string;
-  content: any;
-  status: string;
-  ai_generated?: boolean;
-  scheduled_at: string | null;
-  tier_level?: number | null;
-}
-
-function getPostPreview(post: Post) {
-  const c = typeof post.content === "string" ? JSON.parse(post.content) : post.content;
-  if (!c) return { title: "Untitled", type: "unknown", platform: "", body: "", suggestedImagePrompt: "" };
-  return {
-    title: c.title || c.caption?.substring(0, 80) || "Untitled",
-    type: c.type || "unknown",
-    platform: c.platform || "",
-    body: c.body || c.content || c.caption || "",
-    suggestedImagePrompt: c.suggestedImagePrompt || "",
-  };
-}
-
-const statusColors: Record<string, string> = {
-  draft: "bg-yellow-100 text-yellow-700 dark:bg-yellow-950 dark:text-yellow-300",
-  published: "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300",
-  scheduled: "bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300",
-  failed: "bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300",
-  pending_approval: "bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300",
-  approved: "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
-};
-
-export function RecentContentList({ posts: initialPosts }: { posts: Post[] }) {
-  const [posts, setPosts] = useState<Post[]>(initialPosts);
+export function RecentContentList({ posts: initialPosts }: { posts: PostRow[] }) {
+  const [posts, setPosts] = useState<PostRow[]>(initialPosts);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [selectedPost, setSelectedPost] = useState<Post | null>(null);
+  const [selectedPost, setSelectedPost] = useState<PostRow | null>(null);
+
+  // The dashboard list ships only lightweight fields (title/type/platform).
+  // The modal lazy-loads the full post (including the possibly megabytes-large
+  // body with embedded images) when opened.
 
   const handleDelete = async (postId: string) => {
     if (!confirm("Delete this post? This cannot be undone.")) return;
@@ -83,7 +59,7 @@ export function RecentContentList({ posts: initialPosts }: { posts: Post[] }) {
           <h2 className="text-xl font-semibold tracking-tight">Recent Content</h2>
           <span className="text-sm text-muted-foreground">{posts.length} post{posts.length !== 1 ? "s" : ""}</span>
         </div>
-        <a href="/dashboard/calendar" className="text-sm text-primary underline hover:underline">View all →</a>
+        <a href="/dashboard/posts" className="text-sm text-primary underline hover:underline">View all →</a>
       </div>
       <div className="rounded-lg border divide-y">
         {posts.map((post) => {
@@ -112,12 +88,15 @@ export function RecentContentList({ posts: initialPosts }: { posts: Post[] }) {
                         AI
                       </span>
                     )}
+                    {preview.type === "blog" && (
+                      <ScoreBadge score={getSeoScore(post)} />
+                    )}
                   </div>
                 </div>
               </div>
               <div className="flex items-center gap-3 shrink-0" onClick={(e) => e.stopPropagation()}>
                 <PublishButton postId={post.id} postType={preview.type as "blog" | "social"} />
-                <span className={`text-[10px] px-2 py-0.5 rounded-full capitalize ${statusColors[post.status] || "bg-gray-100 text-gray-600"}`}>
+                <span className={`text-[10px] px-2 py-0.5 rounded-full capitalize ${statusBadgeClass(post.status)}`}>
                   {post.status}
                 </span>
                 <span className="text-xs text-muted-foreground flex items-center gap-1">
@@ -145,139 +124,16 @@ export function RecentContentList({ posts: initialPosts }: { posts: Post[] }) {
         </div>
       </div>
 
-      {/* Detail Modal */}
+      {/* Detail Modal — lazy-loads the full post on open */}
       {selectedPost && (
-        <div
-          className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
-          onClick={() => setSelectedPost(null)}
-        >
-          <div
-            className="bg-card border rounded-lg w-full max-w-2xl max-h-[85vh] flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between p-4 border-b">
-              <h3 className="font-semibold tracking-tight">
-                {(() => { const p = getPostPreview(selectedPost); return p.title; })()}
-              </h3>
-              <button
-                onClick={() => setSelectedPost(null)}
-                className="p-1 rounded hover:bg-muted text-muted-foreground"
-                title="Close"
-              >
-                <X className="size-4" />
-              </button>
-            </div>
-            <div className="p-4 space-y-4 overflow-y-auto">
-              {/* Meta */}
-              <div className="flex flex-wrap gap-2 text-xs">
-                <span className={`px-2 py-0.5 rounded-full capitalize ${statusColors[selectedPost.status] || "bg-gray-100 text-gray-600"}`}>
-                  {selectedPost.status}
-                </span>
-                {(() => { const p = getPostPreview(selectedPost); return p.type && <span className="px-2 py-0.5 rounded-full bg-muted text-muted-foreground capitalize">{p.type}</span>; })()}
-                {selectedPost.ai_generated && (
-                  <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300">AI Generated</span>
-                )}
-                {selectedPost.tier_level != null && (
-                  <span className="px-2 py-0.5 rounded-full bg-muted text-muted-foreground">Tier {selectedPost.tier_level}</span>
-                )}
-              </div>
-
-              {/* Scheduled */}
-              {selectedPost.scheduled_at && (
-                <div className="text-xs text-muted-foreground">
-                  Scheduled: {new Date(selectedPost.scheduled_at).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short" })}
-                </div>
-              )}
-
-              {/* Content — blog bodies render as markdown so embedded images display */}
-              <div>
-                <h4 className="text-sm font-semibold mb-2">Content</h4>
-                <div className="text-sm text-muted-foreground bg-muted/50 rounded-md p-3 max-h-80 overflow-y-auto">
-                  {getPostPreview(selectedPost).type === "blog" &&
-                  getPostPreview(selectedPost).body ? (
-                    <PostContent
-                      content={getPostPreview(selectedPost).body}
-                      markdown
-                    />
-                  ) : (
-                    <div className="whitespace-pre-wrap">
-                      {getPostPreview(selectedPost).body ||
-                        JSON.stringify(selectedPost.content, null, 2) ||
-                        "No content"}
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Raw JSON toggle for debugging/advanced */}
-              <details>
-                <summary className="text-xs text-muted-foreground cursor-pointer hover:text-foreground">View raw data</summary>
-                <pre className="mt-2 text-[10px] bg-muted/40 rounded p-3 overflow-x-auto max-h-48">
-                  {JSON.stringify(selectedPost.content, null, 2)}
-                </pre>
-              </details>
-
-              {/* Generated images + suggested image prompt */}
-              {(() => {
-                const preview = getPostPreview(selectedPost);
-                const c =
-                  typeof selectedPost.content === "string"
-                    ? (() => { try { return JSON.parse(selectedPost.content); } catch { return null; } })()
-                    : selectedPost.content;
-                const images: { url: string; description?: string; placement?: string }[] =
-                  (c as Record<string, unknown>)?.images as never[] ?? [];
-                return (
-                  <>
-                    {images.length > 0 && (
-                      <div>
-                        <h4 className="text-sm font-semibold mb-2 flex items-center gap-1.5">
-                          <ImageIcon className="size-3.5" /> Generated Images ({images.length})
-                        </h4>
-                        <div className="grid gap-2 sm:grid-cols-2">
-                          {images.map((img, i) => (
-                            /* eslint-disable-next-line @next/next/no-img-element */
-                            <img
-                              key={i}
-                              src={img.url}
-                              alt={img.description || "Generated image"}
-                              className="w-full h-28 object-cover rounded-md border"
-                            />
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                    {preview.suggestedImagePrompt && (
-                      <div>
-                        <h4 className="text-sm font-semibold mb-2 flex items-center gap-1.5">
-                          <ImageIcon className="size-3.5" /> Suggested Image Prompt
-                        </h4>
-                        <p className="text-sm text-muted-foreground bg-purple-50 dark:bg-purple-950/50 rounded-md p-3 italic">
-                          {preview.suggestedImagePrompt}
-                        </p>
-                      </div>
-                    )}
-                  </>
-                );
-              })()}
-            </div>
-            <div className="p-4 border-t flex justify-end gap-2" onClick={(e) => e.stopPropagation()}>
-              <button
-                onClick={() => { const id = selectedPost.id; setSelectedPost(null); handleDelete(id); }}
-                disabled={deletingId === selectedPost.id}
-                className="px-3 py-1.5 text-sm rounded-md border border-red-200 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors"
-              >
-                Delete
-              </button>
-              <PublishButton postId={selectedPost.id} postType={getPostPreview(selectedPost).type as "blog" | "social"} />
-              <button
-                onClick={() => setSelectedPost(null)}
-                className="px-3 py-1.5 text-sm border rounded-md hover:bg-muted"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
+        <PostDetailModal
+          post={selectedPost}
+          onClose={() => setSelectedPost(null)}
+          onDeleted={(id) => {
+            setPosts((prev) => prev.filter((p) => p.id !== id));
+            setSelectedPost(null);
+          }}
+        />
       )}
     </div>
   );

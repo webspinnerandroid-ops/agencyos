@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import WorkspaceSelector from "@/components/WorkspaceSelector";
 import AccountMenu from "@/components/AccountMenu";
 import MobileNav from "@/components/MobileNav";
+import NavDropdown, { type NavSection } from "@/components/NavDropdown";
+import ThemeToggle from "@/components/ThemeToggle";
 import { getRole } from "@/lib/auth";
 
 /**
@@ -42,18 +44,36 @@ export default async function DashboardLayout({
     userEmail = cookieStore.get("x-user-email")?.value ?? "";
   } catch {}
 
-  const navItems = [
-    { href: "/dashboard", label: "Home" },
-    { href: "/dashboard/generate", label: "Generate" },
-    { href: "/dashboard/generate-images", label: "Images" },
-    { href: "/dashboard/seo", label: "SEO" },
-    { href: "/dashboard/calendar", label: "Calendar" },
-    { href: "/dashboard/workspaces", label: "Workspaces" },
-    { href: "/dashboard/settings/ai", label: "AI" },
-    { href: "/dashboard/settings", label: "Settings" },
-    { href: "/dashboard/billing", label: "Billing" },
-    { href: "/help", label: "Help" },
-    ...(isSuperAdmin ? [{ href: "/dashboard/admin", label: "Admin" }] : []),
+  const navSections: NavSection[] = [
+    {
+      label: "Work",
+      items: [
+        { href: "/dashboard", label: "Home" },
+        { href: "/dashboard/ai-team", label: "AI Team" },
+        { href: "/dashboard/generate", label: "Generate" },
+        { href: "/dashboard/generate-images", label: "Images" },
+      ],
+    },
+    {
+      label: "Plan",
+      items: [
+        { href: "/dashboard/seo", label: "SEO" },
+        { href: "/dashboard/calendar", label: "Calendar" },
+        { href: "/dashboard/workspaces", label: "Workspaces" },
+      ],
+    },
+    {
+      label: "Manage",
+      items: [
+        { href: "/dashboard/settings/ai", label: "AI" },
+        { href: "/dashboard/settings", label: "Settings" },
+        { href: "/dashboard/billing", label: "Billing" },
+        { href: "/help", label: "Help" },
+        ...(isSuperAdmin
+          ? [{ href: "/dashboard/admin", label: "Admin" }]
+          : []),
+      ],
+    },
   ];
 
   return (
@@ -69,18 +89,13 @@ export default async function DashboardLayout({
             </div>
           </div>
           <div className="flex items-center gap-2">
-            {/* Desktop nav */}
-            <nav className="hidden lg:flex items-center gap-1 text-xs sm:text-sm">
-              {navItems.map((item) => (
-                <a key={item.href} href={item.href} className="hover:text-primary px-2 py-1 rounded whitespace-nowrap">
-                  {item.label}
-                </a>
-              ))}
-            </nav>
-            {/* Mobile nav */}
+            {/* Desktop nav — grouped dropdowns */}
+            <NavDropdown sections={navSections} />
+            {/* Mobile nav — grouped drawer */}
             <div className="lg:hidden">
-              <MobileNav items={navItems} />
+              <MobileNav sections={navSections} />
             </div>
+            <ThemeToggle />
             <AccountMenu email={userEmail || "Account"} />
           </div>
         </div>

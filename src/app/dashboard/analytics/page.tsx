@@ -87,6 +87,7 @@ interface Client {
 
 interface AnalyticsResponse {
   posts: AnalyticsPost[];
+  workspaceId: string | null;
   summary: AnalyticsSummary;
 }
 
@@ -243,7 +244,8 @@ export default function AnalyticsPage() {
             Analytics
           </h1>
           <p className="text-muted-foreground mt-1">
-            Track post performance across all platforms.
+            Track post performance across all platforms
+            {data?.workspaceId ? " for the current workspace." : " across the whole tenant."}
           </p>
         </div>
         <Button

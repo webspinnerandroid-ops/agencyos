@@ -1,6 +1,7 @@
 import { inngest } from "@/lib/inngest/client";
 import { publishPost } from "@/lib/publishing/socialPublisher";
 import { createClient } from "@supabase/supabase-js";
+import { submitPostToIndexNow } from "@/lib/seo/indexnow";
 
 // ------------------------------------------------------------------
 // Service client for background jobs (no cookies / no request context)
@@ -85,6 +86,41 @@ export const publishScheduledPosts = inngest.createFunction(
                 .update({ status: "published" })
                 .eq("id", post.id)
                 .eq("tenant_id", post.tenant_id);
+
+              // Auto-indexer: fire-and-forget IndexNow + sitemap ping.
+              // Resolve the tenant's site URL for a correct canonical URL.
+              const { data: blogPlatform } = await supabase
+                .from("blog_platforms")
+                .select("site_url")
+                .eq("tenant_id", post.tenant_id)
+                .limit(1)
+                .maybeSingle();
+              const { data: publishedPost } = await supabase
+                .from("posts")
+                .select("content, client_id")
+                .eq("id", post.id)
+                .single();
+              let siteUrl = blogPlatform?.site_url ?? null;
+              if (!siteUrl && publishedPost?.client_id) {
+                const { data: client } = await supabase
+                  .from("clients")
+                  .select("website")
+                  .eq("id", publishedPost.client_id)
+                  .eq("tenant_id", post.tenant_id)
+                  .maybeSingle();
+                siteUrl = client?.website ?? null;
+              }
+              void submitPostToIndexNow({
+                tenantId: post.tenant_id,
+                siteUrl,
+                content: publishedPost?.content,
+              }).then((r) => {
+                if (r.ok) {
+                  console.log(`[indexnow] Submitted ${r.urls.join(", ")}`);
+                } else if (r.error) {
+                  console.warn(`[indexnow] Skipped: ${r.error}`);
+                }
+              });
             } else {
               // At least one platform failed — set post status to 'failed'
               const errorMessages = platformResults

@@ -9,8 +9,26 @@ import type { AITask } from "@/lib/ai/orchestrator";
 import { getCurrentWorkspaceId } from "@/lib/workspace";
 import { getDefaultBrandProfile } from "@/lib/brand-profile";
 import { buildBrandSystemPrompt } from "@/lib/brand-profile-utils";
-import { getWorkspaceKnowledgeContext } from "@/lib/knowledgebase";
+import {
+  getWorkspaceKnowledgeContext,
+  getWorkspaceLinkablePages,
+} from "@/lib/knowledgebase";
+import {
+  resolveInternalLinks,
+  buildInternalLinkContext,
+} from "@/lib/content-links";
 import { rateLimitRequest } from "@/lib/rate-limit";
+import { persistImageToStorage } from "@/lib/media/storage";
+import {
+  MAX_BLOG_IMAGES,
+  selectBlogImageSpecs,
+  injectImagesIntoBody,
+  extractImagePlaceholders,
+  type BlogImageSpec,
+  type GeneratedBlogImage,
+} from "@/lib/blog-images";
+import { scoreContent, type RankMathResult } from "@/lib/rankmath";
+import { researchTopic, type TopicResearch } from "@/lib/ai/research";
 
 // Known social platforms
 const VALID_PLATFORMS = [
@@ -30,6 +48,23 @@ const VALID_PLATFORMS = [
  *  - A full JSON object dump landing in the caption field
  * Returns a safe plain-text string, or "" if nothing usable remains.
  */
+/**
+ * True when a PostgREST error is a transient origin/gateway failure that's
+ * worth recovering from (Cloudflare 520/502/503 and friends). A 4xx is a
+ * real rejection — never retried.
+ */
+function isRetryableOriginError(error: unknown): boolean {
+  const err = (error ?? {}) as {
+    status?: number;
+    code?: string | number;
+    error_code?: number | string;
+    retryable?: boolean;
+  };
+  if (err.retryable === true) return true;
+  const status = err.status ?? Number(err.error_code ?? err.code);
+  return status === 520 || status === 502 || status === 503 || status >= 500;
+}
+
 function toPlainCaption(raw: unknown): string {
   if (typeof raw !== "string") return "";
   let text = raw.trim();
@@ -57,13 +92,6 @@ function toPlainCaption(raw: unknown): string {
   return text;
 }
 
-interface BlogImageSpec {
-  prompt: string;
-  placement: "featured" | "inline";
-  sectionTitle: string;
-  description: string;
-}
-
 interface BlogPostResult {
   title: string;
   slug: string;
@@ -74,17 +102,6 @@ interface BlogPostResult {
   suggestedImagePrompt?: string; // legacy fallback if model omits images
 }
 
-interface GeneratedBlogImage {
-  spec: BlogImageSpec;
-  url: string;
-}
-
-/**
- * Max images per post — cost guardrail. 1 featured + 1 per ~500 words, capped
- * so a very long post never burns unbounded image-generation budget.
- */
-const MAX_BLOG_IMAGES = 5;
-
 /**
  * Generates an image for each spec (capped), saves them to media_assets so
  * they appear in the images page history, and returns url + spec pairs.
@@ -94,7 +111,8 @@ const MAX_BLOG_IMAGES = 5;
 async function generateBlogImages(
   tenantId: string,
   clientId: string | null | undefined,
-  specs: BlogImageSpec[]
+  specs: BlogImageSpec[],
+  postTitle: string
 ): Promise<GeneratedBlogImage[]> {
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -103,7 +121,11 @@ async function generateBlogImages(
   );
 
   const workspaceId = await getCurrentWorkspaceId().catch(() => null);
-  const capped = specs.slice(0, MAX_BLOG_IMAGES);
+
+  // Cap + de-duplicate: at most MAX_BLOG_IMAGES total, never two images for
+  // the same section (that is what caused stacked images).
+  const capped = selectBlogImageSpecs(specs);
+
   const results: GeneratedBlogImage[] = [];
 
   await Promise.all(
@@ -118,15 +140,27 @@ async function generateBlogImages(
           clientId: clientId ?? undefined,
         });
 
-        const url = images[0]?.url;
-        if (!url) {
+        const rawUrl = images[0]?.url;
+        if (!rawUrl) {
           console.warn(
             `[generate-content] Image provider returned no image for "${spec.sectionTitle || "featured"}"`
           );
           return;
         }
 
+        // Persist to storage: Google Imagen returns ~2-3 MB base64 data-URLs,
+        // and embedding those raw in posts.content made every post megabytes
+        // large (8 MB posts, 50 MB image lists, gateway 520s). The body and
+        // media_assets now hold only the short public storage URL.
+        const url = await persistImageToStorage(tenantId, rawUrl);
+
         // Persist to media_assets so it lands in the images page history.
+        // The SEO payload (alt text + unique title) is what makes the asset
+        // Rank Math-friendly when it ships inside a page.
+        const altText =
+          spec.description && spec.description.trim().length > 0
+            ? spec.description.trim()
+            : `${postTitle}: ${spec.sectionTitle || "featured image"}`;
         const { error: assetErr } = await supabase.from("media_assets").insert({
           tenant_id: tenantId,
           client_id: clientId ?? null,
@@ -134,7 +168,17 @@ async function generateBlogImages(
           type: "image",
           prompt: spec.prompt,
           url,
-          metadata: { placement: spec.placement, sectionTitle: spec.sectionTitle },
+          alt_text: altText,
+          metadata: {
+            placement: spec.placement,
+            sectionTitle: spec.sectionTitle,
+            seo: {
+              altText,
+              // Page-unique image title: post title + section context.
+              title: `${postTitle}${spec.sectionTitle ? ` — ${spec.sectionTitle}` : " — featured"}`,
+              description: spec.description || spec.sectionTitle || postTitle,
+            },
+          },
           status: "completed",
         });
         if (assetErr) {
@@ -159,64 +203,6 @@ async function generateBlogImages(
   return results.sort((a, b) =>
     (a.spec.placement === "featured" ? 0 : 1) - (b.spec.placement === "featured" ? 0 : 1)
   );
-}
-
-/**
- * Replaces image placeholders (![alt](IMAGE_URL_N)) in the body with the real
- * generated URLs. Falls back to inserting right after the matching H2 heading
- * when the model didn't emit a placeholder.
- */
-function injectImagesIntoBody(
-  body: string,
-  images: GeneratedBlogImage[]
-): string {
-  let out = body;
-
-  images.forEach((img, index) => {
-    const alt = img.spec.description || img.spec.sectionTitle || "Image";
-    const markdown = `![${alt}](${img.url})`;
-
-    // 1. Replace an explicit placeholder (1-based like IMAGE_URL_1).
-    // Matches the whole ![alt](IMAGE_URL_N) so the alt text is preserved.
-    const placeholder = new RegExp(
-      `!\\[[^\\]]*\\]\\(\\s*IMAGE_URL_?${index + 1}\\s*\\)`,
-      "i"
-    );
-    if (placeholder.test(out)) {
-      out = out.replace(placeholder, markdown);
-      return;
-    }
-
-    // 2. Inline: insert right after its H2 section heading.
-    if (img.spec.placement === "inline" && img.spec.sectionTitle) {
-      const headingRe = new RegExp(
-        `(^|\\n)##\\s+${escapeRegExp(img.spec.sectionTitle)}(\\n|$)`,
-        "i"
-      );
-      if (headingRe.test(out)) {
-        out = out.replace(
-          headingRe,
-          `$1## ${img.spec.sectionTitle}$2${markdown}\n\n`
-        );
-        return;
-      }
-    }
-
-    // 3. Featured: prepend to the top of the body.
-    if (img.spec.placement === "featured") {
-      out = `${markdown}\n\n${out}`;
-      return;
-    }
-
-    // 4. Last resort: append at the end.
-    out = `${out}\n\n${markdown}`;
-  });
-
-  return out;
-}
-
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 interface SocialCaptionResult {
@@ -270,7 +256,33 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { clientId, topic, brandVoice, platforms } = parsed.data;
+    const { clientId, topic, brandVoice, platforms, title, keywords } =
+      parsed.data;
+
+    // The user may supply a title, keywords/topics, or both. "topic" is the
+    // primary working keyword the model writes around; when only a title is
+    // given, the title itself becomes the working topic.
+    const primaryKeyword =
+      (keywords ?? []).filter(Boolean)[0] ?? topic ?? title ?? "";
+    const workingTopic =
+      topic ??
+      (keywords ?? []).filter(Boolean).join(", ") ??
+      title ??
+      "";
+
+    // Research-first: search the web (Google-grounded when the platform key
+    // exists, otherwise a model-generated question set) so the content
+    // actually answers the questions people ask about the keywords/topic.
+    let research: TopicResearch | null = null;
+    try {
+      research = await researchTopic(tenantId, {
+        title: title ?? undefined,
+        topic: topic ?? undefined,
+        keywords: keywords ?? [],
+      });
+    } catch (err) {
+      console.warn("[generate-content] Research step failed:", err);
+    }
 
     // Validate that all requested platforms are known
     const invalidPlatforms = platforms.filter(
@@ -291,6 +303,9 @@ export async function POST(request: NextRequest) {
     // ------------------------------------------------------------------
     const workspaceId = await getCurrentWorkspaceId();
     let workspaceContext = "";
+    // Real pages from the knowledge base — the source of truth for internal
+    // links in the generated post (model markers are resolved against these).
+    let linkablePages: { title: string; url: string; text: string }[] = [];
 
     if (workspaceId) {
       try {
@@ -305,6 +320,8 @@ export async function POST(request: NextRequest) {
         if (kbContext) {
           workspaceContext += "\n\n" + kbContext;
         }
+
+        linkablePages = await getWorkspaceLinkablePages(workspaceId, tenantId);
       } catch (err) {
         console.warn("[generate-content] Could not load workspace context:", err);
       }
@@ -313,11 +330,17 @@ export async function POST(request: NextRequest) {
     // ------------------------------------------------------------------
     // 3. Generate the blog post (structured output)
     // ------------------------------------------------------------------
-    const blogSystemPrompt = getBlogPrompt(brandVoice, {
-      primaryKeyword: topic,
-    }) + workspaceContext;
+    const blogSystemPrompt =
+      getBlogPrompt(brandVoice, {
+        primaryKeyword: primaryKeyword,
+        internalLinks: buildInternalLinkContext(linkablePages),
+        research: research ?? undefined,
+        titleHint: title,
+      }) + workspaceContext;
 
-    const blogUserPrompt = `Write a comprehensive blog post about: "${topic}". ${
+    const blogUserPrompt = `Write a comprehensive blog post about: "${workingTopic}". ${
+      title ? `The page title the post must satisfy is: "${title}". Use it as the focus of the content.` : ""
+    }${keywords && keywords.length > 0 ? `Target keywords: ${keywords.join(", ")}.` : ""} ${
       brandVoice ? `Use this brand voice: ${brandVoice}.` : ""
     }`;
 
@@ -387,30 +410,91 @@ export async function POST(request: NextRequest) {
     // generate each image, save it to media_assets, and inject the real URLs
     // into the body. Failures are isolated per image — text content always
     // survives even if every image fails (e.g. no image API key configured).
-    const imageSpecs: BlogImageSpec[] =
-      blogPost.images && blogPost.images.length > 0
-        ? blogPost.images
-        : blogPost.suggestedImagePrompt
-          ? [
-              {
-                prompt: blogPost.suggestedImagePrompt,
-                placement: "featured" as const,
-                sectionTitle: "",
-                description: "Featured image for the post",
-              },
-            ]
-          : [];
+    //
+    // The model also embeds ![alt](IMAGE_URL_N) placeholder tokens in the
+    // body. If the structured `images` array is lost (a truncated JSON
+    // response where the repair salvages the body but drops the tail), the
+    // placeholders still tell us how many images belong and what each shows
+    // — derive the specs from them rather than silently generating nothing.
+    let imageSpecs: BlogImageSpec[] = Array.isArray(blogPost.images)
+      ? blogPost.images
+      : [];
+
+    const bodyPlaceholders = extractImagePlaceholders(blogPost.body);
+    if (imageSpecs.length === 0 && bodyPlaceholders.length > 0) {
+      console.warn(
+        `[generate-content] Model left ${bodyPlaceholders.length} IMAGE_URL placeholder(s) in the body but returned no image specs — deriving specs from the placeholders.`
+      );
+      imageSpecs = [
+        {
+          prompt: `Featured image for a blog post titled "${blogPost.title}" about: ${topic}. High quality, editorial, on-brand.`,
+          placement: "featured" as const,
+          sectionTitle: "",
+          description: `Featured image for ${blogPost.title}`,
+        },
+        ...bodyPlaceholders.map((ph) => ({
+          prompt: `Blog illustration for a post about "${topic}". ${ph.alt}. Detailed, on-brand, editorial quality.`,
+          placement: "inline" as const,
+          sectionTitle: "",
+          description: ph.alt || `Inline image ${ph.index}`,
+        })),
+      ];
+    }
+
+    // Legacy fallback: no specs and no placeholders but a suggested prompt.
+    if (imageSpecs.length === 0 && blogPost.suggestedImagePrompt) {
+      imageSpecs = [
+        {
+          prompt: blogPost.suggestedImagePrompt,
+          placement: "featured" as const,
+          sectionTitle: "",
+          description: "Featured image for the post",
+        },
+      ];
+    }
 
     const generatedImages = await generateBlogImages(
       tenantId,
       clientId,
-      imageSpecs
+      imageSpecs,
+      blogPost.title
     );
 
-    const bodyWithImages = injectImagesIntoBody(
-      blogPost.body,
-      generatedImages
+    const bodyWithImages = resolveInternalLinks(
+      injectImagesIntoBody(blogPost.body, generatedImages),
+      linkablePages
     );
+
+    // ------------------------------------------------------------------
+    // 3.75. On-page SEO score (Rank Math-style) — stored with the post and
+    // displayed in Recent Content. The keyword used is the primary keyword;
+    // internal links are judged against the workspace knowledge base, so the
+    // score reflects reality (not the model's opinion).
+    // ------------------------------------------------------------------
+    const seoScore = scoreContent({
+      title: blogPost.title,
+      metaDescription: blogPost.metaDescription,
+      slug: blogPost.slug,
+      body: bodyWithImages,
+      keyword: primaryKeyword,
+      internalUrls: linkablePages.map((p) => p.url),
+    });
+    const seoPayload = {
+      score: seoScore.total,
+      grade: seoScore.grade,
+      keyword: seoScore.keyword,
+      wordCount: seoScore.wordCount,
+      checks: seoScore.checks,
+    };
+
+    // Safety net: if the body still mentions IMAGE_URL tokens the image
+    // pipeline didn't produce enough images — flag it loudly so it's never
+    // silently shipped to a published post.
+    if (/IMAGE_URL_?\d+/i.test(bodyWithImages)) {
+      console.warn(
+        `[generate-content] ${(bodyWithImages.match(/IMAGE_URL_?\d+/gi) || []).length} IMAGE_URL token(s) survived injection — they were stripped from the saved post.`
+      );
+    }
 
     // ------------------------------------------------------------------
     // 4. Generate social captions in parallel for each platform
@@ -522,36 +606,73 @@ Use the above context to craft a compelling, platform-optimized caption that dri
       { auth: { autoRefreshToken: false, persistSession: false } }
     );
 
-    // Insert the blog post
-    const { data: blogPostRow, error: blogError } = await supabase
-      .from("posts")
-      .insert({
-        tenant_id: tenantId,
-        client_id: clientId ?? null,
-        content: {
-          type: "blog",
-          title: blogPost.title,
-          slug: blogPost.slug,
-          metaDescription: blogPost.metaDescription,
-          headings: blogPost.headings,
-          body: bodyWithImages,
-          images: generatedImages.map((img) => ({
-            url: img.url,
-            prompt: img.spec.prompt,
-            placement: img.spec.placement,
-            sectionTitle: img.spec.sectionTitle,
-            description: img.spec.description,
-          })),
-          suggestedImagePrompt: blogPost.suggestedImagePrompt ?? "",
-          topic,
-          brandVoice,
-        },
-        status: "draft",
-        created_by: userId,
-        ai_generated: true,
-      })
-      .select("*")
-      .single();
+    // Insert the blog post. Never echo the row back (`.select("*")`) — the
+    // body carries megabytes of base64 images, and echoing it through the
+    // Supabase Cloudflare edge reliably triggers 520 origin errors. We only
+    // need the id, so request that alone. If the insert still fails with a
+    // retryable origin error, re-check by slug first: a 520 can mean the row
+    // actually committed but the response was lost, and a blind retry would
+    // create a duplicate post.
+    const blogInsert = () =>
+      supabase
+        .from("posts")
+        .insert({
+          tenant_id: tenantId,
+          client_id: clientId ?? null,
+          content: {
+            type: "blog",
+            title: blogPost.title,
+            slug: blogPost.slug,
+            metaDescription: blogPost.metaDescription,
+            headings: blogPost.headings,
+            body: bodyWithImages,
+            images: generatedImages.map((img) => ({
+              url: img.url,
+              prompt: img.spec.prompt,
+              placement: img.spec.placement,
+              sectionTitle: img.spec.sectionTitle,
+              description: img.spec.description,
+            })),
+            suggestedImagePrompt: blogPost.suggestedImagePrompt ?? "",
+            topic,
+            brandVoice,
+            research: research
+              ? { questions: research.questions, trends: research.trends, source: research.source }
+              : null,
+            seo: seoPayload,
+          },
+          status: "draft",
+          created_by: userId,
+          ai_generated: true,
+        })
+        .select("id")
+        .single();
+
+    let { data: blogPostRow, error: blogError } = await blogInsert();
+
+    if (blogError && isRetryableOriginError(blogError)) {
+      console.warn(
+        "[generate-content] Blog insert hit retryable origin error — checking for a committed row before retrying:",
+        (blogError as { status?: number; error_code?: string | number }).status ??
+          (blogError as { status?: number; error_code?: string | number }).error_code
+      );
+      // 520s can be responses lost after a successful commit. Look the row up
+      // by tenant+slug; if it exists, the insert actually went through.
+      const { data: existing } = await supabase
+        .from("posts")
+        .select("id")
+        .eq("tenant_id", tenantId)
+        .eq("content->>slug", blogPost.slug)
+        .maybeSingle();
+      if (existing) {
+        blogPostRow = existing;
+        blogError = null;
+      } else {
+        const retried = await blogInsert();
+        blogPostRow = retried.data;
+        blogError = retried.error;
+      }
+    }
 
     if (blogError) {
       console.error("[generate-content] Error saving blog post:", blogError);
@@ -560,6 +681,14 @@ Use the above context to craft a compelling, platform-optimized caption that dri
         { status: 500 }
       );
     }
+    if (!blogPostRow) {
+      console.error("[generate-content] Blog insert returned no row.");
+      return NextResponse.json(
+        { error: "Failed to save blog post" },
+        { status: 500 }
+      );
+    }
+    const blogPostId = blogPostRow.id;
 
     // Insert social posts
     const socialPostRows: unknown[] = [];
@@ -577,13 +706,13 @@ Use the above context to craft a compelling, platform-optimized caption that dri
             firstComment: caption.firstComment,
             contentWarnings: caption.contentWarnings,
             suggestedImageDescription: caption.suggestedImageDescription,
-            blogPostId: blogPostRow.id,
+            blogPostId,
           },
           status: "draft",
           created_by: userId,
           ai_generated: true,
         })
-        .select("*")
+        .select("id")
         .single();
 
       if (socialError) {
@@ -632,7 +761,7 @@ Use the above context to craft a compelling, platform-optimized caption that dri
     return NextResponse.json({
       success: true,
       blogPost: {
-        id: blogPostRow.id,
+        id: blogPostId,
         title: blogPost.title,
         slug: blogPost.slug,
         metaDescription: blogPost.metaDescription,
@@ -647,7 +776,11 @@ Use the above context to craft a compelling, platform-optimized caption that dri
           description: img.spec.description,
         })),
         suggestedImagePrompt: blogPost.suggestedImagePrompt ?? "",
-        status: blogPostRow.status,
+        status: "draft",
+        seo: seoPayload,
+        research: research
+          ? { questions: research.questions, trends: research.trends, source: research.source }
+          : null,
       },
       socialPosts: socialResults.map(({ platform, caption }, index) => ({
         platform,

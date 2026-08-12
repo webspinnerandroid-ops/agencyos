@@ -1,3 +1,4 @@
+import { notFound } from "next/navigation";
 import { createServiceClient } from "@/lib/supabase/server";
 import { renderBlockHtml, CMS_STYLES, type CmsBlock } from "@/lib/cms";
 
@@ -18,12 +19,7 @@ export default async function SitePage({ params }: { params: Promise<{ slug: str
     .maybeSingle();
 
   if (error || !page) {
-    return (
-      <div style={{ fontFamily: "system-ui, sans-serif", padding: 60, textAlign: "center", color: "#666" }}>
-        <h1>Page not found</h1>
-        <p>This page does not exist or has not been published yet.</p>
-      </div>
-    );
+    notFound();
   }
 
   const blocks = (Array.isArray(page.blocks) ? page.blocks : []) as CmsBlock[];

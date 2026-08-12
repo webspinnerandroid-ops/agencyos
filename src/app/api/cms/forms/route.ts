@@ -34,9 +34,15 @@ export async function POST(request: NextRequest) {
         .maybeSingle();
       tenantId = page?.tenant_id ?? null;
     }
+    if (!tenantId) {
+      return NextResponse.json(
+        { error: "This form is not connected to a published page." },
+        { status: 400 }
+      );
+    }
 
     const { error } = await supabase.from("cms_form_submissions").insert({
-      tenant_id: tenantId ?? "00000000-0000-0000-0000-000000000000", // orphan fallback
+      tenant_id: tenantId,
       page_id: pageId || null,
       block_id: blockId || null,
       fields,

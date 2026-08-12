@@ -234,6 +234,15 @@ export async function createVideoAsset(
   prompt: string,
   options?: CreateVideoOptions
 ): Promise<MediaAsset> {
+  // The metadata written at insert carries mode + modelIdentifier; later
+  // provider updates must MERGE into it, never replace it, or the mode/model
+  // chips in the library silently vanish.
+  const baseMetadata: Record<string, unknown> = {
+    mode: options?.mode ?? (options?.imageUrl ? "i2v" : "t2v"),
+    ...(options?.modelIdentifier ? { modelIdentifier: options.modelIdentifier } : {}),
+    requestedAt: new Date().toISOString(),
+  };
+
   const asset = await insertAsset({
     tenantId,
     clientId: options?.clientId,
@@ -241,11 +250,7 @@ export async function createVideoAsset(
     model: options?.modelIdentifier ?? options?.modelId ?? undefined,
     prompt,
     tags: options?.tags,
-    metadata: {
-      mode: options?.mode ?? (options?.imageUrl ? "i2v" : "t2v"),
-      ...(options?.modelIdentifier ? { modelIdentifier: options.modelIdentifier } : {}),
-      requestedAt: new Date().toISOString(),
-    },
+    metadata: baseMetadata,
     status: "processing",
   });
 
@@ -264,48 +269,37 @@ export async function createVideoAsset(
       // Provider URLs (fal/Wan/Runway) expire — persist to Bunny so the
       // library keeps playing forever instead of showing 0:00.
       const url = await persistVideoToStorage(tenantId, result.videoUrl);
-      await completeAsset(asset.id, {
-        url,
-        metadata: {
-          providerId: result.id,
-          estimatedSeconds: result.estimatedSeconds,
-          generatedAt: new Date().toISOString(),
-        },
-      });
+      const metadata = {
+        ...baseMetadata,
+        providerId: result.id,
+        estimatedSeconds: result.estimatedSeconds,
+        generatedAt: new Date().toISOString(),
+      };
+      await completeAsset(asset.id, { url, metadata });
       return {
         ...asset,
         url,
         status: "completed",
-        metadata: {
-          providerId: result.id,
-          estimatedSeconds: result.estimatedSeconds,
-          generatedAt: new Date().toISOString(),
-        },
+        metadata,
       };
     }
 
     // Still processing — update metadata with provider ID so caller can poll
     const supabase = getServiceSupabase();
+    const metadata = {
+      ...baseMetadata,
+      providerId: result.id,
+      estimatedSeconds: result.estimatedSeconds,
+    };
     await supabase
       .from("media_assets")
-      .update({
-        provider: result.id,
-        metadata: {
-          providerId: result.id,
-          estimatedSeconds: result.estimatedSeconds,
-          requestedAt: new Date().toISOString(),
-        },
-      })
+      .update({ provider: result.id, metadata })
       .eq("id", asset.id);
 
     return {
       ...asset,
       provider: result.id,
-      metadata: {
-        providerId: result.id,
-        estimatedSeconds: result.estimatedSeconds,
-        requestedAt: new Date().toISOString(),
-      },
+      metadata,
     };
   } catch (err: any) {
     await failAsset(asset.id, err.message ?? "Unknown error");

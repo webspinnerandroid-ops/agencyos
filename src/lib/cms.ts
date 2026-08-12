@@ -360,6 +360,9 @@ export const CMS_HEADER_FOOTER_STYLES = `
 .cms-site-header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 .cms-site-name{font-weight:700}
 .cms-site-tagline{font-size:.9rem;opacity:.8}
+.cms-site-nav{display:flex;gap:18px;list-style:none;margin:0;padding:0;flex-wrap:wrap;align-items:center}
+.cms-site-nav a{text-decoration:none;font-size:.95rem;font-weight:500}
+.cms-site-nav a:hover{text-decoration:underline}
 .cms-nav-links{display:flex;gap:16px;list-style:none;margin:0;padding:0}
 .cms-nav-links a{text-decoration:none;font-size:.95rem}
 .cms-archive{list-style:none;margin:0;padding:0}

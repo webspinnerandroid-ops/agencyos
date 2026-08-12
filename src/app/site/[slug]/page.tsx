@@ -37,7 +37,7 @@ export default async function SitePage({ params }: { params: Promise<{ slug: str
   // no row exists yet.
   const { data: site } = await supabase
     .from("cms_site_settings")
-    .select("site_name, tagline, header_blocks, footer_blocks, global_css, theme_preset")
+    .select("site_name, tagline, header_blocks, footer_blocks, site_nav, global_css, theme_preset")
     .eq("tenant_id", page.tenant_id)
     .maybeSingle();
 
@@ -48,6 +48,13 @@ export default async function SitePage({ params }: { params: Promise<{ slug: str
 
   const headerBlocks = (Array.isArray(site?.header_blocks) ? site.header_blocks : []) as CmsBlock[];
   const footerBlocks = (Array.isArray(site?.footer_blocks) ? site.footer_blocks : []) as CmsBlock[];
+  // Site menu (ordered nav links set in the Web Builder's Site Settings).
+  const siteNav = (Array.isArray(site?.site_nav) ? site.site_nav : []).filter(
+    (n): n is { label: string; href: string } =>
+      !!n && typeof n.label === "string" && !!n.label && typeof n.href === "string" && !!n.href
+  );
+  const navHref = (href: string) =>
+    /^https?:\/\//.test(href) ? href : `/site/${href.replace(/^\/site\//, "")}`;
 
   const renderBlocks = (blocks: CmsBlock[]) =>
     blocks.map((b) => renderBlockHtml(b, page.id)).join("\n");
@@ -83,6 +90,13 @@ export default async function SitePage({ params }: { params: Promise<{ slug: str
             <span className="cms-site-name">{siteName}</span>
             {tagline && <span className="cms-site-tagline"> — {tagline}</span>}
           </div>
+          {siteNav.length > 0 && (
+            <nav className="cms-site-nav" aria-label="Site navigation">
+              {siteNav.map((item, i) => (
+                <a key={i} href={navHref(item.href)}>{item.label}</a>
+              ))}
+            </nav>
+          )}
           {headerBlocks.length > 0 && (
             <div dangerouslySetInnerHTML={{ __html: renderBlocks(headerBlocks) }} />
           )}

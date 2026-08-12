@@ -3,9 +3,9 @@ import WorkspaceSelector from "@/components/WorkspaceSelector";
 import AccountMenu from "@/components/AccountMenu";
 import MobileNav from "@/components/MobileNav";
 import NavDropdown, { type NavSection } from "@/components/NavDropdown";
-import { buildNavSections } from "@/lib/nav-sections";
+import { getNavSections } from "@/lib/nav-config";
 import ThemeToggle from "@/components/ThemeToggle";
-import { getRole } from "@/lib/auth";
+import { getRole, getTenantId } from "@/lib/auth";
 
 /**
  * Dynamic metadata for the dashboard shell.
@@ -45,7 +45,15 @@ export default async function DashboardLayout({
     userEmail = cookieStore.get("x-user-email")?.value ?? "";
   } catch {}
 
-  const navSections: NavSection[] = buildNavSections(isSuperAdmin);
+  // Tenant-customizable navigation (super admin Menu Builder) — falls back
+  // to the built-in default when the tenant has no saved config.
+  let tenantId: string | null = null;
+  try {
+    tenantId = await getTenantId();
+  } catch {
+    // no tenant cookie yet — default nav
+  }
+  const navSections: NavSection[] = await getNavSections(tenantId, isSuperAdmin);
 
   return (
     <div className="min-h-screen bg-background">

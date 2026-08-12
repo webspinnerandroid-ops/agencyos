@@ -7,9 +7,12 @@ export const generateContentSchema = z
     // from whichever is given (research runs first either way).
     title: z.string().min(5, "Title must be at least 5 characters").optional(),
     topic: z.string().min(5, "Topic must be at least 5 characters").optional(),
-    keywords: z.array(z.string().min(2)).min(1).optional(),
+    keywords: z.array(z.string().min(1)).optional(),
     brandVoice: z.string().optional(),
-    platforms: z.array(z.string()).min(1, "Select at least one platform"),
+    // Social platforms are OPTIONAL — a blog-only generation (no social
+    // captions) is a supported and common case, so an empty/absent list must
+    // not fail validation. The blog post is always generated.
+    platforms: z.array(z.string()).optional(),
   })
   .refine(
     (v) =>

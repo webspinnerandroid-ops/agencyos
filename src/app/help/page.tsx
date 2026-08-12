@@ -3,8 +3,8 @@ import { Bot, CircleHelp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import NavDropdown from "@/components/NavDropdown";
 import MobileNav from "@/components/MobileNav";
-import { buildNavSections } from "@/lib/nav-sections";
-import { getRole, getUserEmail } from "@/lib/auth";
+import { getNavSections } from "@/lib/nav-config";
+import { getRole, getUserEmail, getTenantId } from "@/lib/auth";
 import HelpContent from "./HelpContent";
 
 export const dynamic = "force-dynamic";
@@ -30,6 +30,13 @@ export default async function HelpPage() {
   } catch {
     // ignore
   }
+  let tenantId: string | null = null;
+  try {
+    tenantId = await getTenantId();
+  } catch {
+    // anonymous — no tenant
+  }
+  const navSections = loggedIn ? await getNavSections(tenantId, isSuperAdmin) : [];
 
   return (
     <div className="min-h-screen bg-background">
@@ -54,9 +61,9 @@ export default async function HelpPage() {
           <div className="flex items-center gap-2">
             {loggedIn ? (
               <>
-                <NavDropdown sections={buildNavSections(isSuperAdmin)} />
+                <NavDropdown sections={navSections} />
                 <div className="lg:hidden">
-                  <MobileNav sections={buildNavSections(isSuperAdmin)} />
+                  <MobileNav sections={navSections} />
                 </div>
                 {email && (
                   <span className="hidden md:inline text-xs text-muted-foreground max-w-[160px] truncate">

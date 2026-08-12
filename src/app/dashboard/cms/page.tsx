@@ -78,6 +78,7 @@ export default function CmsPage() {
     tagline: string;
     header_text: string;
     footer_text: string;
+    site_nav: { label: string; href: string }[];
     global_css: string;
     theme_preset: string;
   }>({
@@ -85,6 +86,7 @@ export default function CmsPage() {
     tagline: "",
     header_text: "",
     footer_text: "",
+    site_nav: [],
     global_css: "",
     theme_preset: "clean",
   });
@@ -389,6 +391,9 @@ export default function CmsPage() {
           tagline: s.tagline ?? "",
           header_text: headerBlocks.map((b) => b.content ?? "").join("\n\n"),
           footer_text: footerBlocks.map((b) => b.content ?? "").join("\n\n"),
+          site_nav: Array.isArray(s.site_nav)
+            ? (s.site_nav as { label: string; href: string }[]).filter((n) => n && n.label && n.href)
+            : [],
           global_css: s.global_css ?? "",
           theme_preset: s.theme_preset ?? "clean",
         });
@@ -421,6 +426,7 @@ export default function CmsPage() {
           tagline: settings.tagline,
           header_blocks: toBlock(settings.header_text),
           footer_blocks: toBlock(settings.footer_text),
+          site_nav: settings.site_nav,
           global_css: settings.global_css,
           theme_preset: settings.theme_preset,
         }),
@@ -1107,6 +1113,111 @@ export default function CmsPage() {
                 placeholder={"e.g. [Home](/site/home)  [Services](/site/services)  [Contact](/site/contact)"}
                 className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono"
               />
+            </div>
+
+            {/* Site menu — ordered navigation links shown in the header */}
+            <div>
+              <Label>Menu (shown in the site header, in order)</Label>
+              <p className="text-xs text-muted-foreground mt-0.5 mb-2">
+                Point each item at a page (<span className="font-mono">/site/&lt;slug&gt;</span>) or an external URL. Reorder with the arrows.
+              </p>
+              <datalist id="site-page-slugs">
+                {pages.map((p) => (
+                  <option key={p.id} value={`/site/${p.slug}`} />
+                ))}
+              </datalist>
+              <div className="space-y-2">
+                {settings.site_nav.map((item, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <span className="text-xs text-muted-foreground w-5 text-right">{i + 1}.</span>
+                    <Input
+                      value={item.label}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          site_nav: settings.site_nav.map((n, j) => (j === i ? { ...n, label: e.target.value } : n)),
+                        })
+                      }
+                      placeholder="Label"
+                      className="w-40"
+                    />
+                    <Input
+                      value={item.href}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          site_nav: settings.site_nav.map((n, j) => (j === i ? { ...n, href: e.target.value } : n)),
+                        })
+                      }
+                      placeholder="/site/home or https://…"
+                      list="site-page-slugs"
+                      className="flex-1 font-mono text-xs"
+                    />
+                    <button
+                      disabled={i === 0}
+                      onClick={() =>
+                        setSettings({
+                          ...settings,
+                          site_nav: settings.site_nav.map((n, j) =>
+                            j === i - 1
+                              ? settings.site_nav[i]
+                              : j === i
+                              ? settings.site_nav[i - 1]
+                              : n
+                          ),
+                        })
+                      }
+                      className="p-1 rounded hover:bg-muted disabled:opacity-30"
+                      title="Move up"
+                    >
+                      <ChevronUp className="size-3.5" />
+                    </button>
+                    <button
+                      disabled={i === settings.site_nav.length - 1}
+                      onClick={() =>
+                        setSettings({
+                          ...settings,
+                          site_nav: settings.site_nav.map((n, j) =>
+                            j === i + 1
+                              ? settings.site_nav[i]
+                              : j === i
+                              ? settings.site_nav[i + 1]
+                              : n
+                          ),
+                        })
+                      }
+                      className="p-1 rounded hover:bg-muted disabled:opacity-30"
+                      title="Move down"
+                    >
+                      <ChevronDown className="size-3.5" />
+                    </button>
+                    <button
+                      onClick={() =>
+                        setSettings({
+                          ...settings,
+                          site_nav: settings.site_nav.filter((_, j) => j !== i),
+                        })
+                      }
+                      className="p-1 rounded hover:bg-red-100 dark:hover:bg-red-900 text-red-500"
+                      title="Remove"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
+                  </div>
+                ))}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    setSettings({
+                      ...settings,
+                      site_nav: [...settings.site_nav, { label: "New link", href: "/site/home" }],
+                    })
+                  }
+                >
+                  <Plus className="size-3.5 mr-1" /> Add menu item
+                </Button>
+              </div>
             </div>
 
             <div>

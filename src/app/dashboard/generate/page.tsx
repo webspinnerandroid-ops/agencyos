@@ -132,7 +132,8 @@ export default function GeneratePage() {
       title: "",
       topic: "",
       brandVoice: "",
-      platforms: ["instagram"],
+      // Blog-only by default — platforms are optional extras.
+      platforms: [],
     },
   });
 
@@ -305,17 +306,23 @@ export default function GeneratePage() {
               )}
             </div>
 
-            {/* Platforms */}
+            {/* Platforms — optional: blog is always generated */}
             <fieldset className="space-y-2">
-              <Label>Social Platforms</Label>
+              <Label>Social Platforms (optional)</Label>
+              <p className="text-xs text-muted-foreground">
+                Leave unselected for a blog-only post. Select platforms to also
+                generate matching social captions.
+              </p>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                 <Controller
                   name="platforms"
                   control={control}
-                  render={({ field }) => (
+                  render={({ field }) => {
+                    const selected = field.value ?? [];
+                    return (
                     <>
                       {PLATFORMS.map((platform) => {
-                        const checked = field.value.includes(platform.id);
+                        const checked = selected.includes(platform.id);
                         return (
                           <div
                             key={platform.id}
@@ -327,8 +334,8 @@ export default function GeneratePage() {
                               disabled={loading}
                               onCheckedChange={(val) => {
                                 const updated = val
-                                  ? [...field.value, platform.id]
-                                  : field.value.filter(
+                                  ? [...selected, platform.id]
+                                  : selected.filter(
                                       (p: string) => p !== platform.id
                                     );
                                 field.onChange(updated);
@@ -344,7 +351,8 @@ export default function GeneratePage() {
                         );
                       })}
                     </>
-                  )}
+                    );
+                  }}
                 />
               </div>
               {errors.platforms && (

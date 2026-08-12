@@ -29,6 +29,7 @@ export interface PublishResult {
   platform: string;
   success: boolean;
   platformPostId?: string;
+  platformPostUrl?: string;
   errorMessage?: string;
 }
 
@@ -77,7 +78,12 @@ async function decryptToken(encryptedToken: string): Promise<string> {
  */
 async function publishToPlatform(
   target: PublishTarget
-): Promise<{ success: boolean; platformPostId?: string; errorMessage?: string }> {
+): Promise<{
+  success: boolean;
+  platformPostId?: string;
+  platformPostUrl?: string;
+  errorMessage?: string;
+}> {
   const apiKey = process.env.AYRSHARE_API_KEY;
 
   if (!apiKey) {
@@ -129,7 +135,20 @@ async function publishToPlatform(
       data.postIds?.find((p: any) => p.platform === target.platform)?.id ??
       data.id;
 
-    return { success: true, platformPostId: String(platformPostId ?? "") };
+    // Ayrshare returns post URLs per platform (postUrls.<platform>), and some
+    // integrations include a generic postUrl — capture whichever exists so
+    // analytics can link straight to the live post.
+    const platformPostUrl =
+      (typeof data.postUrls?.[target.platform] === "string"
+        ? data.postUrls[target.platform]
+        : undefined) ??
+      (typeof data.postUrl === "string" ? data.postUrl : undefined);
+
+    return {
+      success: true,
+      platformPostId: String(platformPostId ?? ""),
+      platformPostUrl,
+    };
   } catch (err: any) {
     return {
       success: false,
@@ -243,6 +262,7 @@ export async function publishPost(
       platform: target.platform,
       success: outcome.success,
       platformPostId: outcome.platformPostId,
+      platformPostUrl: outcome.platformPostUrl,
       errorMessage: outcome.errorMessage,
     };
     results.push(result);
@@ -254,6 +274,7 @@ export async function publishPost(
         .update({
           status: "published",
           platform_post_id: outcome.platformPostId,
+          platform_post_url: outcome.platformPostUrl ?? null,
         })
         .eq("id", target.ppId);
     } else {

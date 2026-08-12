@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getTenantId } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getCurrentWorkspaceId } from "@/lib/workspace";
+import { platformPostUrl } from "@/lib/social-links";
 
 /** Post content is a JSON blob (blog) or a string (social) — normalize to text. */
 function postContentText(content: unknown): string {
@@ -76,6 +77,8 @@ export async function GET(request: NextRequest) {
         workspace_id,
         post_platforms (
           id,
+          platform_post_id,
+          platform_post_url,
           social_accounts (
             id,
             platform
@@ -130,6 +133,21 @@ export async function GET(request: NextRequest) {
     // Aggregate metrics across snapshots per post
     const enriched = (posts ?? []).map((post) => {
       const snapshots = post.analytics_snapshots ?? [];
+
+      // Link straight to the live post on each platform it was published to
+      // (canonical URL when stored, else derived from the platform post id).
+      const links = ((post.post_platforms as unknown as Array<{
+        platform_post_id: string | null;
+        platform_post_url: string | null;
+        social_accounts: { platform: string } | null;
+      }> | undefined) ?? [])
+        .map((pp) => {
+          const platform = pp.social_accounts?.platform;
+          if (!platform) return null;
+          const url = platformPostUrl(platform, pp.platform_post_id, pp.platform_post_url);
+          return url ? { platform, url } : null;
+        })
+        .filter((l): l is { platform: string; url: string } => l !== null);
       const totalLikes = snapshots.reduce(
         (sum: number, s: { likes: number }) => sum + (s.likes ?? 0),
         0
@@ -169,6 +187,7 @@ export async function GET(request: NextRequest) {
               (pp) => pp.social_accounts?.platform
             )
             .filter(Boolean) ?? [],
+        links,
         totalLikes,
         totalComments,
         totalShares,

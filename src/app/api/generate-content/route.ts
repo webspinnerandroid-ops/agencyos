@@ -260,7 +260,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { clientId, topic, brandVoice, platforms, title, keywords } =
+    const { clientId, topic, brandVoice, platforms = [], title, keywords = [] } =
       parsed.data;
 
     // The user may supply a title, keywords/topics, or both. "topic" is the

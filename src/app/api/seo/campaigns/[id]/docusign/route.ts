@@ -9,9 +9,39 @@ import {
   isDocuSignConfigured,
   createProposalEnvelope,
   getEnvelopeStatus,
+  downloadSignedPdf,
   buildProposalHtml,
   type EnvelopeStatus,
 } from "@/lib/docusign";
+import { uploadStoredFile } from "@/lib/media/storage";
+
+/** Best-effort archive of the signed PDF once the envelope completes. */
+async function archiveSignedContract(
+  supabase: any,
+  campaign: { id: string; tenant_id: string; docusign_envelope_id: string | null; signed_document_url: string | null }
+) {
+  if (!campaign.docusign_envelope_id || campaign.signed_document_url) return;
+  try {
+    const pdf = await downloadSignedPdf(campaign.docusign_envelope_id);
+    const url = await uploadStoredFile(
+      campaign.tenant_id,
+      `contracts/${campaign.id}-signed.pdf`,
+      pdf,
+      "application/pdf"
+    );
+    if (url) {
+      await supabase
+        .from("seo_campaigns")
+        .update({ signed_document_url: url })
+        .eq("id", campaign.id);
+    }
+  } catch (err: any) {
+    console.error(
+      `[docusign] Failed to archive signed contract for ${campaign.id}:`,
+      err?.message ?? err
+    );
+  }
+}
 
 /**
  * POST /api/seo/campaigns/[id]/docusign
@@ -198,7 +228,7 @@ export async function GET(
 
     const { data: campaign } = await scoped
       .from("seo_campaigns")
-      .select("tenant_id, docusign_envelope_id, docusign_status, docusign_signed_at, signer_name, signer_email")
+      .select("id, tenant_id, docusign_envelope_id, docusign_status, docusign_signed_at, signer_name, signer_email, signed_document_url")
       .eq("id", id)
       .single();
     const owned = assertTenantOwner(campaign, tenantId, "Campaign");
@@ -218,6 +248,11 @@ export async function GET(
             .from("seo_campaigns")
             .update({ docusign_status: status })
             .eq("id", id);
+        }
+        // Archive the signed contract when we discover completion this way
+        // (e.g. the Connect webhook was down when it fired).
+        if (status === "completed") {
+          await archiveSignedContract(supabase, owned);
         }
       } catch {
         // DocuSign unreachable — fall back to stored status.

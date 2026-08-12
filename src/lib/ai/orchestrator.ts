@@ -106,6 +106,7 @@ const PROVIDER_NAME_MAP: Record<string, string> = {
   pika: "Pika",
   synthesia: "Synthesia",
   kaiber: "Kaiber",
+  wan: "Alibaba Wan",
   elevenlabs: "ElevenLabs",
   playht: "Play.ht",
   murf: "Murf",
@@ -140,6 +141,7 @@ const PROVIDER_BASE_URLS: Record<string, string> = {
   pika: "https://api.pika.art/v1",
   synthesia: "https://api.synthesia.io/v1",
   kaiber: "https://api.kaiber.ai/v1",
+  wan: "https://dashscope.aliyuncs.com/api/v1",
   elevenlabs: "https://api.elevenlabs.io/v1",
   playht: "https://api.play.ht/api/v2",
   murf: "https://api.murf.ai/v1",
@@ -1197,9 +1199,84 @@ export async function generateVideo(
   if (resolution.providerName === "Pika") {
     return callPikaAPI(resolution, prompt, options);
   }
+  if (resolution.providerName === "Alibaba Wan" || resolution.providerBaseUrl.includes("dashscope")) {
+    return callWanAPI(resolution, prompt, options);
+  }
 
   // Default to Runway-compatible
   return callRunwayAPI(resolution, prompt, options);
+}
+
+/**
+ * Alibaba Cloud Model Studio (DashScope) async video generation — Wan 2.1/2.2.
+ * Submits a task, polls until SUCCEEDED (or a timeout), and returns the
+ * generated video URL when complete. Polling happens here so the media
+ * pipeline gets a finished asset; generation usually takes 1–3 minutes.
+ */
+async function callWanAPI(
+  resolution: ModelResolution,
+  prompt: string,
+  options?: { duration?: number }
+): Promise<VideoGenerationResult> {
+  const submitBody: Record<string, unknown> = {
+    model: resolution.model,
+    input: { prompt },
+  };
+  // Wan 2.1/2.2 flash accept a duration hint (5s default, max 5s for flash).
+  const duration = Math.min(options?.duration ?? 5, 5);
+  if (resolution.model.includes("flash")) {
+    submitBody.parameters = { duration };
+  }
+
+  const submitRes = await fetch(`${resolution.providerBaseUrl}/services/aigc/video-generation/generation`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${resolution.apiKey}`,
+    },
+    body: JSON.stringify(submitBody),
+  });
+  if (!submitRes.ok) {
+    const errorText = await submitRes.text();
+    const error: any = new Error(`Wan API error (${submitRes.status}): ${errorText}`);
+    error.status = submitRes.status;
+    throw error;
+  }
+  const submitData = await submitRes.json();
+  const taskId = submitData.output?.task_id ?? submitData.task_id;
+  if (!taskId) {
+    throw new Error(`Wan API returned no task id: ${JSON.stringify(submitData)}`);
+  }
+
+  // Poll every 5s up to ~3 minutes.
+  const deadline = Date.now() + 180_000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 5000));
+    const pollRes = await fetch(`${resolution.providerBaseUrl}/tasks/${taskId}`, {
+      headers: { Authorization: `Bearer ${resolution.apiKey}` },
+    });
+    if (!pollRes.ok) continue;
+    const pollData = await pollRes.json();
+    const status = pollData.output?.task_status ?? pollData.status;
+    if (status === "SUCCEEDED") {
+      const results = pollData.output?.video_url
+        ? [pollData.output.video_url]
+        : (pollData.output?.results ?? []).map((r: any) => r.url);
+      const videoUrl = Array.isArray(results) ? results[0] : results;
+      if (videoUrl) {
+        return { id: taskId, status: "completed", videoUrl, estimatedSeconds: duration };
+      }
+    } else if (status === "FAILED" || status === "CANCELED") {
+      const msg = pollData.output?.message ?? pollData.message ?? "Unknown failure";
+      const error: any = new Error(`Wan generation failed: ${msg}`);
+      throw error;
+    }
+    // PENDING / RUNNING → keep polling
+  }
+
+  // Timed out — return processing so the media pipeline records the task id
+  // and a later poll can pick it up.
+  return { id: taskId, status: "processing", estimatedSeconds: duration };
 }
 
 async function callRunwayAPI(

@@ -18,6 +18,7 @@ import {
   buildInternalLinkContext,
 } from "@/lib/content-links";
 import { rateLimitRequest } from "@/lib/rate-limit";
+import { checkTrialContentLimit } from "@/lib/trial-limits";
 import { persistImageToStorage } from "@/lib/media/storage";
 import {
   MAX_BLOG_IMAGES,
@@ -296,6 +297,14 @@ export async function POST(request: NextRequest) {
         },
         { status: 400 }
       );
+    }
+
+    // Trial tenants: one blog per week.
+    if (platforms.includes("blog")) {
+      const trial = await checkTrialContentLimit(tenantId, "blog");
+      if (!trial.allowed) {
+        return NextResponse.json({ error: trial.reason }, { status: 429 });
+      }
     }
 
     // ------------------------------------------------------------------

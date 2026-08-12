@@ -304,6 +304,27 @@ export async function getEnvelopeStatus(
 }
 
 /**
+ * Download the combined signed document (PDF) for a completed envelope.
+ * Used to archive the signed contract in the workspace's storage.
+ */
+export async function downloadSignedPdf(envelopeId: string): Promise<Buffer> {
+  const token = await getAccessToken();
+  const base = await getBaseUri(token);
+  const res = await fetch(`${base}/envelopes/${envelopeId}/documents/combined`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/pdf",
+    },
+  });
+  if (!res.ok) {
+    throw new Error(
+      `DocuSign document download failed (${res.status}): ${await res.text()}`
+    );
+  }
+  return Buffer.from(await res.arrayBuffer());
+}
+
+/**
  * Verify a DocuSign Connect webhook delivery.
  * DocuSign HMACs the RAW request body with the Connect secret (HMAC-SHA256)
  * and sends the base64 digest in X-DocuSign-Signature-1 (and -2/-3… when
@@ -397,7 +418,21 @@ export function buildProposalHtml(params: {
   ${deliverables ? `<h2>Deliverables</h2><ul>${deliverables}</ul>` : ""}
   ${months ? `<h2>Proposed Content Calendar</h2>${months}` : ""}
 
-  <p class="sign-box">I agree to engage the above services at the stated terms. <strong>SIGN_HERE_MARKER</strong></p>
+  <h2>Terms of Service</h2>
+  <ol style="font-size: 12px; line-height: 1.6;">
+    <li><strong>Services.</strong> The agency will provide the services described in this proposal for the monthly fee stated above. Services begin once this agreement is signed and the initial payment is received.</li>
+    <li><strong>Payment.</strong> Fees are billed monthly in advance. Payment is due within 15 days of the invoice date. Late payments may pause services until the account is current.</li>
+    <li><strong>Term &amp; Cancellation.</strong> This agreement is a month-to-month engagement. Either party may cancel by providing <strong>at least 60 days written notice</strong> before the next billing cycle. Fees already paid for the notice period are non-refundable.</li>
+    <li><strong>Client Responsibilities.</strong> The client agrees to provide timely access to website, analytics, and brand assets needed to perform the services, and to approve content within a reasonable timeframe so deadlines can be met.</li>
+    <li><strong>Intellectual Property.</strong> Work product created for the client becomes the client's property upon full payment. The agency retains the right to use non-confidential results in its portfolio.</li>
+    <li><strong>Third-Party Tools &amp; Platforms.</strong> Services rely on third-party platforms (search engines, social networks, CMSes, ad platforms). The agency is not liable for changes, outages, or policy updates made by those platforms.</li>
+    <li><strong>Results Disclaimer.</strong> SEO and marketing results depend on market conditions and third-party algorithm changes; projected outcomes are estimates and not guarantees.</li>
+    <li><strong>Limitation of Liability.</strong> The agency's total liability under this agreement is limited to fees paid in the three months preceding a claim. Neither party is liable for indirect or consequential damages.</li>
+    <li><strong>Confidentiality.</strong> Both parties will keep confidential any proprietary information shared during the engagement and will not disclose it to third parties.</li>
+    <li><strong>Governing Law.</strong> This agreement is governed by the laws of the agency's jurisdiction, and the parties consent to its courts for any disputes.</li>
+  </ol>
+
+  <p class="sign-box">I agree to engage the above services at the stated terms, including the Terms of Service above. <strong>SIGN_HERE_MARKER</strong></p>
   <p class="muted">By signing, ${escapeHtml(params.signerName)} (${escapeHtml(params.signerEmail)}) authorizes the agency to begin the campaign described above upon completion of this document.</p>
 </body></html>`;
 }

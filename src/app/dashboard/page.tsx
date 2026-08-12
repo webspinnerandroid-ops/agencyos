@@ -190,9 +190,14 @@ export default async function DashboardPage({ searchParams }: { searchParams?: P
           {audits && audits.length > 0 ? (
             <div className="rounded-lg border divide-y">
               {(audits as any[]).map((a) => (
-                <div key={a.id} className="flex items-center justify-between p-3 hover:bg-muted/30 transition-colors">
+                <a
+                  key={a.id}
+                  href={`/dashboard/seo/campaigns?open=${a.id}`}
+                  className="flex items-center justify-between p-3 hover:bg-muted/30 transition-colors group"
+                  title="Open this audit to start the campaign from it"
+                >
                   <div className="min-w-0">
-                    <p className="text-sm font-medium truncate">
+                    <p className="text-sm font-medium truncate group-hover:text-primary transition-colors">
                       {String(a.url || "").replace(/^https?:\/\//, "").replace(/^www\./, "")}
                     </p>
                     <div className="flex items-center gap-2 mt-0.5">
@@ -207,7 +212,7 @@ export default async function DashboardPage({ searchParams }: { searchParams?: P
                       ? "Custom Consult"
                       : "$" + a.tier_price.toLocaleString() + "/mo"}
                   </span>
-                </div>
+                </a>
               ))}
             </div>
           ) : (

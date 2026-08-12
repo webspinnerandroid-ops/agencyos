@@ -279,7 +279,12 @@ export async function deleteApiKey(keyId: string): Promise<ActionResponse> {
 // Task → Model Mappings
 // ------------------------------------------------------------------
 
-const VALID_TASKS = ["blog_generation", "social_caption", "image_generation"] as const;
+const VALID_TASKS = [
+  "blog_generation",
+  "social_caption",
+  "image_generation",
+  "video_generation",
+] as const;
 export type ValidTask = (typeof VALID_TASKS)[number];
 
 export async function getTaskModelMappings(): Promise<

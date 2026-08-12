@@ -8,7 +8,8 @@ export type UsageMetric =
   | "social_profiles"
   | "blog_posts"
   | "social_posts"
-  | "image_generations";
+  | "image_generations"
+  | "video_generations";
 
 // ------------------------------------------------------------------
 // incrementUsage

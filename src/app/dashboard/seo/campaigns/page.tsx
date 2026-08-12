@@ -71,6 +71,7 @@ interface StoredCampaign {
   docusign_signed_at?: string | null;
   signer_name?: string | null;
   signer_email?: string | null;
+  signed_document_url?: string | null;
 }
 
 interface CampaignJson {
@@ -230,6 +231,20 @@ export default function SeoCampaignsPage() {
         if (res.ok) {
           const data = await res.json();
           setPastCampaigns(data.campaigns ?? []);
+
+          // Deep link from the dashboard's Recent SEO Audits (?open=<id>):
+          // load the audit into the tier grid and expand it so the agency can
+          // start the campaign from that point.
+          const openId = new URLSearchParams(window.location.search).get("open");
+          if (openId) {
+            const match = (data.campaigns ?? []).find((c: StoredCampaign) => c.id === openId);
+            if (match) {
+              setCampaigns((prev) =>
+                prev.find((c) => c.id === openId) ? prev : [...prev, match]
+              );
+              setExpandedCampaign(openId);
+            }
+          }
         }
       } catch {
         // ignore
@@ -864,11 +879,11 @@ export default function SeoCampaignsPage() {
                       )}
 
                       {/* Actions */}
-                      <div className="flex gap-2 mt-auto pt-4 border-t">
+                      <div className="grid grid-cols-2 gap-2 mt-auto pt-4 border-t">
                         <Button
                           variant="default"
                           size="sm"
-                          className="flex-1"
+                          className="col-span-2"
                           disabled={startingCampaignId !== null}
                           onClick={() => handleStartCampaign(campaign.id)}
                           title="Seed a dated campaign plan on the Content Calendar from this tier's content calendar — no AI cost, then refine with the team."
@@ -915,14 +930,24 @@ export default function SeoCampaignsPage() {
                             "DocuSign Sign"
                           )}
                         </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="flex-1"
-                          onClick={() => setExpandedCampaign(campaign.id)}
-                        >
-                          View Details
-                        </Button>
+                        {campaign.docusign_status === "completed" && campaign.signed_document_url ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => window.open(campaign.signed_document_url!, "_blank")}
+                            title="Open the signed contract PDF stored in this workspace."
+                          >
+                            View Signed Contract
+                          </Button>
+                        ) : (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setExpandedCampaign(campaign.id)}
+                          >
+                            View Details
+                          </Button>
+                        )}
                       </div>
                     </>
                   )}
@@ -930,7 +955,62 @@ export default function SeoCampaignsPage() {
                   {/* Expanded detailed view */}
                   {isExpanded && (
                     <div className="mt-4 border-t pt-4 space-y-6">
-                      <div className="flex justify-end">
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <div className="flex gap-2 flex-wrap">
+                          <Button
+                            variant="default"
+                            size="sm"
+                            disabled={startingCampaignId !== null}
+                            onClick={() => handleStartCampaign(campaign.id)}
+                          >
+                            {startingCampaignId === campaign.id ? (
+                              <>
+                                <Loader2 className="size-3.5 animate-spin mr-1" />
+                                Starting…
+                              </>
+                            ) : (
+                              <>
+                                <Rocket className="size-3.5 mr-1" />
+                                Start Campaign
+                              </>
+                            )}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            disabled={sendingSigId !== null || campaign.docusign_status === "completed"}
+                            onClick={() =>
+                              campaign.docusign_status === "completed"
+                                ? undefined
+                                : campaign.docusign_status && campaign.docusign_status !== "declined" && campaign.docusign_status !== "voided"
+                                ? handleRefreshSignature(campaign)
+                                : handleSendForSignature(campaign)
+                            }
+                          >
+                            {sendingSigId === campaign.id ? (
+                              <>
+                                <Loader2 className="size-3.5 animate-spin mr-1" />
+                                Sending…
+                              </>
+                            ) : campaign.docusign_status === "completed" ? (
+                              "✓ Signed"
+                            ) : campaign.docusign_status && campaign.docusign_status !== "declined" && campaign.docusign_status !== "voided" ? (
+                              "Check Signature"
+                            ) : (
+                              "DocuSign Sign"
+                            )}
+                          </Button>
+                          {campaign.docusign_status === "completed" && campaign.signed_document_url && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => window.open(campaign.signed_document_url!, "_blank")}
+                              title="Open the signed contract PDF stored in this workspace."
+                            >
+                              View Signed Contract
+                            </Button>
+                          )}
+                        </div>
                         <Button variant="ghost" size="sm" onClick={() => setExpandedCampaign(null)}>
                           Collapse
                         </Button>

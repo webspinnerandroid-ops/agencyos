@@ -47,6 +47,7 @@ import {
 import { resolveInternalLinks, buildInternalLinkContext } from "@/lib/content-links";
 import { scoreContent } from "@/lib/rankmath";
 import { incrementUsage } from "@/lib/usage";
+import { checkTrialContentLimit } from "@/lib/trial-limits";
 import { createCampaignPlan } from "@/lib/campaign-plans";
 
 // ----------------------------------------------------------------------------
@@ -321,6 +322,13 @@ async function cherylGenerateBlog(
   keywords: string[] = []
 ): Promise<BlogDraft> {
   const supabase = await createServiceClient();
+
+  // Trial tenants: one blog per week — enforced here too so the AI team
+  // can't bypass the API-route cap.
+  const trial = await checkTrialContentLimit(tenantId, "blog");
+  if (!trial.allowed) {
+    throw new Error(trial.reason ?? "Weekly trial limit reached");
+  }
 
   // Real pages from the KB — internal-link markers resolve against these.
   const linkablePages = await loadLinkablePages(tenantId, workspaceId);

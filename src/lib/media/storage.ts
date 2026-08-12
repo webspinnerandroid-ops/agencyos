@@ -112,6 +112,22 @@ export async function persistImageToStorage(
 }
 
 /**
+ * Uploads arbitrary bytes (PDFs, etc.) under {tenantId}/<path> and returns
+ * the public CDN URL. Used for signed contracts and other non-image assets.
+ * Returns null on failure.
+ */
+export async function uploadStoredFile(
+  tenantId: string,
+  path: string,
+  body: Buffer,
+  contentType: string
+): Promise<string | null> {
+  const fullPath = `${tenantId}/${path.replace(/^\//, "")}`;
+  const ok = await bunnyUpload(fullPath, body, contentType);
+  return ok ? storagePublicUrl(fullPath) : null;
+}
+
+/**
  * Deletes an object given its public URL. No-op for URLs outside this
  * pull zone (remote URLs, plain data URLs).
  */

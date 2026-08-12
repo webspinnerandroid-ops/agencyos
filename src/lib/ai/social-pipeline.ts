@@ -14,6 +14,7 @@ import { generateText, generateImage } from "@/lib/ai/orchestrator";
 import { getSocialCaptionPrompt } from "@/lib/ai/seo-prompts";
 import { incrementUsage } from "@/lib/usage";
 import { persistImageToStorage } from "@/lib/media/storage";
+import { checkTrialContentLimit } from "@/lib/trial-limits";
 
 const PLATFORM_LABELS: Record<string, string> = {
   instagram: "Instagram",
@@ -113,6 +114,12 @@ export async function pamGenerateSocial(
   let mediaUrl: string | null = null;
   if (mediaKind === "image") {
     try {
+      // Trial tenants: one image per week — enforced here too so the AI team
+      // can't bypass the API-route cap via social posts.
+      const trial = await checkTrialContentLimit(tenantId, "image");
+      if (!trial.allowed) {
+        throw new Error(trial.reason ?? "Weekly trial limit reached");
+      }
       const images = await generateImage(tenantId, topic, {
         size: "1024x1024",
         n: 1,

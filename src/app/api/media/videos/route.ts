@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createVideoAsset, listMediaAssets } from "@/lib/media/flux";
 import { getTenantId } from "@/lib/auth";
+import { checkTrialContentLimit } from "@/lib/trial-limits";
 
 export async function GET(request: NextRequest) {
   try {
@@ -24,6 +25,13 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const tenantId = await getTenantId();
+
+    // Trial tenants: one video per week.
+    const trial = await checkTrialContentLimit(tenantId, "video");
+    if (!trial.allowed) {
+      return NextResponse.json({ error: trial.reason }, { status: 429 });
+    }
+
     const body = await request.json();
 
     const asset = await createVideoAsset(tenantId, body.prompt, {
@@ -32,6 +40,11 @@ export async function POST(request: NextRequest) {
       clientId: body.clientId,
       tags: body.tags,
     });
+
+    // Track usage (1 video + a nominal token cost).
+    const { incrementUsage } = await import("@/lib/usage");
+    void incrementUsage(tenantId, "video_generations", 1);
+    void incrementUsage(tenantId, "ai_tokens", 1000);
 
     return NextResponse.json({ asset }, { status: 201 });
   } catch (err: any) {

@@ -27,6 +27,7 @@ interface StoredCampaign {
   docusign_signed_at?: string | null;
   signer_name?: string | null;
   signer_email?: string | null;
+  signed_document_url?: string | null;
 }
 
 interface CampaignJson {
@@ -399,8 +400,19 @@ export default function PublicSeoProposalPage() {
               : "Approve this plan and sign it electronically. Once you sign, your agency is authorized to start the campaign right away."}
           </p>
           {signStatus === "completed" ? (
-            <div className="inline-flex items-center gap-2 rounded-md bg-green-50 px-3 py-2 text-sm font-medium text-green-700">
-              <span>✓ Signed & approved</span>
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="inline-flex items-center gap-2 rounded-md bg-green-50 px-3 py-2 text-sm font-medium text-green-700">
+                <span>✓ Signed & approved</span>
+              </div>
+              {selectedCampaign.signed_document_url && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => window.open(selectedCampaign.signed_document_url!, "_blank")}
+                >
+                  View Signed Contract
+                </Button>
+              )}
             </div>
           ) : (
             <div className="flex flex-wrap items-center gap-3">

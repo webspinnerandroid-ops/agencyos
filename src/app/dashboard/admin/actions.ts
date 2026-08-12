@@ -209,6 +209,104 @@ export async function revokeLicense(licenseId: string): Promise<ActionResponse> 
 }
 
 /**
+ * Change an EXISTING license's plan — the super admin's "toggle off trial"
+ * path. Updates the plan in place (no new license needed) and clears the
+ * trial flag so the tenant is treated as a paid customer going forward.
+ */
+export async function updateLicensePlan(
+  licenseId: string,
+  planId: string
+): Promise<ActionResponse> {
+  try {
+    await requireSuperAdmin();
+    const supabase = await createServiceClient();
+
+    const { data: existing } = await supabase
+      .from("licenses")
+      .select("id, metadata, tenant_id")
+      .eq("id", licenseId)
+      .maybeSingle();
+    if (!existing) throw new Error("License not found.");
+
+    // Clear the trial flag and carry over any other metadata.
+    const metadata = {
+      ...((existing.metadata ?? {}) as Record<string, unknown>),
+      is_trial: false,
+    };
+
+    const { error } = await supabase
+      .from("licenses")
+      .update({ plan_id: planId, status: "active", metadata })
+      .eq("id", licenseId);
+    if (error) throw new Error(error.message);
+
+    // Keep the subscription in sync so billing/limits follow the new plan.
+    const { data: sub } = await supabase
+      .from("subscriptions")
+      .select("id")
+      .eq("tenant_id", existing.tenant_id)
+      .maybeSingle();
+    if (sub) {
+      await supabase
+        .from("subscriptions")
+        .update({ plan_id: planId, status: "active" })
+        .eq("id", sub.id);
+    }
+
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+/**
+ * Renew a license without payment — extends expires_at by the given number of
+ * days (default 30) from today (or from the current expiry if it's still in
+ * the future), sets status back to active, and clears the trial flag.
+ */
+export async function renewLicense(
+  licenseId: string,
+  days = 30
+): Promise<ActionResponse<{ expires_at: string }>> {
+  try {
+    await requireSuperAdmin();
+    const supabase = await createServiceClient();
+
+    const { data: existing } = await supabase
+      .from("licenses")
+      .select("id, expires_at, metadata")
+      .eq("id", licenseId)
+      .maybeSingle();
+    if (!existing) throw new Error("License not found.");
+
+    const base =
+      existing.expires_at && new Date(existing.expires_at).getTime() > Date.now()
+        ? new Date(existing.expires_at)
+        : new Date();
+    const newExpiry = new Date(base.getTime() + days * 24 * 60 * 60 * 1000);
+
+    const metadata = {
+      ...((existing.metadata ?? {}) as Record<string, unknown>),
+      is_trial: false,
+    };
+
+    const { error } = await supabase
+      .from("licenses")
+      .update({
+        expires_at: newExpiry.toISOString(),
+        status: "active",
+        metadata,
+      })
+      .eq("id", licenseId);
+    if (error) throw new Error(error.message);
+
+    return { success: true, data: { expires_at: newExpiry.toISOString() } };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+/**
  * Permanently deletes a license row (not just revoke).
  */
 export async function deleteLicense(licenseId: string): Promise<ActionResponse> {

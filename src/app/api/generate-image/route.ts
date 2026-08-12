@@ -6,6 +6,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { getCurrentWorkspaceId } from "@/lib/workspace";
 import { rateLimitRequest } from "@/lib/rate-limit";
 import { persistImageToStorage } from "@/lib/media/storage";
+import { checkTrialContentLimit } from "@/lib/trial-limits";
 
 export async function POST(request: NextRequest) {
   try {
@@ -24,6 +25,12 @@ export async function POST(request: NextRequest) {
     const tenantId = await getTenantId();
     const workspaceId = await getCurrentWorkspaceId();
     const supabase = await createServiceClient();
+
+    // Trial tenants: one image per week.
+    const trial = await checkTrialContentLimit(tenantId, "image");
+    if (!trial.allowed) {
+      return NextResponse.json({ error: trial.reason }, { status: 429 });
+    }
 
     let body: { prompt: string; size?: string; n?: number; clientId?: string; referenceImage?: string };
     try {

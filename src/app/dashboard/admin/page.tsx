@@ -8,7 +8,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Building2, Users, FileText, Key, TrendingUp, Shield, X, UserCog } from "lucide-react";
-import { getDashboardStats, getAllTenants, getLicenses, issueLicense, revokeLicense, deleteLicense, deleteUser, deleteTenant, getAllUsers, assignLevel, type TenantSummary, type LicenseRecord, type UserRecord } from "./actions";
+import { getDashboardStats, getAllTenants, getLicenses, issueLicense, updateLicensePlan, renewLicense, revokeLicense, deleteLicense, deleteUser, deleteTenant, getAllUsers, assignLevel, type TenantSummary, type LicenseRecord, type UserRecord } from "./actions";
 
 const PLANS = [
   { id: "starter", name: "Starter" },
@@ -223,15 +223,46 @@ export default function AdminDashboardPage() {
       )}
 
       <Card><CardHeader><CardTitle className="flex items-center gap-2"><Key className="size-5 text-primary" /> Licenses</CardTitle></CardHeader><CardContent>
-        <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b text-left"><th className="py-2 px-3 text-muted-foreground">Key</th><th className="py-2 px-3 text-muted-foreground">Tenant</th><th className="py-2 px-3 text-muted-foreground">Plan</th><th className="py-2 px-3 text-muted-foreground">Seats</th><th className="py-2 px-3 text-muted-foreground">Status</th><th className="py-2 px-3 text-muted-foreground">Actions</th></tr></thead><tbody>
+        <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b text-left"><th className="py-2 px-3 text-muted-foreground">Key</th><th className="py-2 px-3 text-muted-foreground">Tenant</th><th className="py-2 px-3 text-muted-foreground">Plan</th><th className="py-2 px-3 text-muted-foreground">Expires</th><th className="py-2 px-3 text-muted-foreground">Seats</th><th className="py-2 px-3 text-muted-foreground">Status</th><th className="py-2 px-3 text-muted-foreground">Actions</th></tr></thead><tbody>
         {licenses.map(l => (
           <tr key={l.id} className="border-b last:border-0">
             <td className="py-3 px-3 font-mono text-xs">{l.license_key}</td>
             <td className="py-3 px-3">{l.tenant_name ?? l.tenant_id}</td>
-            <td className="py-3 px-3"><Badge variant="outline">{l.plan_id}</Badge></td>
+            <td className="py-3 px-3">
+              <Select
+                value={l.plan_id}
+                onValueChange={(v) => startTransition(async () => {
+                  const r = await updateLicensePlan(l.id, v);
+                  setFeedback(r.success
+                    ? { type: "success", message: `Plan changed to ${v} — trial flag cleared.` }
+                    : { type: "error", message: r.error ?? "Failed to change plan." });
+                  loadData();
+                })}
+              >
+                <SelectTrigger className="w-32 h-7 text-xs"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {PLANS.map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </td>
+            <td className="py-3 px-3 text-xs">{l.expires_at ? new Date(l.expires_at).toLocaleDateString() : "—"}</td>
             <td className="py-3 px-3">{l.seats_used}/{l.seats_total}</td>
             <td className="py-3 px-3"><Badge className={statusColor(l.status)}>{l.status}</Badge></td>
-            <td className="py-3 px-3 flex gap-1">
+            <td className="py-3 px-3 flex gap-1 flex-wrap">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => startTransition(async () => {
+                  const r = await renewLicense(l.id, 30);
+                  setFeedback(r.success
+                    ? { type: "success", message: "License renewed +30 days (free, no payment)." }
+                    : { type: "error", message: r.error ?? "Failed to renew." });
+                  loadData();
+                })}
+                title="Renew this license +30 days without payment"
+              >
+                Renew
+              </Button>
               {l.status === "active" && <Button variant="ghost" size="sm" onClick={() => startTransition(async () => { await revokeLicense(l.id); loadData(); })}>Revoke</Button>}
               <Button variant="ghost" size="sm" className="text-destructive" onClick={() => handleDeleteLicense(l.id, l.license_key)}>Delete</Button>
             </td>

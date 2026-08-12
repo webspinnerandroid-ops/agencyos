@@ -1,7 +1,38 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
-import { verifyConnectSignature } from "@/lib/docusign";
+import { verifyConnectSignature, downloadSignedPdf } from "@/lib/docusign";
 import { createCampaignFromProposal } from "@/lib/campaign-from-proposal";
+import { uploadStoredFile } from "@/lib/media/storage";
+
+/**
+ * Archive the signed PDF from a completed envelope into the workspace's
+ * Bunny storage zone and record its public URL on the proposal. Best-effort:
+ * the signature is recorded regardless of whether archiving succeeds.
+ */
+async function archiveSignedContract(supabase: any, campaign: any) {
+  if (!campaign.docusign_envelope_id || campaign.signed_document_url) return;
+  try {
+    const pdf = await downloadSignedPdf(campaign.docusign_envelope_id);
+    const url = await uploadStoredFile(
+      campaign.tenant_id,
+      `contracts/${campaign.id}-signed.pdf`,
+      pdf,
+      "application/pdf"
+    );
+    if (url) {
+      await supabase
+        .from("seo_campaigns")
+        .update({ signed_document_url: url })
+        .eq("id", campaign.id);
+      console.log(`[docusign-connect] Signed contract archived for ${campaign.id}`);
+    }
+  } catch (err: any) {
+    console.error(
+      `[docusign-connect] Failed to archive signed contract for ${campaign.id}:`,
+      err?.message ?? err
+    );
+  }
+}
 
 /**
  * POST /api/docusign/connect
@@ -61,7 +92,7 @@ export async function POST(request: NextRequest) {
 
   const { data: campaign, error: campaignError } = await supabase
     .from("seo_campaigns")
-    .select("id, tenant_id, workspace_id, status, docusign_status")
+    .select("id, tenant_id, workspace_id, status, docusign_status, docusign_envelope_id, signed_document_url")
     .eq("docusign_envelope_id", envelopeId)
     .maybeSingle();
 
@@ -94,6 +125,12 @@ export async function POST(request: NextRequest) {
       console.error("[docusign-connect] Failed to mark proposal signed:", updateError.message);
       return NextResponse.json({ error: "DB update failed" }, { status: 500 });
     }
+
+    // Archive the signed contract PDF into the workspace's storage.
+    await archiveSignedContract(supabase, {
+      ...campaign,
+      docusign_envelope_id: envelopeId,
+    });
 
     // Auto-start: materialize the signed tier onto the Content Calendar.
     try {

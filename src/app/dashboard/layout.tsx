@@ -74,7 +74,11 @@ export default async function DashboardLayout({
         { href: "/dashboard/billing", label: "Billing" },
         { href: "/help", label: "Help" },
         ...(isSuperAdmin
-          ? [{ href: "/dashboard/admin", label: "Admin" }]
+          ? [
+              { href: "/dashboard/admin", label: "Admin" },
+              { href: "/dashboard/admin/apis", label: "APIs & Models" },
+              { href: "/dashboard/admin/deploy", label: "Deploy" },
+            ]
           : []),
       ],
     },

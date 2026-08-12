@@ -73,6 +73,11 @@ const IGNORE = new Set([
   "src/lib/voice/haven.ts",
   // Super-admin wide access
   "src/app/dashboard/admin/actions.ts",
+  // apis/route.ts: the APIs & Balances panel is a super-admin-wide view by
+  // design — it lists tenant_api_keys counts and balance state across ALL
+  // tenants (the same trust model as admin/actions.ts). The admin gate
+  // (requireAdmin -> super_admin role) runs first on every request.
+  "src/app/api/admin/apis/route.ts",
   // Libs scoped upstream by their callers (tenantId passed in)
   "src/lib/inbox/archer.ts",
   "src/lib/media/flux.ts",

@@ -4,27 +4,55 @@ import { getTenantId } from "@/lib/auth";
 
 /**
  * GET /api/ai/models?task=video_generation
- * Returns models that support the given task (defaults to video_generation),
- * grouped with their provider name — used by the Generate Videos page picker.
+ * Returns models that support the given task AND belong to a provider that
+ * actually has an API key connected (a tenant key for this tenant, or a
+ * platform default key from the environment). Deprecated models are excluded.
+ * Used by the Generate Videos picker and any task-model selector.
  */
 export async function GET(request: NextRequest) {
   try {
-    await getTenantId();
+    const tenantId = await getTenantId();
+    if (!tenantId) {
+      return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+    }
     const supabase = await createServiceClient();
 
     const task = request.nextUrl.searchParams.get("task") ?? "video_generation";
 
+    // Providers the tenant has an explicit key for.
+    const { data: tenantKeys } = await supabase
+      .from("tenant_api_keys")
+      .select("provider_id")
+      .eq("tenant_id", tenantId);
+    const keyedProviderIds = new Set((tenantKeys ?? []).map((k: any) => k.provider_id));
+
+    // Models with their provider.
     const { data, error } = await supabase
       .from("ai_models")
-      .select("id, model_identifier, supported_tasks, provider:ai_providers(id, name)")
-      .contains("supported_tasks", [task])
-      .order("model_identifier");
+      .select("id, model_identifier, supported_tasks, is_deprecated, provider:ai_providers(id, name, type)")
+      .contains("supported_tasks", [task]);
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    return NextResponse.json({ models: data ?? [] });
+    // Platform default keys by provider type (env vars) — these cover the
+    // providers the platform runs on without per-tenant keys.
+    const envKeys = new Set<string>();
+    if (process.env.OPENAI_API_KEY || process.env.DEEPSEEK_API_KEY) envKeys.add("text");
+    if (process.env.GOOGLE_API_KEY || process.env.OPENAI_API_KEY) envKeys.add("image");
+    if (process.env.RUNWAY_API_KEY || process.env.FAL_AI_API_KEY) envKeys.add("video");
+    if (process.env.ELEVENLABS_API_KEY) envKeys.add("voice");
+
+    const models = (data ?? []).filter((m: any) => {
+      const provider = m.provider as { id: string; name: string; type?: string } | null;
+      if (!provider) return false;
+      if (m.is_deprecated === true) return false;
+      // Connected = explicit tenant key, or platform env fallback for its type.
+      return keyedProviderIds.has(provider.id) || envKeys.has(provider.type ?? "");
+    });
+
+    return NextResponse.json({ models });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Internal server error";
     return NextResponse.json({ error: message }, { status: 500 });

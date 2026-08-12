@@ -108,6 +108,14 @@ export default function OpportunitiesPage() {
           genuinely useful this week — refreshed weekly by the AI team (and on
           demand below). Recommendations are <strong>AI-generated</strong> — review before posting.
         </p>
+        <div className="mt-3 rounded-md bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 p-3 text-xs text-amber-800 dark:text-amber-200">
+          <strong>Anti-ban rules baked in:</strong> Reddit recommendations are
+          helpful comments only — no links or self-promotion (Reddit bans
+          blatant promotion and most subreddits require a 9:1 comment-to-promote
+          ratio). LinkedIn stays professional, no engagement bait. Quora answers
+          are comprehensive and non-promotional. Always read a subreddit&apos;s
+          rules and the thread before posting.
+        </div>
       </div>
 
       {message && (

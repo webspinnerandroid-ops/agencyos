@@ -20,6 +20,7 @@ import {
   ArrowLeft,
   GripVertical,
   Layers,
+  LayoutGrid,
   Palette,
 } from "lucide-react";
 import {
@@ -139,7 +140,10 @@ export default function CmsPage() {
   // Builder
   // ------------------------------------------------------------------
   const openPage = (page: CmsPage) => {
-    setActive(page);
+    // Normalize blocks to an array — a NULL/string blocks column would
+    // otherwise crash the builder with "Cannot read properties of
+    // undefined (reading 'length')".
+    setActive({ ...page, blocks: Array.isArray(page.blocks) ? page.blocks : [] });
     setTab("builder");
   };
 
@@ -187,12 +191,17 @@ export default function CmsPage() {
     updateBlocks([...(active?.blocks ?? []), block]);
   };
 
+  const addColumns = (cols: number) => {
+    const block: CmsBlock = { id: newBlockId(), kind: "columns", cols, children: [] };
+    updateBlocks([...(active?.blocks ?? []), block]);
+  };
+
   const updateBlock = (id: string, patch: Partial<CmsBlock>) => {
     if (!active) return;
     const mapBlocks = (list: CmsBlock[]): CmsBlock[] =>
       list.map((b) => {
         if (b.id === id) return { ...b, ...patch };
-        if (b.kind === "section" && b.children?.length) return { ...b, children: mapBlocks(b.children) };
+        if ((b.kind === "section" || b.kind === "columns") && b.children?.length) return { ...b, children: mapBlocks(b.children) };
         return b;
       });
     updateBlocks(mapBlocks(active.blocks));
@@ -200,12 +209,12 @@ export default function CmsPage() {
 
   const removeBlock = (id: string) => {
     if (!active) return;
-    const found = active.blocks.some((b) => b.id === id || (b.kind === "section" && b.children?.some((c) => c.id === id)));
+    const found = active.blocks.some((b) => b.id === id || ((b.kind === "section" || b.kind === "columns") && b.children?.some((c) => c.id === id)));
     if (!confirm(`Remove this ${found ? "block" : "block"}?`)) return;
     const filterBlocks = (list: CmsBlock[]): CmsBlock[] =>
       list
         .filter((b) => b.id !== id)
-        .map((b) => (b.kind === "section" && b.children?.length ? { ...b, children: b.children.filter((c) => c.id !== id) } : b));
+        .map((b) => ((b.kind === "section" || b.kind === "columns") && b.children?.length ? { ...b, children: b.children.filter((c) => c.id !== id) } : b));
     updateBlocks(filterBlocks(active.blocks));
   };
 
@@ -221,7 +230,7 @@ export default function CmsPage() {
     if (!active) return;
     const mapBlocks = (list: CmsBlock[]): CmsBlock[] =>
       list.map((b) => {
-        if (b.id === sectionId && b.kind === "section") {
+        if (b.id === sectionId && (b.kind === "section" || b.kind === "columns")) {
           const kids = [...(b.children ?? [])];
           const target = index + dir;
           if (target < 0 || target >= kids.length) return b;
@@ -249,7 +258,7 @@ export default function CmsPage() {
           dragged = b;
           continue;
         }
-        if (b.kind === "section" && b.children?.length) {
+        if ((b.kind === "section" || b.kind === "columns") && b.children?.length) {
           const kids = strip(b.children);
           out.push(kids.length !== b.children.length ? { ...b, children: kids } : b);
         } else {
@@ -320,7 +329,7 @@ export default function CmsPage() {
       show("error", data.error ?? "Failed to update publish state");
       return;
     }
-    setActive(data.page);
+    setActive({ ...data.page, blocks: Array.isArray(data.page.blocks) ? data.page.blocks : [] });
     show("success", data.page.is_published ? "Page published 🎉" : "Page unpublished.");
   };
 
@@ -549,10 +558,38 @@ export default function CmsPage() {
       )}
       {b.kind === "image" && (
         <div className="space-y-2">
-          <Input placeholder="Image URL (paste a media URL)" value={b.url ?? ""}
-            onChange={(e) => updateBlock(b.id, { url: e.target.value })} />
+          <div className="flex gap-2 items-center">
+            <Input placeholder="Image URL (paste a media URL)" value={b.url ?? ""}
+              onChange={(e) => updateBlock(b.id, { url: e.target.value })} />
+            <label className="shrink-0 inline-flex items-center gap-1 text-xs px-2 py-1.5 rounded-md border cursor-pointer hover:bg-muted">
+              <Image className="size-3.5" /> Upload
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={async (e) => {
+                  const f = e.target.files?.[0];
+                  if (!f) return;
+                  const fd = new FormData();
+                  fd.append("file", f);
+                  const res = await fetch("/api/cms/upload", { method: "POST", credentials: "include", body: fd });
+                  const data = await res.json().catch(() => ({}));
+                  if (!res.ok) {
+                    show("error", data.error ?? "Upload failed");
+                    return;
+                  }
+                  updateBlock(b.id, { url: data.url, alt: b.alt || data.alt || "" });
+                  show("success", "Image uploaded.");
+                }}
+              />
+            </label>
+          </div>
           <Input placeholder="Alt text (SEO)" value={b.alt ?? ""}
             onChange={(e) => updateBlock(b.id, { alt: e.target.value })} />
+          {b.url && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={b.url} alt={b.alt ?? ""} className="max-h-40 rounded-md border" />
+          )}
         </div>
       )}
       {b.kind === "custom" && b.custom === "form" && (
@@ -675,6 +712,76 @@ export default function CmsPage() {
       </div>
     </Card>
   );
+
+  // Columns card: children flow left→right across N columns (2/3/4), wrapping
+  // into rows. Responsive: collapses to one column on small screens.
+  const columnsCard = (b: CmsBlock, index: number, listLength: number) => {
+    const cols = [2, 3, 4].includes(b.cols ?? 2) ? (b.cols as number) : 2;
+    const children = b.children ?? [];
+    return (
+      <Card key={b.id}
+        draggable
+        onDragStart={(e) => { setDragId(b.id); e.dataTransfer.effectAllowed = "move"; }}
+        onDragOver={(e) => { e.preventDefault(); setDragOverId(b.id); }}
+        onDragLeave={() => setDragOverId((cur) => (cur === b.id ? null : cur))}
+        onDrop={(e) => { e.preventDefault(); e.stopPropagation(); handleDrop({ kind: "root", index }); }}
+        className={`p-3 ${dragOverId === b.id && dragId !== b.id ? "ring-2 ring-primary" : ""}`}>
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
+            <GripVertical className="size-3.5" /> <LayoutGrid className="size-3" /> Columns
+          </span>
+          <div className="flex items-center gap-0.5">
+            <span className="text-[10px] text-muted-foreground mr-1">Cols</span>
+            {[2, 3, 4].map((c) => (
+              <button key={c} onClick={() => updateBlock(b.id, { cols: c })}
+                className={`px-1.5 py-0.5 rounded text-[11px] border ${cols === c ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
+                {c}
+              </button>
+            ))}
+            <button onClick={() => moveBlock(index, -1)} disabled={index === 0} className="p-1 rounded hover:bg-muted disabled:opacity-30" title="Move up"><ChevronUp className="size-3.5" /></button>
+            <button onClick={() => moveBlock(index, 1)} disabled={index === listLength - 1} className="p-1 rounded hover:bg-muted disabled:opacity-30" title="Move down"><ChevronDown className="size-3.5" /></button>
+            <button onClick={() => setStyleOpen(styleOpen === b.id ? null : b.id)} className={`p-1 rounded hover:bg-muted ${styleOpen === b.id ? "bg-muted" : ""}`} title="Style"><Palette className="size-3.5" /></button>
+            <button onClick={() => removeBlock(b.id)} className="p-1 rounded hover:bg-red-100 dark:hover:bg-red-900 text-red-500" title="Remove columns and their blocks"><Trash2 className="size-3.5" /></button>
+          </div>
+        </div>
+        {styleOpen === b.id && styleControls(b)}
+        <div
+          className={`rounded-lg border border-dashed p-2 grid gap-2 ${
+            cols === 2 ? "grid-cols-2" : cols === 3 ? "grid-cols-3" : "grid-cols-4"
+          } max-sm:grid-cols-1 ${dragOverSection === b.id ? "bg-primary/5 ring-1 ring-primary" : ""}`}
+          style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
+          onDragOver={(e) => { e.preventDefault(); setDragOverSection(b.id); }}
+          onDragLeave={() => setDragOverSection((cur) => (cur === b.id ? null : cur))}
+          onDrop={(e) => { e.preventDefault(); e.stopPropagation(); handleDrop({ kind: "section", sectionId: b.id, index: children.length }); }}>
+          {children.map((child, ci) => (
+            <div key={child.id} className="relative min-w-0"
+              onDragOver={(e) => { e.preventDefault(); setDragOverId(child.id); }}
+              onDragLeave={() => setDragOverId((cur) => (cur === child.id ? null : cur))}
+              onDrop={(e) => { e.preventDefault(); e.stopPropagation(); handleDrop({ kind: "section", sectionId: b.id, index: ci }); }}>
+              {blockCard(child, ci, children.length, b.id, (dir) => moveChild(b.id, ci, dir))}
+            </div>
+          ))}
+          {children.length === 0 && (
+            <div className="col-span-full">
+              <p className="text-[11px] text-center text-muted-foreground py-4">
+                Drop blocks here, or use Add Block below. Items flow left → right into {cols} columns.
+              </p>
+            </div>
+          )}
+        </div>
+        <div className="flex gap-2 mt-2 flex-wrap">
+          <Button variant="ghost" size="sm" onClick={() => {
+            const child: CmsBlock = { id: newBlockId(), kind: "text", content: "## Column text" };
+            updateBlock(b.id, { children: [...children, child] });
+          }}><Plus className="size-3 mr-1" /> Text</Button>
+          <Button variant="ghost" size="sm" onClick={() => {
+            const child: CmsBlock = { id: newBlockId(), kind: "image", url: "", alt: "" };
+            updateBlock(b.id, { children: [...children, child] });
+          }}><Plus className="size-3 mr-1" /> Image</Button>
+        </div>
+      </Card>
+    );
+  };
 
   // ------------------------------------------------------------------
   // Render
@@ -846,6 +953,7 @@ export default function CmsPage() {
               <Button variant="outline" size="sm" onClick={addTextBlock}><Text className="size-3.5 mr-1" /> Text</Button>
               <Button variant="outline" size="sm" onClick={addImageBlock}><Image className="size-3.5 mr-1" /> Image</Button>
               <Button variant="outline" size="sm" onClick={addSection}><Layers className="size-3.5 mr-1" /> Section</Button>
+              <Button variant="outline" size="sm" onClick={() => addColumns(2)} title="2, 3 or 4 columns — switch with the Columns buttons"><LayoutGrid className="size-3.5 mr-1" /> Columns</Button>
               <div className="flex-1 min-w-[220px] flex gap-2">
                 <Input placeholder="Ask AI to build a block — e.g. 'a contact form', 'an interactive map', 'a YouTube embedder', 'an Instagram gallery embedder'"
                   value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)}
@@ -872,7 +980,9 @@ export default function CmsPage() {
                   if (e.target === e.currentTarget) handleDrop({ kind: "root", index: active.blocks.length });
                 }}>
                 {active.blocks.map((b, i) =>
-                  b.kind === "section" ? sectionCard(b, i, active.blocks.length) : blockCard(b, i, active.blocks.length)
+                  b.kind === "section" ? sectionCard(b, i, active.blocks.length)
+                  : b.kind === "columns" ? columnsCard(b, i, active.blocks.length)
+                  : blockCard(b, i, active.blocks.length)
                 )}
               </div>
             )}

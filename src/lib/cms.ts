@@ -12,7 +12,7 @@
  *              produces the CONFIG, never raw HTML.
  */
 
-export type CmsBlockKind = "text" | "image" | "custom" | "section";
+export type CmsBlockKind = "text" | "image" | "custom" | "section" | "columns";
 
 /** Per-block styling — kept small and declarative, applied via inline styles
  * and a few utility classes (no per-block CSS bloat). */
@@ -38,8 +38,10 @@ export interface CmsBlock {
   alt?: string;
   /** Widget config (safe JSON, rendered by the allowlisted renderers). */
   config?: Record<string, unknown>;
-  /** Section container — holds child blocks (one level deep). */
+  /** Section / columns container — holds child blocks (one level deep). */
   children?: CmsBlock[];
+  /** Columns block: number of columns (2 | 3 | 4); children flow left→right. */
+  cols?: number;
   /** Per-block styling controls (Elementor-style, kept lean). */
   style?: CmsBlockStyle;
 }
@@ -202,6 +204,16 @@ export function renderBlockHtml(block: CmsBlock, pageId?: string): string {
       const inner = (block.children ?? []).map((c) => renderBlockHtml(c, pageId)).join("\n");
       return `<section class="cms-section ${PADDING_CLASSES[s.padding ?? "md"]}"${styleAttr}><div class="cms-section-inner">${inner || ""}</div></section>`;
     }
+    case "columns": {
+      const s = block.style ?? {};
+      const inline: string[] = [];
+      if (s.bg) inline.push(`background:${s.bg}`);
+      if (s.color) inline.push(`color:${s.color}`);
+      const styleAttr = inline.length ? ` style="${inline.join(";")}"` : "";
+      const cols = [2, 3, 4].includes(block.cols ?? 2) ? (block.cols as number) : 2;
+      const inner = (block.children ?? []).map((c) => renderBlockHtml(c, pageId)).join("\n");
+      return `<div class="cms-columns cms-columns-${cols} ${PADDING_CLASSES[s.padding ?? "md"]}"${styleAttr}>${inner || ""}</div>`;
+    }
     case "custom": {
       const cfg = block.config ?? {};
       switch (block.custom) {
@@ -326,5 +338,10 @@ export const CMS_STYLES = `
 .cms-align-left{text-align:left}.cms-align-center{text-align:center}.cms-align-right{text-align:right}
 .cms-w-wide{width:75%}.cms-w-half{width:50%}.cms-w-third{width:33.33%}
 .cms-section{margin:1.5rem 0;border-radius:12px}.cms-section-inner{max-width:960px;margin:0 auto}
+.cms-columns{display:grid;gap:1.4rem;margin:1.5rem 0}
+.cms-columns-2{grid-template-columns:repeat(2,1fr)}
+.cms-columns-3{grid-template-columns:repeat(3,1fr)}
+.cms-columns-4{grid-template-columns:repeat(4,1fr)}
+@media(max-width:720px){.cms-columns-2,.cms-columns-3,.cms-columns-4{grid-template-columns:1fr}}
 @media(max-width:640px){.cms-w-wide,.cms-w-half,.cms-w-third{width:100%}}
 `;

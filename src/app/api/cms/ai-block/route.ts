@@ -45,9 +45,11 @@ export async function POST(request: NextRequest) {
   * embed      → { src: string (https:// URL to iframe), title: string }
   * note       → { content: string (a short text summary of the block) }
 
-Rules: never invent a URL that isn't inferable from the request — if the user
-didn't give one, put an empty string and let them fill it in. config must be
-plain JSON. No HTML, no scripts, no markdown inside config values.`,
+Rules: if the user's request CONTAINS a URL (e.g. "embed this YouTube video
+https://www.youtube.com/watch?v=..."), put that exact URL in config — the block
+should work immediately. Never invent a URL that isn't in the request — if none
+is given, put an empty string and the builder will ask them to fill it in.
+config must be plain JSON. No HTML, no scripts, no markdown inside config.`,
       `The user wants one block for a page builder.
 
 Request: "${prompt}"

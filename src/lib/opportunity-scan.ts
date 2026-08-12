@@ -50,23 +50,39 @@ export async function scanOpportunitiesForTenant(
       "team_chat",
       `You are a community-marketing analyst. Find REAL, CURRENT opportunities on
 Reddit, LinkedIn, and Quora where this brand could post something genuinely
-useful this week (questions people are asking, threads needing expert answers,
-LinkedIn discussions worth joining). Only include opportunities you are
-reasonably confident exist; never invent URLs or subreddits. For each:
+useful this week. Only include opportunities you are reasonably confident
+exist; never invent URLs or subreddits.
+
+PLATFORM RULES (non-negotiable — getting these wrong gets accounts banned):
+- REDDIT: never recommend dropping links or self-promotion of any kind (Reddit
+  bans blatant promotion and most subreddits have a 9:1 comment-to-promote rule
+  or ban promotion outright). Recommendations must be purely helpful comments
+  answering the actual question — no product mention, no link, no "we/our"
+  unless the conversation explicitly asks. Flag in the recommendation when a
+  subreddit's rules should be checked first.
+- LINKEDIN: professional and useful; no hard sales pitches, no engagement bait.
+  Frame as an expert insight, and only reference the brand if it's genuinely
+  relevant to the discussion.
+- QUORA: answers must be comprehensive and selfless; no promotional links
+  (Quora moderates promotional answers hard).
+
+For each:
 - platform: "reddit" | "linkedin" | "quora"
 - title: the question / discussion topic
 - url: the thread or search URL if confidently known, else an empty string
 - snippet: 1-2 sentence summary of what people are asking
 - relevance_score: 0-100 fit with the brand
-- recommendation: exactly what to post — concrete, helpful, on-topic (no
-  hard-selling; value first)
+- recommendation: EXACTLY what to post — concrete, helpful, on-topic, and
+  platform-safe (per the rules above; value first, promotion last or never)
 Return JSON: { "opportunities": [...] } with 5-9 entries across all three
-platforms. Useful > self-promotional.`,
+platforms. Useful > self-promotional. If a brand would not be safe to engage
+with on a platform, prefer safer alternatives.`,
       `Brand: ${context.brandName}
 What we do / topics: ${context.topics.join("; ") || "(generic)"}
 Target audience: ${context.targetAudience || "(broad)"}
 This week: ${weekStart}
-Find 5-9 real opportunities where posting something helpful would work.`,
+Find 5-9 real, SAFE opportunities where posting something helpful would work,
+respecting each platform's anti-promotion rules.`,
       tenantId,
       {
         type: "object",

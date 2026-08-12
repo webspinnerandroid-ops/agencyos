@@ -12,7 +12,8 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Trash2, Rocket, Loader2, Globe, FolderPlus } from "lucide-react";
+import { Trash2, Rocket, Loader2, Globe, FolderPlus, FileText, Puzzle, Wrench } from "lucide-react";
+import { WEBSITE_PLAN } from "@/lib/website-plan";
 
 // ============================================================================
 // Types
@@ -87,6 +88,11 @@ interface CampaignJson {
   tierName: string;
   tierPrice: number;
   executiveSummary: string;
+  websitePlan?: {
+    pages: string[];
+    functions: string[];
+    plugins: string[];
+  } | null;
   targetKeywords: {
     keyword: string;
     searchVolume: number;
@@ -1125,6 +1131,40 @@ export default function SeoCampaignsPage() {
                 </span>
               </span>
             </label>
+
+            {startIncludeWebsite && (
+              <div className="rounded-md border bg-muted/30 p-3 text-xs space-y-3">
+                <p className="font-semibold text-sm">Suggested website plan</p>
+                <div>
+                  <p className="text-muted-foreground font-medium mb-1 flex items-center gap-1.5">
+                    <FileText className="size-3.5 text-primary" /> Pages
+                  </p>
+                  <ul className="space-y-0.5 text-muted-foreground">
+                    {WEBSITE_PLAN.pages.map((p) => <li key={p}>• {p}</li>)}
+                  </ul>
+                </div>
+                <div>
+                  <p className="text-muted-foreground font-medium mb-1 flex items-center gap-1.5">
+                    <Wrench className="size-3.5 text-primary" /> Functions
+                  </p>
+                  <ul className="space-y-0.5 text-muted-foreground">
+                    {WEBSITE_PLAN.functions.map((f) => <li key={f}>• {f}</li>)}
+                  </ul>
+                </div>
+                <div>
+                  <p className="text-muted-foreground font-medium mb-1 flex items-center gap-1.5">
+                    <Puzzle className="size-3.5 text-primary" /> Add-ons / plugins
+                  </p>
+                  <ul className="space-y-0.5 text-muted-foreground">
+                    {WEBSITE_PLAN.plugins.map((pl) => <li key={pl}>• {pl}</li>)}
+                  </ul>
+                </div>
+                <p className="text-muted-foreground pt-1">
+                  Ray and the team use this as the blueprint — every piece gets
+                  built in the Web Builder and tracked on the campaign calendar.
+                </p>
+              </div>
+            )}
             <label className="flex items-start gap-3 rounded-md border p-3 cursor-pointer hover:bg-muted/40 transition-colors">
               <Checkbox
                 checked={startCreateWorkspace}
@@ -1339,6 +1379,45 @@ function CampaignDetails({ campaign }: { campaign: StoredCampaign }) {
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {/* Website plan — when the campaign includes a website build */}
+      {cj.websitePlan && (
+        <div className="rounded-lg border border-primary/20 bg-primary/5 p-4">
+          <h3 className="text-sm font-semibold mb-1 flex items-center gap-1.5">
+            <Globe className="size-4 text-primary" /> Website Build Plan
+          </h3>
+          <p className="text-xs text-muted-foreground mb-3">
+            Included in this campaign — Ray and the team build these in the Web
+            Builder and track them on the campaign calendar.
+          </p>
+          <div className="grid gap-4 md:grid-cols-3 text-xs">
+            <div>
+              <p className="font-semibold text-primary mb-1 flex items-center gap-1">
+                <FileText className="size-3.5" /> Pages
+              </p>
+              <ul className="space-y-0.5 text-muted-foreground">
+                {cj.websitePlan.pages?.map((p) => <li key={p}>• {p}</li>)}
+              </ul>
+            </div>
+            <div>
+              <p className="font-semibold text-primary mb-1 flex items-center gap-1">
+                <Wrench className="size-3.5" /> Functions
+              </p>
+              <ul className="space-y-0.5 text-muted-foreground">
+                {cj.websitePlan.functions?.map((f) => <li key={f}>• {f}</li>)}
+              </ul>
+            </div>
+            <div>
+              <p className="font-semibold text-primary mb-1 flex items-center gap-1">
+                <Puzzle className="size-3.5" /> Add-ons / plugins
+              </p>
+              <ul className="space-y-0.5 text-muted-foreground">
+                {cj.websitePlan.plugins?.map((pl) => <li key={pl}>• {pl}</li>)}
+              </ul>
+            </div>
+          </div>
         </div>
       )}
 

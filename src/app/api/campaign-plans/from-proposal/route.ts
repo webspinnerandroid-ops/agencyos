@@ -5,7 +5,10 @@ import {
   createWorkspace,
   type Workspace,
 } from "@/lib/workspace";
-import { createCampaignFromProposal } from "@/lib/campaign-from-proposal";
+import {
+  createCampaignFromProposal,
+  WEBSITE_PLAN,
+} from "@/lib/campaign-from-proposal";
 
 /**
  * POST /api/campaign-plans/from-proposal
@@ -85,16 +88,33 @@ export async function POST(request: NextRequest) {
     );
 
     // The sold tier is now live — mark it approved so Recent SEO Audits and
-    // the client proposal page show it as started, not just proposed.
+    // the client proposal page show it as started, not just proposed. When a
+    // website build was included, attach the full website plan (pages,
+    // functions, add-ons) to the campaign so the proposal and build track it.
     const { createClient: makeClient } = await import("@supabase/supabase-js");
     const sb = makeClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!,
       { auth: { autoRefreshToken: false, persistSession: false } }
     );
+    const { data: campaign } = await sb
+      .from("seo_campaigns")
+      .select("campaign_json")
+      .eq("id", body.campaignId)
+      .eq("tenant_id", tenantId)
+      .maybeSingle();
+    const campaignJson = (campaign?.campaign_json ?? {}) as Record<string, unknown>;
+    if (body.includeWebsite === true) {
+      campaignJson.websitePlan = WEBSITE_PLAN;
+    } else {
+      delete campaignJson.websitePlan;
+    }
     await sb
       .from("seo_campaigns")
-      .update({ status: "approved" })
+      .update({
+        status: "approved",
+        campaign_json: campaignJson,
+      })
       .eq("id", body.campaignId)
       .eq("tenant_id", tenantId)
       .in("status", ["proposed", "approved"]);

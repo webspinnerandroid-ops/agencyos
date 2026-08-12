@@ -61,6 +61,8 @@ export default function AdminDeployPage() {
         return;
       }
       setSaved(true);
+      if (data.warning) setError(data.warning);
+      else setError(null);
     } catch (e: any) {
       setError(e.message ?? "Failed to save");
     } finally {

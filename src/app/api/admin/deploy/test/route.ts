@@ -43,14 +43,18 @@ export async function POST(request: NextRequest) {
     }
 
     // Probe: echo ok, then detect the app path (running process cwd first,
-    // then common layouts) and the pm2 process / next-server process name.
+    // then common layouts + a bounded package.json search) and the pm2
+    // process / running node process name.
     const remote = [
       "echo TEST_OK",
-      "APP_PATH=$(readlink -f /proc/$(pgrep -f next-server | head -1)/cwd 2>/dev/null || true)",
-      "[ -z \"$APP_PATH\" ] && APP_PATH=$(ls -d /var/www/*/*/agency-os /var/www/*/agency-os /srv/*/agency-os /home/*/agency-os 2>/dev/null | head -1) || true",
+      "PID=$(pgrep -f 'next-server|next start|agency-os' | head -1 || true)",
+      "APP_PATH=$(readlink -f /proc/$PID/cwd 2>/dev/null || true)",
+      "[ -z \"$APP_PATH\" ] && APP_PATH=$(ls -d /var/www/*/agency-os /var/www/*/*/agency-os /srv/*/agency-os /home/*/agency-os /opt/*/agency-os 2>/dev/null | head -1) || true",
+      "[ -z \"$APP_PATH\" ] && APP_PATH=$(dirname $(find /var/www /srv /home /opt -maxdepth 3 -name package.json -path '*agency-os*' 2>/dev/null | head -1) 2>/dev/null || true)",
       "[ -n \"$APP_PATH\" ] && echo \"APP_PATH=$APP_PATH\"",
       "SVC=$(pm2 jlist 2>/dev/null | grep -oE '\"name\":\"[^\"]+\"' | head -1 | sed 's/\"name\":\"//;s/\"//' || true)",
-      "[ -z \"$SVC\" ] && SVC=$(ps -o comm= -p $(pgrep -f next-server | head -1) 2>/dev/null | head -1) || true",
+      "[ -z \"$SVC\" ] && SVC=$(basename $(readlink /proc/$PID/cwd 2>/dev/null) 2>/dev/null | head -1) || true",
+      "[ -z \"$SVC\" ] && SVC=$(ps -o comm= -p $PID 2>/dev/null | head -1) || true",
       "[ -n \"$SVC\" ] && echo \"SERVICE=$SVC\"",
     ].join("; ");
 

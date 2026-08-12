@@ -49,28 +49,49 @@ export async function GET() {
   }
 }
 
-/** PUT — save deploy config (secrets encrypted). */
+/**
+ * PUT — save deploy config (secrets encrypted).
+ *
+ * Tolerant save: whatever fields are provided are persisted — saving never
+ * hard-fails on a missing host/app path (those are only needed to actually
+ * deploy). A warning is returned instead so the UI can tell the admin what's
+ * still missing. The masked password value ("••••••••") is ignored and the
+ * previously stored secret is preserved, so saving the form never overwrites
+ * the real password with literal bullet characters.
+ */
 export async function PUT(request: NextRequest) {
   try {
     const err = await requireAdmin();
     if (err) return NextResponse.json({ error: err }, { status: 403 });
+
+    const tenantId = await getTenantId();
+    const supabase = await createServiceClient();
+    const { data: existing } = await supabase
+      .from("tenant_settings")
+      .select("settings")
+      .eq("tenant_id", tenantId)
+      .maybeSingle();
+    const prevDeploy = ((existing?.settings as any)?.deploy ?? {}) as Record<string, string>;
 
     const body = (await request.json().catch(() => ({}))) as Record<string, string>;
     const fields = ["ssh_host", "ssh_port", "ssh_user", "ssh_password", "app_path", "service_name"];
     const deploy: Record<string, string> = {};
     for (const f of fields) {
       const v = String(body[f] ?? "").trim();
-      if (v) deploy[f] = f.includes("password") ? v : encrypt(v);
-    }
-    if (!deploy.ssh_host || !deploy.app_path) {
-      return NextResponse.json({ error: "ssh_host and app_path are required" }, { status: 400 });
+      if (!v) continue;
+      if (f.includes("password")) {
+        // The masked placeholder means the admin didn't type a new one — keep
+        // the previously stored encrypted secret. Otherwise encrypt it like
+        // every other field (never store the password in plaintext).
+        deploy[f] = v.includes("•") ? (prevDeploy[f] ?? "") : encrypt(v);
+      } else {
+        deploy[f] = encrypt(v);
+      }
     }
 
-    const tenantId = await getTenantId();
-    const supabase = await createServiceClient();
-    const { data: existing } = await supabase.from("tenant_settings").select("tenant_id").eq("tenant_id", tenantId).maybeSingle();
-    const settings = existing ? { deploy: deploy } : { deploy: deploy };
-
+    // Persist everything provided (even a partial config). Missing host/app
+    // path is surfaced as a warning, not a hard error — saves never get lost.
+    const settings = { deploy: deploy };
     if (existing) {
       const { data } = await supabase
         .from("tenant_settings")
@@ -78,14 +99,26 @@ export async function PUT(request: NextRequest) {
         .eq("tenant_id", tenantId)
         .select("settings")
         .single();
-      return NextResponse.json({ saved: true, config: data?.settings?.deploy ?? {} });
+      return NextResponse.json({
+        saved: true,
+        warning: !deploy.ssh_host || !deploy.app_path
+          ? "Saved, but an SSH host and app path are needed before you can deploy."
+          : undefined,
+        config: data?.settings?.deploy ?? {},
+      });
     }
     const { data } = await supabase
       .from("tenant_settings")
       .insert({ tenant_id: tenantId, settings })
       .select("settings")
       .single();
-    return NextResponse.json({ saved: true, config: data?.settings?.deploy ?? {} });
+    return NextResponse.json({
+      saved: true,
+      warning: !deploy.ssh_host || !deploy.app_path
+        ? "Saved, but an SSH host and app path are needed before you can deploy."
+        : undefined,
+      config: data?.settings?.deploy ?? {},
+    });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Internal error" }, { status: 500 });
   }
@@ -108,7 +141,14 @@ export async function POST() {
     const raw = (data?.settings?.deploy ?? {}) as Record<string, string>;
     const host = String(raw.ssh_host ?? "");
     const user = String(raw.ssh_user ?? "root");
-    const pass = String(raw.ssh_password ?? "");
+    // The password is stored encrypted (see PUT) — decrypt it for the sshpass
+    // command. Empty/non-encrypted legacy values fall back to empty (key auth).
+    let pass = "";
+    try {
+      pass = raw.ssh_password ? decrypt(String(raw.ssh_password)) : "";
+    } catch {
+      pass = "";
+    }
     const port = String(raw.ssh_port ?? "22");
     const appPath = String(raw.app_path ?? "");
     const service = String(raw.service_name ?? "agency-os");

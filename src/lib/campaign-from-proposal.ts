@@ -50,6 +50,12 @@ const TYPE_OWNERS: Record<string, string> = {
   infographic: "sonny",
 };
 
+import { WEBSITE_PLAN } from "@/lib/website-plan";
+
+export { WEBSITE_PLAN };
+
+export type { WebsitePlan } from "@/lib/website-plan";
+
 /**
  * Website-build milestones appended to the plan when the owner opts to
  * include a website in the campaign. Owned by Ray (dev) and dated across

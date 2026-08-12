@@ -62,14 +62,19 @@ export async function GET() {
 
     // Per-platform social breakdown for this cycle.
     const periodStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString();
+    // Blogs carry an empty-string platform (denormalized), so only count
+    // rows with a real platform — keeps the breakdown aligned with the
+    // social_posts metric above (no blank bucket).
     const { data: socialPosts } = await supabase
       .from("posts")
       .select("platform")
       .eq("tenant_id", tenantId)
-      .gte("created_at", periodStart);
+      .gte("created_at", periodStart)
+      .not("platform", "is", null);
     const byPlatform: Record<string, number> = {};
     for (const p of socialPosts ?? []) {
-      const pf = String(p.platform ?? "other");
+      const pf = String(p.platform ?? "").trim();
+      if (!pf) continue;
       byPlatform[pf] = (byPlatform[pf] ?? 0) + 1;
     }
 

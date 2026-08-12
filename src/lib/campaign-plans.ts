@@ -19,7 +19,7 @@ export type CampaignPlanStatus =
   | "completed"
   | "archived";
 
-export type CampaignItemKind = "blog" | "social";
+export type CampaignItemKind = "blog" | "social" | "website";
 export type CampaignItemStatus =
   | "proposed"
   | "draft"

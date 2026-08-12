@@ -50,6 +50,26 @@ const TYPE_OWNERS: Record<string, string> = {
   infographic: "sonny",
 };
 
+/**
+ * Website-build milestones appended to the plan when the owner opts to
+ * include a website in the campaign. Owned by Ray (dev) and dated across
+ * the first month so the build runs alongside the content sprint.
+ */
+const WEBSITE_MILESTONES = [
+  {
+    topic: "Website structure & sitemap — pages, sections and content hierarchy",
+    week: 0,
+  },
+  {
+    topic: "Build core site pages with copy, images and global stylesheet",
+    week: 1,
+  },
+  {
+    topic: "Launch the site — connect blog publishing and go live",
+    week: 3,
+  },
+];
+
 const TYPE_PLATFORM: Record<string, string | null> = {
   blog_post: null,
   case_study: null,
@@ -74,7 +94,8 @@ const TYPE_PLATFORM: Record<string, string | null> = {
 export async function createCampaignFromProposal(
   tenantId: string,
   campaignId: string,
-  workspaceId: string | null
+  workspaceId: string | null,
+  includeWebsite = false
 ): Promise<CampaignPlan> {
   const supabase = await createServiceClient();
   const { data: campaign, error } = await supabase
@@ -133,9 +154,36 @@ export async function createCampaignFromProposal(
   const focusArea = launch?.focusArea
     ? ` — ${launch.focusArea}`
     : "";
+
+  // Website-build milestones (owner: Ray / dev) when the owner opted in —
+  // dated across the first month so the build lands on the calendar
+  // alongside the content sprint.
+  const websiteItems = includeWebsite
+    ? WEBSITE_MILESTONES.map((m) => {
+        const due = dates[Math.min(m.week, dates.length - 1)]?.slice(0, 10);
+        if (!due) return null;
+        return {
+          kind: "website" as const,
+          topic: m.topic,
+          dueDate: due,
+          platform: null,
+          owner: "dev",
+          keywords: null,
+          externalLinks: null,
+        };
+      }).filter((i): i is NonNullable<typeof i> => i !== null)
+    : [];
+
+  const allItems = [...items, ...websiteItems].sort((a, b) =>
+    a.dueDate.localeCompare(b.dueDate)
+  );
+
   const summary = [
     json.executiveSummary ?? "",
     `Seeded from the ${tierName} proposal: ${items.length} content pieces across the first month${focusArea}, scheduled at the tier's cadence. Owners assigned by content type. Approve items to turn them into drafts.`,
+    includeWebsite
+      ? "Website build included: structure, page build and launch milestones are on the calendar, owned by Ray — approving one opens the Web Builder to work on it."
+      : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -145,6 +193,6 @@ export async function createCampaignFromProposal(
     summary,
     workspaceId,
     createdBy: "proposal",
-    items,
+    items: allItems,
   });
 }

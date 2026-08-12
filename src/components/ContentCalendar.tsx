@@ -104,7 +104,7 @@ export interface ProposedItem {
   id: string;
   date: string; // yyyy-MM-dd
   title: string;
-  kind: "blog" | "social";
+  kind: "blog" | "social" | "website";
   planId: string;
   planTitle: string;
   platform?: string | null;
@@ -803,10 +803,18 @@ export default function ContentCalendar({
                           >
                             <div className="flex items-center gap-1 mb-0.5">
                               <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                                {item.kind === "blog" ? "📝" : (PLATFORM_ICONS[item.platform ?? ""] ?? "📣")}
+                                {item.kind === "website"
+                                  ? "🌐"
+                                  : item.kind === "blog"
+                                    ? "📝"
+                                    : (PLATFORM_ICONS[item.platform ?? ""] ?? "📣")}
                               </span>
                               <span className="text-[10px] font-medium text-muted-foreground">
-                                {item.kind === "blog" ? "Proposed blog" : "Proposed social"}
+                                {item.kind === "website"
+                                  ? "Proposed website build"
+                                  : item.kind === "blog"
+                                    ? "Proposed blog"
+                                    : "Proposed social"}
                               </span>
                             </div>
                             <p className="truncate text-muted-foreground leading-tight">
@@ -1423,6 +1431,20 @@ export default function ContentCalendar({
                 </div>
               )}
 
+              {/* Website milestones: no content generation — approving marks
+                  the build step active and points at the Web Builder. */}
+              {selectedProposed.kind === "website" && (
+                <div className="rounded-md bg-primary/5 border border-primary/20 px-3 py-2 text-xs text-muted-foreground">
+                  <p className="font-medium text-primary mb-0.5">🌐 Website build milestone</p>
+                  <p>
+                    Approving marks this step in progress — Ray&apos;s build is
+                    tracked here and the actual page building happens in the{" "}
+                    <span className="font-medium">Web Builder</span>. No content
+                    is generated for website milestones.
+                  </p>
+                </div>
+              )}
+
               {/* Media kind — socials default to image today; video ships later */}
               {selectedProposed.kind === "social" && (
                 <div>
@@ -1458,20 +1480,22 @@ export default function ContentCalendar({
                 </div>
               )}
 
-              <div className="rounded-md bg-muted/50 border px-3 py-2 text-xs text-muted-foreground space-y-1">
-                <p>
-                  Approving this idea generates the content now (Cheryl writes
-                  blogs with images, Pam writes social captions) and lands it as
-                  pending approval. The generated content needs a second, human
-                  approval before it can be scheduled or published.
-                </p>
-                <p className="pt-1">
-                  The generated piece is scored against the SEO checklist
-                  (keywords in title/meta/slug/body, image alt text, internal &
-                  external links, readability) and the score shows on the post
-                  before you approve it for publishing.
-                </p>
-              </div>
+              {selectedProposed.kind !== "website" && (
+                <div className="rounded-md bg-muted/50 border px-3 py-2 text-xs text-muted-foreground space-y-1">
+                  <p>
+                    Approving this idea generates the content now (Cheryl writes
+                    blogs with images, Pam writes social captions) and lands it as
+                    pending approval. The generated content needs a second, human
+                    approval before it can be scheduled or published.
+                  </p>
+                  <p className="pt-1">
+                    The generated piece is scored against the SEO checklist
+                    (keywords in title/meta/slug/body, image alt text, internal &
+                    external links, readability) and the score shows on the post
+                    before you approve it for publishing.
+                  </p>
+                </div>
+              )}
             </div>
           )}
 
@@ -1496,7 +1520,7 @@ export default function ContentCalendar({
               ) : (
                 <ThumbsUp className="size-4 mr-1" />
               )}
-              Approve & Generate
+              {selectedProposed?.kind === "website" ? "Approve milestone" : "Approve & Generate"}
             </Button>
             <Button
               variant="ghost"

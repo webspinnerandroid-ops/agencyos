@@ -3,7 +3,16 @@
 import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Trash2, Rocket, Loader2 } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Trash2, Rocket, Loader2, Globe, FolderPlus } from "lucide-react";
 
 // ============================================================================
 // Types
@@ -204,6 +213,10 @@ export default function SeoCampaignsPage() {
   const [loadingPast, setLoadingPast] = useState(true);
   const [startingCampaignId, setStartingCampaignId] = useState<string | null>(null);
   const [sendingSigId, setSendingSigId] = useState<string | null>(null);
+  const [startDialogCampaign, setStartDialogCampaign] = useState<string | null>(null);
+  const [startIncludeWebsite, setStartIncludeWebsite] = useState(false);
+  const [startCreateWorkspace, setStartCreateWorkspace] = useState(true);
+  const [startBusy, setStartBusy] = useState(false);
 
   // Fetch clients on mount
   useEffect(() => {
@@ -370,9 +383,13 @@ export default function SeoCampaignsPage() {
   // ------------------------------------------------------------------
   // Seed a dated campaign plan straight from this proposal tier (no LLM —
   // the proposal's content calendar is the blueprint). Lands on the Content
-  // Calendar as proposed items.
-  const handleStartCampaign = useCallback(async (campaignId: string) => {
+  // Calendar as proposed items. Opens a short setup dialog first so the
+  // owner can choose whether a website build is part of the campaign and
+  // whether to spin up a dedicated workspace.
+  const startCampaign = useCallback(async (campaignId: string) => {
     setStartingCampaignId(campaignId);
+    setStartBusy(true);
+    setError(null);
     try {
       const res = await fetch("/api/campaign-plans/from-proposal", {
         method: "POST",
@@ -381,20 +398,28 @@ export default function SeoCampaignsPage() {
         // Auto-create a dedicated workspace for the campaign so its plan,
         // posts and chat stay isolated — falls back to the current workspace
         // if the license's workspace quota is reached.
-        body: JSON.stringify({ campaignId, createWorkspace: true }),
+        body: JSON.stringify({
+          campaignId,
+          createWorkspace: startCreateWorkspace,
+          includeWebsite: startIncludeWebsite,
+        }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(data.error ?? "Failed to start campaign");
+        setStartDialogCampaign(null);
         return;
       }
+      setStartDialogCampaign(null);
       window.location.href = data.planUrl ?? "/dashboard/calendar";
     } catch {
       setError("Network error while starting campaign");
+      setStartDialogCampaign(null);
     } finally {
       setStartingCampaignId(null);
+      setStartBusy(false);
     }
-  }, []);
+  }, [startCreateWorkspace, startIncludeWebsite]);
 
   // ------------------------------------------------------------------
   // Send a proposal for DocuSign signature. If the client has no email on
@@ -885,7 +910,7 @@ export default function SeoCampaignsPage() {
                           size="sm"
                           className="col-span-2"
                           disabled={startingCampaignId !== null}
-                          onClick={() => handleStartCampaign(campaign.id)}
+                          onClick={() => setStartDialogCampaign(campaign.id)}
                           title="Seed a dated campaign plan on the Content Calendar from this tier's content calendar — no AI cost, then refine with the team."
                         >
                           {startingCampaignId === campaign.id ? (
@@ -961,7 +986,7 @@ export default function SeoCampaignsPage() {
                             variant="default"
                             size="sm"
                             disabled={startingCampaignId !== null}
-                            onClick={() => handleStartCampaign(campaign.id)}
+                            onClick={() => setStartDialogCampaign(campaign.id)}
                           >
                             {startingCampaignId === campaign.id ? (
                               <>
@@ -1069,6 +1094,77 @@ export default function SeoCampaignsPage() {
           </div>
         </Card>
       )}
+
+      {/* Start-campaign setup dialog — asks if a website is part of the build */}
+      <Dialog
+        open={!!startDialogCampaign}
+        onOpenChange={(open) => !open && !startBusy && setStartDialogCampaign(null)}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Start this campaign</DialogTitle>
+            <DialogDescription>
+              Seeds the tier&apos;s content calendar as proposed items on your
+              Content Calendar — no AI cost, then refine with the team.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <label className="flex items-start gap-3 rounded-md border p-3 cursor-pointer hover:bg-muted/40 transition-colors">
+              <Checkbox
+                checked={startIncludeWebsite}
+                onCheckedChange={(v) => setStartIncludeWebsite(v === true)}
+                className="mt-0.5"
+              />
+              <span>
+                <span className="flex items-center gap-1.5 font-medium text-sm">
+                  <Globe className="size-4 text-primary" /> Include a website build
+                </span>
+                <span className="text-xs text-muted-foreground block mt-0.5">
+                  Ray adds structure, page-build and launch milestones to the
+                  plan so the site is built in as part of the campaign flow.
+                </span>
+              </span>
+            </label>
+            <label className="flex items-start gap-3 rounded-md border p-3 cursor-pointer hover:bg-muted/40 transition-colors">
+              <Checkbox
+                checked={startCreateWorkspace}
+                onCheckedChange={(v) => setStartCreateWorkspace(v === true)}
+                className="mt-0.5"
+              />
+              <span>
+                <span className="flex items-center gap-1.5 font-medium text-sm">
+                  <FolderPlus className="size-4 text-primary" /> Create a dedicated workspace
+                </span>
+                <span className="text-xs text-muted-foreground block mt-0.5">
+                  Keeps this campaign&apos;s plan, posts and chats isolated from
+                  your general work (falls back to this workspace at quota).
+                </span>
+              </span>
+            </label>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button
+              variant="ghost"
+              disabled={startBusy}
+              onClick={() => setStartDialogCampaign(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="default"
+              disabled={startBusy}
+              onClick={() => startDialogCampaign && startCampaign(startDialogCampaign)}
+            >
+              {startBusy ? (
+                <Loader2 className="size-4 animate-spin mr-1" />
+              ) : (
+                <Rocket className="size-4 mr-1" />
+              )}
+              Start Campaign
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

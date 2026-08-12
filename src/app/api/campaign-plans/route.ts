@@ -97,6 +97,17 @@ export async function POST(request: NextRequest) {
     // as pending_approval when the content is ready.
     await updateCampaignItemStatus(tenantId, itemId, "draft");
 
+    // Website-build milestones have no generated content — approving marks
+    // the step in progress; the actual build happens in the Web Builder.
+    if (item.kind === "website") {
+      return NextResponse.json({
+        success: true,
+        generating: false,
+        message:
+          "Website milestone approved — build it in the Web Builder (/dashboard/cms).",
+      });
+    }
+
     // The workspace lives on the plan (items are scoped to the tenant).
     const workspaceId = await getCampaignPlanWorkspace(tenantId, item.plan_id);
     void generateApprovedCampaignItem(tenantId, itemId, workspaceId, mediaKind).catch(

@@ -14,13 +14,17 @@ import { createCampaignFromProposal } from "@/lib/campaign-from-proposal";
  * items on the Content Calendar), without any LLM call — the proposal's
  * content calendar is the blueprint.
  *
- * Body: { campaignId: string, workspaceId?: string, createWorkspace?: boolean }
+ * Body: { campaignId: string, workspaceId?: string, createWorkspace?: boolean,
+ *         includeWebsite?: boolean }
  *
  * When createWorkspace is true, a dedicated workspace is created for the
  * campaign (named after the tier) so its plan, posts and chats stay isolated
  * from the tenant's general work. Falls back to the current workspace when
  * the license's workspace limit is reached, so starting a campaign never
  * hard-fails on quota.
+ *
+ * When includeWebsite is true, website-build milestones (owned by Ray) are
+ * added to the plan so the site build is part of the campaign flow.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -31,6 +35,7 @@ export async function POST(request: NextRequest) {
       campaignId?: string;
       workspaceId?: string;
       createWorkspace?: boolean;
+      includeWebsite?: boolean;
     };
     if (!body.campaignId) {
       return NextResponse.json(
@@ -75,7 +80,8 @@ export async function POST(request: NextRequest) {
     const plan = await createCampaignFromProposal(
       tenantId,
       body.campaignId,
-      workspaceId
+      workspaceId,
+      body.includeWebsite === true
     );
 
     // The sold tier is now live — mark it approved so Recent SEO Audits and

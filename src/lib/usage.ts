@@ -43,27 +43,77 @@ export async function incrementUsage(
 // ------------------------------------------------------------------
 // getCurrentUsage
 // Returns usage counts for the current billing period (this month).
+//
+// Row-backed metrics (blogs, socials, images, videos, connected profiles)
+// are counted straight from the real tables — the increment counters were
+// only introduced recently, so relying on them alone undercounted anything
+// generated before they existed (and the Profile page boxes looked wrong
+// while the per-platform breakdown, which counts posts directly, looked
+// right). The counter remains the source only for ai_tokens, which has no
+// row-level equivalent.
 // ------------------------------------------------------------------
 export async function getCurrentUsage(
   tenantId: string
 ): Promise<{ metric: string; count: number }[]> {
   const supabase = await createServiceClient();
+  const periodStart = new Date(
+    new Date().getFullYear(),
+    new Date().getMonth(),
+    1
+  ).toISOString();
 
-  const { data, error } = await supabase
-    .from("tenant_usage")
-    .select("metric, count")
-    .eq("tenant_id", tenantId)
-    .gte("period_start", new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString());
+  const [counters, blogs, socials, images, videos, profiles] =
+    await Promise.all([
+      supabase
+        .from("tenant_usage")
+        .select("metric, count")
+        .eq("tenant_id", tenantId)
+        .gte("period_start", periodStart),
+      supabase
+        .from("posts")
+        .select("id", { count: "exact", head: true })
+        .eq("tenant_id", tenantId)
+        .eq("content->>type", "blog")
+        .gte("created_at", periodStart),
+      supabase
+        .from("posts")
+        .select("id", { count: "exact", head: true })
+        .eq("tenant_id", tenantId)
+        .eq("content->>type", "social")
+        .gte("created_at", periodStart),
+      supabase
+        .from("media_assets")
+        .select("id", { count: "exact", head: true })
+        .eq("tenant_id", tenantId)
+        .eq("type", "image")
+        .gte("created_at", periodStart),
+      supabase
+        .from("media_assets")
+        .select("id", { count: "exact", head: true })
+        .eq("tenant_id", tenantId)
+        .eq("type", "video")
+        .gte("created_at", periodStart),
+      supabase
+        .from("social_accounts")
+        .select("id", { count: "exact", head: true })
+        .eq("tenant_id", tenantId),
+    ]);
 
-  if (error) {
-    console.error("[usage] Error fetching usage:", error);
-    return [];
+  const counterMap = new Map<string, number>();
+  for (const row of (counters.data ?? []) as { metric: string; count: number }[]) {
+    counterMap.set(row.metric, row.count);
   }
 
-  return (data ?? []).map((row: { metric: string; count: number }) => ({
-    metric: row.metric,
-    count: row.count,
-  }));
+  const result = [
+    { metric: "blog_posts", count: blogs.count ?? 0 },
+    { metric: "social_posts", count: socials.count ?? 0 },
+    { metric: "image_generations", count: images.count ?? 0 },
+    { metric: "video_generations", count: videos.count ?? 0 },
+    { metric: "ai_tokens", count: counterMap.get("ai_tokens") ?? 0 },
+    { metric: "social_profiles", count: profiles.count ?? 0 },
+  ];
+
+  return result;
 }
 
 // ------------------------------------------------------------------

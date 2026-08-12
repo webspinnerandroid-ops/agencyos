@@ -68,8 +68,9 @@ export default function AdminDeployPage() {
     }
   };
 
-  // Test the SSH connection with the CURRENT form values (saved or not) and
-  // auto-detect the app path + process name, filling the fields automatically.
+  // Test the SSH connection with the CURRENT form values (saved or not),
+  // auto-detect the app path + process name, and immediately SAVE the detected
+  // values so the next click can be "Deploy now" — no manual second save.
   const testConnection = async () => {
     setTesting(true);
     setError(null);
@@ -87,9 +88,18 @@ export default function AdminDeployPage() {
         if (data.appPath) next.app_path = data.appPath;
         if (data.serviceName) next.service_name = data.serviceName;
         setConfig(next);
+        // Auto-save the merged config (including detected path/process) so
+        // the credentials + detection are persisted in one step.
+        const saveRes = await fetch("/api/admin/deploy", {
+          method: "PUT",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(next),
+        });
+        const saveData = await saveRes.json().catch(() => ({}));
         setTestResult({
           ok: true,
-          message: `Connected ✓ — app path ${data.appPath ?? "not found"}${data.serviceName ? `, process ${data.serviceName}` : ""}`,
+          message: `Connected ✓ — ${saveRes.ok ? "saved. " : "not saved: " + (saveData.error ?? "save failed")}App path ${data.appPath ?? "not found"}${data.serviceName ? `, process ${data.serviceName}` : ""}.`,
           appPath: data.appPath,
           serviceName: data.serviceName,
         });
@@ -192,11 +202,11 @@ export default function AdminDeployPage() {
             {testResult.ok ? <CheckCircle2 className="size-4 shrink-0 mt-0.5" /> : <XCircle className="size-4 shrink-0 mt-0.5" />}
             <div>
               <p>{testResult.message}</p>
-              {testResult.appPath && !config.app_path && (
-                <p className="text-xs mt-1">App path detected and filled in above.</p>
+              {testResult.appPath && (
+                <p className="text-xs mt-1">App path detected and saved automatically.</p>
               )}
-              {testResult.serviceName && !config.service_name && (
-                <p className="text-xs mt-1">Process name detected and filled in above.</p>
+              {testResult.serviceName && (
+                <p className="text-xs mt-1">Process name detected and saved automatically.</p>
               )}
             </div>
           </div>

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getTenantId } from "@/lib/auth";
+import { getTenantId, getUserId } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import { encrypt, decrypt } from "@/lib/encryption";
 
@@ -16,12 +16,14 @@ import { encrypt, decrypt } from "@/lib/encryption";
 async function requireAdmin(): Promise<string | null> {
   const tenantId = await getTenantId();
   if (!tenantId) return "Authentication required";
+  const userId = await getUserId();
+  if (!userId) return "Authentication required";
   const supabase = await createServiceClient();
   const { data: roles } = await supabase
     .from("user_roles")
     .select("role")
     .eq("tenant_id", tenantId)
-    .eq("user_id", tenantId);
+    .eq("user_id", userId);
   const isAdmin = (roles ?? []).some((r: any) => r.role === "super_admin");
   return isAdmin ? null : "Super admin access required";
 }

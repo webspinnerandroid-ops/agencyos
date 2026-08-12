@@ -11,6 +11,85 @@ import { generateStructuredOutput } from "@/lib/ai/orchestrator";
 import { getSeoCampaignPrompt, type CampaignTier } from "@/lib/ai/seo-prompts";
 import type { AITask } from "@/lib/ai/orchestrator";
 
+// ----------------------------------------------------------------------------
+// Social presence research — AI-assisted (labeled as estimates in the UI).
+// For each brand (the audited site + its competitors), summarize which social
+// platforms they use, how active they are, and what seems to work or not.
+// ----------------------------------------------------------------------------
+interface SocialBrand {
+  name: string;
+  url: string;
+}
+
+async function researchSocialPresence(
+  tenantId: string,
+  brands: SocialBrand[]
+): Promise<{ brands: any[]; overall: string }> {
+  const result = await generateStructuredOutput<{
+    brands: {
+      name: string;
+      url: string;
+      platforms: { platform: string; url: string | null; active: boolean; notes: string }[];
+    }[];
+    overall: string;
+  }>(
+    "team_chat",
+    `You are a social-media analyst for a digital agency. For each business below,
+assess its social presence based on what you know about the brand and its
+public profiles. For each brand give:
+- name: the brand name
+- url: the business website
+- platforms: array of the platforms they are visibly active on (Facebook,
+  Instagram, LinkedIn, X/Twitter, TikTok, YouTube, Pinterest, Threads, etc.)
+  with: platform name, url (their profile if confidently known, else null),
+  active (true/false — are they posting regularly?), and notes (one line on
+  what they seem to do well or poorly there)
+Also give "overall": 2-3 sentences summarizing how the category uses social
+media and where the biggest opportunity/gap is.
+IMPORTANT: this is ASSISTED RESEARCH, not verified data. Mark anything
+uncertain as such in notes. Return JSON: { "brands": [...], "overall": "..." }`,
+    `Brands:\n${brands.map((b) => `- ${b.name} (${b.url})`).join("\n")}`,
+    tenantId,
+    {
+      type: "object",
+      properties: {
+        brands: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              url: { type: "string" },
+              platforms: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    platform: { type: "string" },
+                    url: { type: ["string", "null"] },
+                    active: { type: "boolean" },
+                    notes: { type: "string" },
+                  },
+                  required: ["platform", "active", "notes"],
+                },
+              },
+            },
+            required: ["name", "url", "platforms"],
+          },
+        },
+        overall: { type: "string" },
+      },
+      required: ["brands", "overall"],
+    },
+    { functionName: "research_social_presence", temperature: 0.4, maxTokens: 1500 }
+  );
+
+  return {
+    brands: Array.isArray(result.brands) ? result.brands : [],
+    overall: result.overall ?? "",
+  };
+}
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -328,6 +407,27 @@ export async function POST(request: NextRequest) {
     }
 
     // ------------------------------------------------------------------
+    // 4b. Social research — which platforms each brand (site + competitors)
+    // uses, how active they are, and what seems to work or not, so the
+    // proposal's social strategy is grounded in real presence instead of
+    // generic advice. AI-assisted estimates, labeled as such in the UI.
+    // ------------------------------------------------------------------
+    let socialResearch: any = { brands: [], overall: "" };
+    try {
+      const brands = [
+        { name: siteAudit?.homepage?.title || new URL(siteAudit.url).hostname, url: siteAudit.url },
+        ...competitorData.map((c: any) => ({
+          name: c.competitorName || c.competitorUrl,
+          url: c.competitorUrl,
+        })),
+      ];
+      socialResearch = await researchSocialPresence(tenantId, brands);
+    } catch (socialErr: any) {
+      console.warn("[generate-campaign] Social research failed, continuing without:", socialErr?.message);
+      socialResearch = { brands: [], overall: "" };
+    }
+
+    // ------------------------------------------------------------------
     // 5. Fetch tier templates for the tenant (or use defaults)
     // ------------------------------------------------------------------
     let tiers: CampaignTier[] = DEFAULT_TIERS;
@@ -369,9 +469,12 @@ export async function POST(request: NextRequest) {
 The website audit revealed an overall score of ${auditData.overallScore}/100 with ${auditData.technicalIssues?.length ?? 0} technical issues and ${auditData.onPageIssues?.length ?? 0} on-page issues.
 Competitors include: ${competitorData.map((c: any) => c.competitorUrl).join(", ") || "none detected"}.
 
+Social presence research (AI-assisted estimates — verify before acting):
+${socialResearch.overall || "No social data available."}
+
 IMPORTANT: Recommend the SINGLE BEST TIER for this business based on: their current site quality, number of competitors, industry competitiveness, current rankings, and content gaps. Include a "recommended_tier" field with the tier name and a brief justification.
 
-Create one campaign per tier that is realistic, actionable, and tailored to the actual findings.`;
+Create one campaign per tier that is realistic, actionable, and tailored to the actual findings. Base each tier's social strategy on the social presence research above (which platforms to prioritize, what the business and competitors are doing well or poorly).`;
 
     let campaigns;
     try {
@@ -532,6 +635,7 @@ Create one campaign per tier that is realistic, actionable, and tailored to the 
             campaign_json: campaign,
             audit_json: location ? { ...siteAudit, location } : siteAudit,
             competitors_json: competitorData,
+            social_research_json: socialResearch,
             location: location || null,
             created_by: userId,
           })

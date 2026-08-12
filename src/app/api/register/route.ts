@@ -30,11 +30,12 @@ export async function POST(request: NextRequest) {
       { auth: { autoRefreshToken: false, persistSession: false } }
     );
 
-    // 0. Create user via admin API (no email sent, auto-confirmed)
+    // 0. Create user via admin API. email_confirm: false — Supabase sends the
+    // confirmation email and the account can't sign in until it's verified.
     const { data: userData, error: userError } = await supabase.auth.admin.createUser({
       email,
       password,
-      email_confirm: true,
+      email_confirm: false,
       user_metadata: { company_name: companyName },
     });
 

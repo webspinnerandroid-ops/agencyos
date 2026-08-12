@@ -32,6 +32,38 @@ export async function getTenantId(): Promise<string> {
 }
 
 // ------------------------------------------------------------------
+// getUserId
+// Resolves the authenticated Supabase user id from the session cookie
+// (the middleware only sets tenant/role/email cookies, not the user id).
+// Returns null when there is no valid session.
+// ------------------------------------------------------------------
+export async function getUserId(): Promise<string | null> {
+  try {
+    const { createServerClient } = await import("@supabase/ssr");
+    const { cookies: nextCookies } = await import("next/headers");
+    const cookieStore = await nextCookies();
+    const userClient = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          getAll() {
+            return cookieStore.getAll();
+          },
+          setAll() {},
+        },
+      }
+    );
+    const {
+      data: { user },
+    } = await userClient.auth.getUser();
+    return user?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// ------------------------------------------------------------------
 // getRole
 // Reads the x-user-role cookie set by the middleware.
 // ------------------------------------------------------------------

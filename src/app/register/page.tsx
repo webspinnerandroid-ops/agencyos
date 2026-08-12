@@ -75,8 +75,11 @@ export default function RegisterPage() {
             <div className="mx-auto w-16 h-16 rounded-full bg-green-100 flex items-center justify-center">
               <Check className="size-8 text-green-600" />
             </div>
-            <h2 className="text-2xl font-bold">Account Created!</h2>
-            <p className="text-muted-foreground">Your account is ready. Sign in to start using Agency OS.</p>
+            <h2 className="text-2xl font-bold">Check your email</h2>
+            <p className="text-muted-foreground">
+              We sent a confirmation link to your inbox. Click it to verify your email, then
+              sign in to start using Agency OS.
+            </p>
             <Link href="/login"><Button className="mt-4">Go to Sign In</Button></Link>
           </CardContent>
         </Card>

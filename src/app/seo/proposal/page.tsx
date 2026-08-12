@@ -21,6 +21,14 @@ interface StoredCampaign {
   campaign_json: CampaignJson;
   audit_json?: AuditJson;
   competitors_json?: CompetitorData[];
+  social_research_json?: {
+    brands: {
+      name: string;
+      url: string;
+      platforms: { platform: string; url: string | null; active: boolean; notes: string }[];
+    }[];
+    overall: string;
+  };
   created_at: string;
   docusign_envelope_id?: string | null;
   docusign_status?: string | null;
@@ -351,6 +359,7 @@ export default function PublicSeoProposalPage() {
   const cj = selectedCampaign.campaign_json;
   const audit = selectedCampaign.audit_json;
   const competitors = selectedCampaign.competitors_json ?? [];
+  const socialResearch = selectedCampaign.social_research_json;
 
   return (
     <div className="min-h-screen bg-background p-4 md:p-8">
@@ -540,6 +549,40 @@ export default function PublicSeoProposalPage() {
                     </div>
                   )}
                   <p className="text-xs text-muted-foreground italic">{comp.contentStrategy}</p>
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
+
+        {/* Social presence research (AI-assisted estimates) */}
+        {socialResearch && (socialResearch.brands?.length > 0 || socialResearch.overall) && (
+          <Card className="p-6">
+            <h2 className="text-lg font-semibold mb-2">Social Presence Research</h2>
+            <p className="text-xs text-muted-foreground italic mb-4">
+              AI-assisted estimates from public profiles — verify before relying on them.
+            </p>
+            {socialResearch.overall && (
+              <p className="text-sm text-muted-foreground mb-4">{socialResearch.overall}</p>
+            )}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {(socialResearch.brands ?? []).map((b, i) => (
+                <div key={i} className="p-4 rounded-lg border">
+                  <h4 className="font-medium text-sm mb-2 text-primary">{b.name}</h4>
+                  {(b.platforms ?? []).length > 0 ? (
+                    <ul className="space-y-1.5">
+                      {(b.platforms ?? []).map((p, j) => (
+                        <li key={j} className="text-xs text-muted-foreground flex items-start gap-2">
+                          <span className={p.active ? "text-green-600 font-medium" : "text-gray-400"}>
+                            {p.active ? "●" : "○"} {p.platform}
+                          </span>
+                          {p.notes && <span className="flex-1">— {p.notes}</span>}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">No platforms detected.</p>
+                  )}
                 </div>
               ))}
             </div>

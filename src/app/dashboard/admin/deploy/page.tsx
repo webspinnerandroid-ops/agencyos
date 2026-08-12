@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Loader2, Rocket } from "lucide-react";
+import { Loader2, Rocket, PlugZap, CheckCircle2, XCircle } from "lucide-react";
 
 export default function AdminDeployPage() {
   const [config, setConfig] = useState<Record<string, string>>({});
@@ -15,6 +15,13 @@ export default function AdminDeployPage() {
   const [output, setOutput] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{
+    ok: boolean;
+    message: string;
+    appPath?: string | null;
+    serviceName?: string | null;
+  } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -58,6 +65,41 @@ export default function AdminDeployPage() {
       setError(e.message ?? "Failed to save");
     } finally {
       setSaving(false);
+    }
+  };
+
+  // Test the SSH connection with the CURRENT form values (saved or not) and
+  // auto-detect the app path + process name, filling the fields automatically.
+  const testConnection = async () => {
+    setTesting(true);
+    setError(null);
+    setTestResult(null);
+    try {
+      const res = await fetch("/api/admin/deploy/test", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(config),
+      });
+      const data = await res.json();
+      if (res.ok && data.ok) {
+        const next = { ...config };
+        if (data.appPath) next.app_path = data.appPath;
+        if (data.serviceName) next.service_name = data.serviceName;
+        setConfig(next);
+        setTestResult({
+          ok: true,
+          message: `Connected ✓ — app path ${data.appPath ?? "not found"}${data.serviceName ? `, process ${data.serviceName}` : ""}`,
+          appPath: data.appPath,
+          serviceName: data.serviceName,
+        });
+      } else {
+        setTestResult({ ok: false, message: data.error ?? data.message ?? "Connection failed" });
+      }
+    } catch (e: any) {
+      setTestResult({ ok: false, message: e.message ?? "Connection failed" });
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -126,15 +168,39 @@ export default function AdminDeployPage() {
             />
           </div>
         ))}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
           <Button onClick={save} disabled={saving}>
             {saving ? <Loader2 className="size-4 animate-spin mr-1" /> : null} Save SSH settings
+          </Button>
+          <Button variant="outline" onClick={testConnection} disabled={testing || !config.ssh_host || !config.ssh_user}>
+            {testing ? <Loader2 className="size-4 animate-spin mr-1" /> : <PlugZap className="size-4 mr-1" />}
+            {testing ? "Testing…" : "Test & auto-detect"}
           </Button>
           <Button variant="default" onClick={deploy} disabled={deploying || !config.ssh_host || !config.app_path}>
             {deploying ? <Loader2 className="size-4 animate-spin mr-1" /> : <Rocket className="size-4 mr-1" />}
             {deploying ? "Deploying…" : "Deploy now"}
           </Button>
         </div>
+        {testResult && (
+          <div
+            className={`p-3 rounded-md border text-sm flex items-start gap-2 ${
+              testResult.ok
+                ? "bg-green-50 text-green-700 border-green-200"
+                : "bg-red-50 text-red-700 border-red-200"
+            }`}
+          >
+            {testResult.ok ? <CheckCircle2 className="size-4 shrink-0 mt-0.5" /> : <XCircle className="size-4 shrink-0 mt-0.5" />}
+            <div>
+              <p>{testResult.message}</p>
+              {testResult.appPath && !config.app_path && (
+                <p className="text-xs mt-1">App path detected and filled in above.</p>
+              )}
+              {testResult.serviceName && !config.service_name && (
+                <p className="text-xs mt-1">Process name detected and filled in above.</p>
+              )}
+            </div>
+          </div>
+        )}
         <p className="text-xs text-muted-foreground">
           Password is stored encrypted and never shown again (displayed as dots). Deploy can take several minutes — build output appears below.
         </p>

@@ -119,7 +119,7 @@ export async function POST(request: NextRequest) {
   const tenantId = await getTenantId();
   const supabase = await createServiceClient();
 
-  let body: { planId?: string; priceId?: string; action?: string };
+  let body: { planId?: string; priceId?: string; action?: string; couponCode?: string };
   try {
     body = await request.json();
   } catch {
@@ -244,6 +244,56 @@ export async function POST(request: NextRequest) {
     customerId = customer.id;
   }
 
+  // ------------------------------------------------------------------
+  // Coupon code: super-admin-issued app codes applied at checkout.
+  // Validated against coupon_codes, then mirrored to a Stripe coupon
+  // (stable id => idempotent) so the discount shows at purchase time.
+  // ------------------------------------------------------------------
+  let couponDiscount: { coupon: string } | null = null;
+  const couponCode = String(body.couponCode ?? "").trim().toUpperCase();
+  if (couponCode) {
+    const { data: coupon } = await supabase
+      .from("coupon_codes")
+      .select("*")
+      .eq("code", couponCode)
+      .maybeSingle();
+    if (!coupon || !coupon.active) {
+      return NextResponse.json({ error: `Coupon code "${couponCode}" is invalid or inactive.` }, { status: 400 });
+    }
+    if (coupon.expires_at && new Date(coupon.expires_at).getTime() < Date.now()) {
+      return NextResponse.json({ error: `Coupon code "${couponCode}" has expired.` }, { status: 400 });
+    }
+    if (coupon.max_uses != null && (coupon.used_count ?? 0) >= coupon.max_uses) {
+      return NextResponse.json({ error: `Coupon code "${couponCode}" has reached its usage limit.` }, { status: 400 });
+    }
+    if (coupon.plan_id && coupon.plan_id !== (body.planId ?? "")) {
+      return NextResponse.json(
+        { error: `Coupon code "${couponCode}" only applies to the ${coupon.plan_id} plan.` },
+        { status: 400 }
+      );
+    }
+    // Mirror to Stripe with a stable id so re-creating is idempotent.
+    const stripeCouponId = `agencyos_${couponCode.toLowerCase()}`;
+    try {
+      await stripe.coupons.retrieve(stripeCouponId);
+    } catch {
+      await stripe.coupons.create({
+        id: stripeCouponId,
+        percent_off: coupon.percent_off,
+        duration: "once",
+        name: couponCode,
+        max_redemptions: coupon.max_uses ?? undefined,
+        redeem_by: coupon.expires_at ? Math.floor(new Date(coupon.expires_at).getTime() / 1000) : undefined,
+      });
+    }
+    couponDiscount = { coupon: stripeCouponId };
+    // Count this redemption (best-effort; the session may not complete).
+    await supabase
+      .from("coupon_codes")
+      .update({ used_count: (coupon.used_count ?? 0) + 1, updated_at: new Date().toISOString() })
+      .eq("id", coupon.id);
+  }
+
   // Build the checkout session
   const origin = request.headers.get("origin") ?? "http://localhost:3000";
 
@@ -259,10 +309,12 @@ export async function POST(request: NextRequest) {
     metadata: {
       tenant_id: tenantId,
       plan_id: body.planId ?? "",
+      ...(couponCode ? { coupon_code: couponCode } : {}),
     },
     success_url: `${origin}/dashboard/billing?success=true`,
     cancel_url: `${origin}/dashboard/billing?canceled=true`,
     allow_promotion_codes: true,
+    ...(couponDiscount ? { discounts: [couponDiscount] } : {}),
     billing_address_collection: "auto",
   });
 

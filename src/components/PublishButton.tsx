@@ -132,7 +132,23 @@ export default function PublishButton({ postId, postType, onPublished }: Publish
           Publish
         </Button>
       ) : (
-        <div className="absolute right-0 top-0 z-50 w-64 p-4 rounded-lg border bg-card shadow-lg space-y-3">
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setShowOptions(false)}
+        >
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+          <div
+            className="relative w-full max-w-sm p-4 rounded-lg border bg-card shadow-xl space-y-3 max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Publish options</span>
+              <button onClick={() => setShowOptions(false)} className="p-1 rounded hover:bg-muted text-muted-foreground" title="Close">
+                ✕
+              </button>
+            </div>
           <div className="space-y-2">
             <Label className="text-xs">Platform</Label>
             <Select value={platform} onValueChange={setPlatform}>
@@ -244,6 +260,7 @@ export default function PublishButton({ postId, postType, onPublished }: Publish
               {feedback}
             </p>
           )}
+          </div>
         </div>
       )}
     </div>

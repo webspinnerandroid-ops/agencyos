@@ -116,6 +116,8 @@ export default function BillingPage() {
   const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null);
   const [portalLoading, setPortalLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  // Coupon code (super-admin-issued) applied at checkout.
+  const [couponCode, setCouponCode] = useState("");
 
   const fetchBilling = useCallback(async () => {
     try {
@@ -163,7 +165,7 @@ export default function BillingPage() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ planId }),
+        body: JSON.stringify({ planId, couponCode: couponCode.trim() || undefined }),
       });
 
       if (!res.ok) {
@@ -292,6 +294,36 @@ export default function BillingPage() {
           </button>
         </div>
       )}
+
+      {/* Coupon code — super-admin-issued discount applied at checkout */}
+      <section className="rounded-lg border bg-card p-5">
+        <h2 className="text-sm font-semibold mb-1">Have a coupon code?</h2>
+        <p className="text-xs text-muted-foreground mb-3">
+          Enter a code issued by your provider and it will be applied automatically when you
+          upgrade or subscribe below.
+        </p>
+        <div className="flex gap-2 max-w-sm">
+          <input
+            value={couponCode}
+            onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+            placeholder="e.g. SUMMER30"
+            className="flex-1 rounded-md border border-input bg-background px-3 py-2 text-sm uppercase"
+          />
+          <button
+            onClick={() => setCouponCode("")}
+            disabled={!couponCode}
+            className="inline-flex items-center rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm hover:bg-accent disabled:opacity-40"
+          >
+            Clear
+          </button>
+        </div>
+        {couponCode && (
+          <p className="text-xs text-muted-foreground mt-2">
+            "{couponCode}" will be applied to the next checkout. Invalid or expired codes are
+            rejected before payment starts.
+          </p>
+        )}
+      </section>
 
       {/* Current Plan Card */}
       <section>

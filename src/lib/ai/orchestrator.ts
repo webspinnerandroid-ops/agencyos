@@ -1415,16 +1415,18 @@ async function callRunwayAPI(
   prompt: string,
   _options?: { duration?: number }
 ): Promise<VideoGenerationResult> {
-  const response = await fetch(`${resolution.providerBaseUrl}/text-to-video`, {
+  // Runway's real endpoints use underscores: /v1/text_to_video (not
+  // text-to-video) — the old path 404'd. Base URL already ends in /v1.
+  const response = await fetch(`${resolution.providerBaseUrl}/text_to_video`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Authorization: `Bearer ${resolution.apiKey}`,
+      "X-Runway-Version": "2024-11-06",
     },
     body: JSON.stringify({
       model: resolution.model,
       promptText: prompt,
-      duration: _options?.duration ?? 5,
     }),
   });
 

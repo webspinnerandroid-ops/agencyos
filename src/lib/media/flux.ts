@@ -4,6 +4,7 @@ import {
   generateVideo,
   generateVoice,
 } from "@/lib/ai/orchestrator";
+import { persistVideoToStorage } from "@/lib/media/storage";
 
 // ============================================================================
 // Types
@@ -250,8 +251,11 @@ export async function createVideoAsset(
     // Video generation is async — store the provider ID and mark as processing
     // The caller can poll via GET asset later
     if (result.status === "completed" && result.videoUrl) {
+      // Provider URLs (fal/Wan/Runway) expire — persist to Bunny so the
+      // library keeps playing forever instead of showing 0:00.
+      const url = await persistVideoToStorage(tenantId, result.videoUrl);
       await completeAsset(asset.id, {
-        url: result.videoUrl,
+        url,
         metadata: {
           providerId: result.id,
           estimatedSeconds: result.estimatedSeconds,
@@ -260,7 +264,7 @@ export async function createVideoAsset(
       });
       return {
         ...asset,
-        url: result.videoUrl,
+        url,
         status: "completed",
         metadata: {
           providerId: result.id,

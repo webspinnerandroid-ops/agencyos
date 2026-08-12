@@ -112,6 +112,41 @@ export async function persistImageToStorage(
 }
 
 /**
+ * Persists a generated video to Bunny storage.
+ *
+ * Provider URLs (fal.ai `*.fal.media`, DashScope, Runway) are usually
+ * short-lived signed URLs that expire within hours — a library entry pointing
+ * at them shows 0:00 and stops playing. This downloads the bytes and re-uploads
+ * them to the tenant's Bunny zone, returning the permanent CDN URL. On any
+ * failure the original URL is returned rather than losing the asset.
+ */
+export async function persistVideoToStorage(
+  tenantId: string,
+  url: string
+): Promise<string> {
+  if (!url || typeof url !== "string") return url;
+  // Data URLs (rare for video) pass through untouched.
+  if (isDataUrl(url)) return url;
+  // Already on our own CDN — nothing to do.
+  if (url.startsWith(`https://${BUNNY_PULL_HOST}/`)) return url;
+
+  try {
+    const res = await fetch(url);
+    if (!res.ok) {
+      console.warn("[storage] Video download failed:", res.status, url.slice(0, 120));
+      return url;
+    }
+    const body = Buffer.from(await res.arrayBuffer());
+    const path = `videos/${crypto.randomUUID()}.mp4`;
+    const ok = await bunnyUpload(`${tenantId}/${path}`, body, "video/mp4");
+    return ok ? storagePublicUrl(`${tenantId}/${path}`) : url;
+  } catch (err) {
+    console.warn("[storage] Video persist error:", err);
+    return url;
+  }
+}
+
+/**
  * Uploads arbitrary bytes (PDFs, etc.) under {tenantId}/<path> and returns
  * the public CDN URL. Used for signed contracts and other non-image assets.
  * Returns null on failure.

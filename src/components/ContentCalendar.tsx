@@ -343,7 +343,9 @@ export default function ContentCalendar({
         setPublishError(
           data?.error ??
             (data?.code === "score_gate"
-              ? "This post's SEO score is below the publish minimum. Improve or regenerate the content first."
+              ? data?.autoRewriting
+                ? "This post's score is below the publish minimum — auto-rewriting it now. Try publishing again in about a minute."
+                : "This post's score is below the publish minimum. Improve or regenerate the content first."
               : "Publish failed — see details below.")
         );
         return;

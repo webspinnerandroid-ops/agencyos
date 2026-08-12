@@ -2,6 +2,10 @@ import { notFound } from "next/navigation";
 import { createServiceClient } from "@/lib/supabase/server";
 import { renderBlockHtml, CMS_STYLES, type CmsBlock } from "@/lib/cms";
 
+// Must be request-time rendered: pages are read from the DB per slug, and
+// notFound() must return a real 404 (static prerender returns 200 here).
+export const dynamic = "force-dynamic";
+
 /**
  * Public CMS renderer — /site/<slug>.
  * Renders a published page's blocks. Unpublished pages 404 publicly.

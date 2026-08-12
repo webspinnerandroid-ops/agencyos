@@ -83,7 +83,12 @@ export default function PublishButton({ postId, postType, onPublished }: Publish
 
         const data = await res.json();
         if (data.success) {
-          setFeedback(`Published! ${data.message}`);
+          const cmsResult = (data.results ?? []).find((r: any) => r.platform === "cms");
+          if (cmsResult?.url) {
+            setFeedback(`Published to your website — /site/${(cmsResult.url as string).split("/").pop()}`);
+          } else {
+            setFeedback(`Published! ${data.message}`);
+          }
           onPublished?.();
         } else {
           // Surface per-platform failures so the user can see which one broke
@@ -100,7 +105,11 @@ export default function PublishButton({ postId, postType, onPublished }: Publish
   };
 
   const platforms = postType === "blog"
-    ? [{ id: "wordpress", name: "WordPress" }, { id: "all", name: "All Connected" }]
+    ? [
+        { id: "cms", name: "Your Website (CMS)" },
+        { id: "wordpress", name: "WordPress" },
+        { id: "all", name: "All Connected" },
+      ]
     : [
         { id: "instagram", name: "Instagram" },
         { id: "twitter", name: "X (Twitter)" },

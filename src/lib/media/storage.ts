@@ -119,30 +119,37 @@ export async function persistImageToStorage(
  * at them shows 0:00 and stops playing. This downloads the bytes and re-uploads
  * them to the tenant's Bunny zone, returning the permanent CDN URL. On any
  * failure the original URL is returned rather than losing the asset.
+ *
+ * Returns { url, sizeBytes } — the byte length is known from the download, so
+ * callers can store it as the asset's file size without a second request.
  */
 export async function persistVideoToStorage(
   tenantId: string,
   url: string
-): Promise<string> {
-  if (!url || typeof url !== "string") return url;
+): Promise<{ url: string; sizeBytes: number | null }> {
+  if (!url || typeof url !== "string") return { url, sizeBytes: null };
   // Data URLs (rare for video) pass through untouched.
-  if (isDataUrl(url)) return url;
-  // Already on our own CDN — nothing to do.
-  if (url.startsWith(`https://${BUNNY_PULL_HOST}/`)) return url;
+  if (isDataUrl(url)) return { url, sizeBytes: null };
+  // Already on our own CDN — nothing to do (size unknown without a HEAD).
+  if (url.startsWith(`https://${BUNNY_PULL_HOST}/`)) {
+    return { url, sizeBytes: null };
+  }
 
   try {
     const res = await fetch(url);
     if (!res.ok) {
       console.warn("[storage] Video download failed:", res.status, url.slice(0, 120));
-      return url;
+      return { url, sizeBytes: null };
     }
     const body = Buffer.from(await res.arrayBuffer());
     const path = `videos/${crypto.randomUUID()}.mp4`;
     const ok = await bunnyUpload(`${tenantId}/${path}`, body, "video/mp4");
-    return ok ? storagePublicUrl(`${tenantId}/${path}`) : url;
+    return ok
+      ? { url: storagePublicUrl(`${tenantId}/${path}`), sizeBytes: body.length }
+      : { url, sizeBytes: null };
   } catch (err) {
     console.warn("[storage] Video persist error:", err);
-    return url;
+    return { url, sizeBytes: null };
   }
 }
 

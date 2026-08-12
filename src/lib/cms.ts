@@ -93,26 +93,39 @@ function esc(v: unknown): string {
 }
 
 function markdownToHtml(md: string): string {
-  // Minimal, safe subset: paragraphs, ##/### headings, **bold**, *italic*,
+  // Minimal, safe subset: paragraphs, ##/### headings (even when a heading
+  // follows a paragraph with only a single newline), **bold**, *italic*,
   // links, and line breaks. NOT a full markdown engine — content is authored
   // in the builder, and we never execute raw HTML.
-  return md
-    .split(/\n{2,}/)
-    .map((p) => {
-      const h = p.match(/^(#{1,3})\s+(.*)$/);
-      if (h) return `<h${h[1].length}>${esc(h[2])}</h${h[1].length}>`;
-      const lines = p
-        .split("\n")
-        .map((l) =>
-          l
-            .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-            .replace(/\*([^*]+)\*/g, "<em>$1</em>")
-            .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
-        )
-        .join("<br />");
-      return `<p>${lines}</p>`;
-    })
-    .join("\n");
+  const lines = md.split(/\r?\n/);
+  const out: string[] = [];
+  let para: string[] = [];
+  const flush = () => {
+    if (para.length > 0) {
+      out.push(`<p>${para.join("<br />")}</p>`);
+      para = [];
+    }
+  };
+  for (const raw of lines) {
+    const line = raw.trim();
+    const h = line.match(/^(#{1,3})\s+(.+)$/);
+    if (h) {
+      flush();
+      out.push(`<h${h[1].length}>${esc(h[2])}</h${h[1].length}>`);
+      continue;
+    }
+    if (!line) {
+      flush();
+      continue;
+    }
+    const styled = line
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+      .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    para.push(styled);
+  }
+  flush();
+  return out.join("\n");
 }
 
 function youtubeEmbed(url: string): string {

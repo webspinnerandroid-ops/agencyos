@@ -382,37 +382,58 @@ export default function GenerateVideosPage() {
     }
   };
 
-  // Reads a video's duration + file size (HEAD on the CDN URL) so the card
-  // can show badges. Cached per asset id.
+  // Reads a video's duration + file size so the card can show badges.
+  // Prefers stored values (sizeBytes at completion, durationSeconds persisted
+  // on first read); probes the CDN only when a value isn't stored yet, and
+  // writes the duration back so later visits render instantly.
   const readVideoInfo = async (v: VideoAsset) => {
     if (!v.url || v.status !== "completed") return;
     if (videoInfo[v.id]) return;
+    const stored = v.metadata ?? {};
     const info: { duration?: number; sizeBytes?: number } = {};
-    try {
-      const res = await fetch(v.url, { method: "HEAD", credentials: "omit" });
-      const len = Number(res.headers.get("content-length"));
-      if (Number.isFinite(len) && len > 0) info.sizeBytes = len;
-    } catch {
-      // ignore
-    }
-    try {
-      const video = document.createElement("video");
-      video.preload = "metadata";
-      video.src = v.url;
-      await new Promise<void>((resolve) => {
-        video.onloadedmetadata = () => resolve();
-        video.onerror = () => resolve();
-        setTimeout(resolve, 6000);
-        video.load();
-      });
-      if (Number.isFinite(video.duration) && video.duration > 0) {
-        info.duration = video.duration;
+    if (stored.sizeBytes != null) info.sizeBytes = Number(stored.sizeBytes);
+    if (stored.durationSeconds != null) info.duration = Number(stored.durationSeconds);
+
+    if (info.sizeBytes == null) {
+      try {
+        const res = await fetch(v.url, { method: "HEAD", credentials: "omit" });
+        const len = Number(res.headers.get("content-length"));
+        if (Number.isFinite(len) && len > 0) info.sizeBytes = len;
+      } catch {
+        // ignore
       }
-    } catch {
-      // ignore
     }
+
+    if (info.duration == null) {
+      try {
+        const video = document.createElement("video");
+        video.preload = "metadata";
+        video.src = v.url;
+        await new Promise<void>((resolve) => {
+          video.onloadedmetadata = () => resolve();
+          video.onerror = () => resolve();
+          setTimeout(resolve, 6000);
+          video.load();
+        });
+        if (Number.isFinite(video.duration) && video.duration > 0) {
+          info.duration = video.duration;
+        }
+      } catch {
+        // ignore
+      }
+    }
+
     if (info.duration != null || info.sizeBytes != null) {
       setVideoInfo((prev) => ({ ...prev, [v.id]: info }));
+    }
+    // Persist the freshly-read duration so the next visit is instant.
+    if (info.duration != null && stored.durationSeconds == null) {
+      fetch(`/api/media/videos/${v.id}`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ duration: info.duration }),
+      }).catch(() => {});
     }
   };
 
@@ -437,11 +458,24 @@ export default function GenerateVideosPage() {
       });
       if (res.ok) {
         setVideos((prev) => prev.filter((v) => v.id !== id));
+        setLightbox(null);
       }
     } catch {
       // ignore
     }
   };
+
+  // Lightbox: which video is open full-size (null = closed).
+  const [lightbox, setLightbox] = useState<VideoAsset | null>(null);
+
+  useEffect(() => {
+    if (!lightbox) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setLightbox(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [lightbox]);
 
   // ------------------------------------------------------------------
   // Render
@@ -704,7 +738,15 @@ export default function GenerateVideosPage() {
           ) : (                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {videos.map((v) => (
                 <Card key={v.id} className="overflow-hidden">
-                  <div className="aspect-video bg-muted relative flex items-center justify-center">
+                  <div
+                    className={`aspect-video bg-muted relative flex items-center justify-center ${
+                      v.status === "completed" && v.url ? "cursor-pointer" : ""
+                    }`}
+                    onClick={() => {
+                      if (v.status === "completed" && v.url) setLightbox(v);
+                    }}
+                    title={v.status === "completed" && v.url ? "Click to view full size" : undefined}
+                  >
                     {v.status === "completed" && v.url ? (
                       <video
                         src={v.url}
@@ -749,14 +791,14 @@ export default function GenerateVideosPage() {
                           {v.model}
                         </span>
                       ) : null}
-                      {videoInfo[v.id]?.duration != null && (
+                      {formatDuration(videoInfo[v.id]?.duration) && (
                         <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">
-                          {formatDuration(videoInfo[v.id].duration)}
+                          {formatDuration(videoInfo[v.id]?.duration)}
                         </span>
                       )}
-                      {videoInfo[v.id]?.sizeBytes != null && (
+                      {formatSize(videoInfo[v.id]?.sizeBytes) && (
                         <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">
-                          {formatSize(videoInfo[v.id].sizeBytes)}
+                          {formatSize(videoInfo[v.id]?.sizeBytes)}
                         </span>
                       )}
                     </div>
@@ -814,6 +856,113 @@ export default function GenerateVideosPage() {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Lightbox — full-size video with details */}
+      {lightbox && lightbox.status === "completed" && lightbox.url && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setLightbox(null)}
+        >
+          <div
+            className="bg-background rounded-lg max-w-4xl w-full max-h-[92vh] overflow-hidden flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-[11px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
+                  {modeLabel(lightbox.metadata)}
+                </span>
+                {lightbox.metadata?.modelIdentifier ? (
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-mono">
+                    {String(lightbox.metadata.modelIdentifier)}
+                  </span>
+                ) : lightbox.model ? (
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-mono">
+                    {lightbox.model}
+                  </span>
+                ) : null}
+                {formatDuration(videoInfo[lightbox.id]?.duration) && (
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
+                    {formatDuration(videoInfo[lightbox.id]?.duration)}
+                  </span>
+                )}
+                {formatSize(videoInfo[lightbox.id]?.sizeBytes) && (
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
+                    {formatSize(videoInfo[lightbox.id]?.sizeBytes)}
+                  </span>
+                )}
+              </div>
+              <button
+                onClick={() => setLightbox(null)}
+                className="p-1.5 rounded hover:bg-muted text-muted-foreground"
+                title="Close (Esc)"
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+            <div className="bg-black flex items-center justify-center min-h-0">
+              <video
+                src={lightbox.url}
+                poster={lightbox.thumbnail_url ?? undefined}
+                controls
+                autoPlay
+                className="max-h-[60vh] w-full object-contain"
+              />
+            </div>
+            <div className="px-4 py-3 border-t space-y-2">
+              <p className="text-sm text-muted-foreground line-clamp-3" title={lightbox.prompt}>
+                {lightbox.prompt}
+              </p>
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <span className="text-xs text-muted-foreground">
+                  Generated {new Date(lightbox.created_at).toLocaleString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                </span>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleOpen(lightbox.url!)}
+                    title="Opens the video in a new tab to watch or save"
+                  >
+                    <Download className="size-3.5 mr-1" />Open / Download
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => capturePoster(lightbox, { force: true })}
+                    disabled={!!capturing[lightbox.id]}
+                    title="Capture a new poster frame"
+                  >
+                    {capturing[lightbox.id] ? (
+                      <Loader2 className="size-3.5 animate-spin mr-1" />
+                    ) : (
+                      <ImageUp className="size-3.5 mr-1" />
+                    )}
+                    New poster
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleReuse(lightbox)}
+                    title="Reuse prompt, mode, and model"
+                  >
+                    <Pencil className="size-3.5 mr-1" />Reuse
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-destructive"
+                    onClick={() => handleDelete(lightbox.id)}
+                    title="Delete video"
+                  >
+                    <Trash2 className="size-3.5 mr-1" />Delete
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

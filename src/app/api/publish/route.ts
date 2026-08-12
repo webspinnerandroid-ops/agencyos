@@ -4,6 +4,29 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { publishToWordPress } from "@/lib/publishing/wordpressPublisher";
 import { publishPost as publishToSocial } from "@/lib/publishing/socialPublisher";
 import { scoreAeoGeo } from "@/lib/aeo-geo";
+import { newBlockId, slugify } from "@/lib/cms";
+
+/**
+ * Converts a generated blog post's body (markdown with inline ![alt](url)
+ * images) into CMS blocks: text blocks for prose, image blocks for the
+ * embedded images. Returns a list of blocks ready for a site_pages row.
+ */
+function blogBodyToBlocks(body: string): any[] {
+  const blocks: any[] = [];
+  const imageRe = /!\[([^\]]*)\]\(([^)]+)\)/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = imageRe.exec(body))) {
+    const before = body.slice(last, m.index).trim();
+    if (before) blocks.push({ id: newBlockId(), kind: "text", content: before });
+    blocks.push({ id: newBlockId(), kind: "image", url: m[2], alt: m[1] || "" });
+    last = m.index + m[0].length;
+  }
+  const after = body.slice(last).trim();
+  if (after) blocks.push({ id: newBlockId(), kind: "text", content: after });
+  if (blocks.length === 0) blocks.push({ id: newBlockId(), kind: "text", content: body });
+  return blocks;
+}
 
 /**
  * Score-based publish gate: content below this score is blocked from being
@@ -131,7 +154,70 @@ export async function POST(request: NextRequest) {
     const results: any[] = [];
     let allSucceeded = true;
 
-    if (platform === "wordpress" || platform === "blog") {
+    if (platform === "cms") {
+      // Publish to the tenant's OWN website (the CMS site built in this
+      // system) as a published blog_post page. The post must be a blog;
+      // social posts don't map to a CMS page.
+      const supabase = await createServiceClient();
+      const { data: post } = await supabase
+        .from("posts")
+        .select("content, title, workspace_id, client_id")
+        .eq("id", postId)
+        .eq("tenant_id", tenantId)
+        .maybeSingle();
+      if (!post) {
+        return NextResponse.json({ error: "Post not found" }, { status: 404 });
+      }
+      const content =
+        typeof post.content === "string"
+          ? (() => {
+              try {
+                return JSON.parse(post.content);
+              } catch {
+                return null;
+              }
+            })()
+          : post.content;
+      const title = content?.title || post.title || "Untitled Post";
+      const body = typeof content?.body === "string" ? content.body : "";
+      if (!body.trim()) {
+        return NextResponse.json(
+          { error: "This post has no body content to publish to the website." },
+          { status: 400 }
+        );
+      }
+      let slug = slugify(content?.slug || title);
+      // Upsert by (tenant, slug): re-publishing updates the existing page.
+      const { data: existing } = await supabase
+        .from("site_pages")
+        .select("id, blocks")
+        .eq("tenant_id", tenantId)
+        .eq("slug", slug)
+        .maybeSingle();
+      const blocks = blogBodyToBlocks(body);
+      const patch = {
+        tenant_id: tenantId,
+        workspace_id: post.workspace_id ?? null,
+        client_id: post.client_id ?? null,
+        title,
+        slug,
+        blocks,
+        kind: "blog_post",
+        is_published: true,
+        published_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      if (existing) {
+        await supabase
+          .from("site_pages")
+          .update(patch)
+          .eq("id", existing.id)
+          .eq("tenant_id", tenantId);
+      } else {
+        await supabase.from("site_pages").insert(patch);
+      }
+      results.push({ platform: "cms", success: true, url: `/site/${slug}` });
+    } else if (platform === "wordpress" || platform === "blog") {
       const wpResult = await publishToWordPress(postId, tenantId, action || "publish", scheduledAt, categoryId);
       results.push(...wpResult.results);
       allSucceeded = wpResult.allSucceeded;

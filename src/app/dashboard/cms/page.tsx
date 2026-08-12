@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Loader2,
   Plus,
@@ -26,12 +27,13 @@ import {
   slugify,
   renderBlockHtml,
   CMS_STYLES,
+  THEME_PRESETS,
   type CmsBlock,
   type CmsBlockStyle,
   type CmsPage,
 } from "@/lib/cms";
 
-type EditorTab = "pages" | "builder" | "submissions";
+type EditorTab = "pages" | "builder" | "submissions" | "site";
 
 const PADDING_OPTS: { value: CmsBlockStyle["padding"]; label: string }[] = [
   { value: "none", label: "None" },
@@ -69,6 +71,24 @@ export default function CmsPage() {
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const [dragOverSection, setDragOverSection] = useState<string | null>(null);
   const [styleOpen, setStyleOpen] = useState<string | null>(null);
+  // Sitewide settings
+  const [settings, setSettings] = useState<{
+    site_name: string;
+    tagline: string;
+    header_text: string;
+    footer_text: string;
+    global_css: string;
+    theme_preset: string;
+  }>({
+    site_name: "My Site",
+    tagline: "",
+    header_text: "",
+    footer_text: "",
+    global_css: "",
+    theme_preset: "clean",
+  });
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [savingSettings, setSavingSettings] = useState(false);
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   const show = (type: "success" | "error", message: string) =>
@@ -345,6 +365,71 @@ export default function CmsPage() {
   }, [tab, loadSubmissions]);
 
   // ------------------------------------------------------------------
+  // Sitewide settings (header/footer + theme)
+  // ------------------------------------------------------------------
+  const loadSettings = useCallback(async () => {
+    try {
+      const res = await fetch("/api/cms/settings", { credentials: "include" });
+      if (res.ok) {
+        const data = await res.json();
+        const s = data.settings ?? {};
+        const headerBlocks = (s.header_blocks ?? []) as any[];
+        const footerBlocks = (s.footer_blocks ?? []) as any[];
+        setSettings({
+          site_name: s.site_name ?? "My Site",
+          tagline: s.tagline ?? "",
+          header_text: headerBlocks.map((b) => b.content ?? "").join("\n\n"),
+          footer_text: footerBlocks.map((b) => b.content ?? "").join("\n\n"),
+          global_css: s.global_css ?? "",
+          theme_preset: s.theme_preset ?? "clean",
+        });
+      }
+    } catch {
+      // ignore — defaults stay
+    } finally {
+      setSettingsLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (tab === "site" && !settingsLoaded) loadSettings();
+  }, [tab, settingsLoaded, loadSettings]);
+
+  const saveSettings = async () => {
+    setSavingSettings(true);
+    try {
+      const toBlock = (text: string): any[] =>
+        text
+          .split(/\n{2,}/)
+          .filter((p) => p.trim())
+          .map((p) => ({ id: newBlockId(), kind: "text", content: p.trim() }));
+      const res = await fetch("/api/cms/settings", {
+        method: "PUT",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          site_name: settings.site_name,
+          tagline: settings.tagline,
+          header_blocks: toBlock(settings.header_text),
+          footer_blocks: toBlock(settings.footer_text),
+          global_css: settings.global_css,
+          theme_preset: settings.theme_preset,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        show("error", data.error ?? "Failed to save site settings");
+        return;
+      }
+      show("success", "Site settings saved — published pages update immediately.");
+    } catch (err: any) {
+      show("error", err.message ?? "Failed to save site settings");
+    } finally {
+      setSavingSettings(false);
+    }
+  };
+
+  // ------------------------------------------------------------------
   // Block editor bits
   // ------------------------------------------------------------------
   const blockTypeIcon = (b: CmsBlock) =>
@@ -400,12 +485,67 @@ export default function CmsPage() {
     </div>
   );
 
+  // Insert a markdown fragment at the textarea cursor (toolbar helper).
+  const wrapSelection = (b: CmsBlock, before: string, after: string, placeholder?: string) => {
+    const ta = document.getElementById(`txt-${b.id}`) as HTMLTextAreaElement | null;
+    if (!ta) return;
+    const start = ta.selectionStart ?? (b.content ?? "").length;
+    const end = ta.selectionEnd ?? start;
+    const sel = (b.content ?? "").slice(start, end) || placeholder || "text";
+    const next = (b.content ?? "").slice(0, start) + before + sel + after + (b.content ?? "").slice(end);
+    updateBlock(b.id, { content: next });
+    requestAnimationFrame(() => {
+      ta.focus();
+      const newPos = start + before.length + sel.length;
+      ta.setSelectionRange(newPos, newPos);
+    });
+  };
+
+  const TOOLBAR = [
+    { label: "B", title: "Bold", fn: (b: CmsBlock) => wrapSelection(b, "**", "**") },
+    { label: "I", title: "Italic", fn: (b: CmsBlock) => wrapSelection(b, "*", "*") },
+    { label: "S", title: "Strikethrough", fn: (b: CmsBlock) => wrapSelection(b, "~~", "~~") },
+    { label: "H2", title: "Heading 2", fn: (b: CmsBlock) => wrapSelection(b, "## ", "", "Heading") },
+    { label: "H3", title: "Heading 3", fn: (b: CmsBlock) => wrapSelection(b, "### ", "", "Heading") },
+    { label: "🔗", title: "Link", fn: (b: CmsBlock) => {
+        const url = prompt("Link URL", "https://");
+        if (url) wrapSelection(b, "[", `](${url})`, "link text");
+      } },
+    { label: "• List", title: "Bullet list", fn: (b: CmsBlock) => {
+        const next = (b.content ?? "") + (b.content?.endsWith("\n") || !b.content ? "" : "\n") + "- item\n- item";
+        updateBlock(b.id, { content: next });
+      } },
+  ];
+
   const blockContentEditor = (b: CmsBlock) => (
     <>
       {b.kind === "text" && (
-        <textarea value={b.content ?? ""} onChange={(e) => updateBlock(b.id, { content: e.target.value })}
-          rows={5} placeholder="Write markdown: ## Heading, **bold**, [link](https://...)"
-          className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono" />
+        <div>
+          <div className="flex items-center gap-1 mb-1.5 flex-wrap">
+            {TOOLBAR.map((t) => (
+              <button key={t.title} onClick={() => t.fn(b)} title={t.title}
+                className="px-1.5 py-0.5 rounded border border-border text-xs font-semibold hover:bg-muted">
+                {t.label}
+              </button>
+            ))}
+            <span className="text-[10px] text-muted-foreground ml-auto">
+              {b.html ? "HTML mode" : "Markdown · colors/fonts need HTML mode"}
+            </span>
+            <button onClick={() => updateBlock(b.id, { html: !b.html })}
+              className={`px-1.5 py-0.5 rounded border text-[11px] ${b.html ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}
+              title="Toggle raw HTML editing">
+              HTML
+            </button>
+          </div>
+          <textarea
+            id={`txt-${b.id}`}
+            value={b.content ?? ""}
+            onChange={(e) => updateBlock(b.id, { content: e.target.value })}
+            rows={5}
+            placeholder={b.html ? "<p>Write <strong>HTML</strong> directly…</p>" : "Write markdown: ## Heading, **bold**, [link](https://...)"}
+            className={`w-full rounded-md border border-input bg-background px-3 py-2 text-sm ${b.html ? "font-mono" : ""}`}
+          />
+        </div>
       )}
       {b.kind === "image" && (
         <div className="space-y-2">
@@ -421,6 +561,22 @@ export default function CmsPage() {
             onBlur={(e) => updateBlock(b.id, { config: { ...b.config, fields: e.target.value.split(",").map((s) => s.trim()).filter(Boolean) } })} />
           <Input placeholder="Button text" defaultValue={String(b.config?.buttonText ?? "Submit")}
             onBlur={(e) => updateBlock(b.id, { config: { ...b.config, buttonText: e.target.value } })} />
+          <Input placeholder="Where should submissions go? (email — e.g. hello@mysite.com)" defaultValue={String(b.config?.destination_email ?? "")}
+            onBlur={(e) => updateBlock(b.id, { config: { ...b.config, destination_email: e.target.value } })} />
+          <Input placeholder="Email subject (e.g. New website enquiry)" defaultValue={String(b.config?.email_subject ?? "")}
+            onBlur={(e) => updateBlock(b.id, { config: { ...b.config, email_subject: e.target.value } })} />
+          <label className="flex items-center gap-2 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={b.config?.newsletter === true}
+              onChange={(e) => updateBlock(b.id, { config: { ...b.config, newsletter: e.target.checked } })}
+              className="size-3.5"
+            />
+            This is a newsletter / subscription form (collect consent on submit)
+          </label>
+          <p className="text-[11px] text-muted-foreground">
+            Submissions are always stored here; email delivery needs your SMTP/Resend key configured.
+          </p>
         </div>
       )}
       {b.kind === "custom" && (b.custom === "map" || b.custom === "youtube" || b.custom === "instagram" || b.custom === "embed") && (
@@ -547,6 +703,10 @@ export default function CmsPage() {
           className={`text-sm font-medium px-3 py-1.5 rounded-t-md ${tab === "submissions" ? "bg-muted" : "text-muted-foreground"}`}>
           <FileText className="size-3 inline mr-1" /> Form Submissions ({submissions.length})
         </button>
+        <button onClick={() => setTab("site")}
+          className={`text-sm font-medium px-3 py-1.5 rounded-t-md ${tab === "site" ? "bg-muted" : "text-muted-foreground"}`}>
+          <Globe className="size-3 inline mr-1" /> Site Settings
+        </button>
       </div>
 
       {feedback && (
@@ -632,6 +792,49 @@ export default function CmsPage() {
                   <Button variant="ghost" size="sm" className="text-destructive" onClick={deletePage}><Trash2 className="size-3.5" /></Button>
                 </div>
               </div>
+              <div className="flex items-center gap-3 mt-2 flex-wrap">
+                <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  Kind
+                  <select
+                    value={active.kind ?? "page"}
+                    onChange={(e) => {
+                      const kind = e.target.value as "page" | "blog_archive" | "blog_post";
+                      const next = { ...active, kind };
+                      setActive(next);
+                      fetch(`/api/cms/pages/${active.id}`, {
+                        method: "PATCH", credentials: "include",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ kind }),
+                      }).catch(() => {});
+                    }}
+                    className="rounded-md border border-input bg-background px-2 py-1 text-xs"
+                  >
+                    <option value="page">Page</option>
+                    <option value="blog_archive">Blog archive</option>
+                    <option value="blog_post">Blog post</option>
+                  </select>
+                </label>
+                <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  Category
+                  <input
+                    value={active.category ?? ""}
+                    onChange={(e) => setActive((prev) => (prev ? { ...prev, category: e.target.value } : prev))}
+                    onBlur={async () => {
+                      if (!active) return;
+                      await fetch(`/api/cms/pages/${active.id}`, {
+                        method: "PATCH", credentials: "include",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ category: active.category }),
+                      }).catch(() => {});
+                    }}
+                    placeholder="e.g. services, company news"
+                    className="rounded-md border border-input bg-background px-2 py-1 text-xs w-44"
+                  />
+                </label>
+                <span className="text-[10px] text-muted-foreground">
+                  Archive pages list published blog posts with this category grouping.
+                </span>
+              </div>
               <p className="text-xs text-muted-foreground mt-1">
                 Live at <a href={`/site/${active.slug}`} target="_blank" rel="noopener" className="text-primary underline">/site/{active.slug}</a>
                 {saving && <Loader2 className="size-3 animate-spin inline ml-2" />}
@@ -686,6 +889,86 @@ export default function CmsPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ============ SITE SETTINGS ============ */}
+      {tab === "site" && (
+        <Card className="p-6 max-w-2xl">
+          <h2 className="text-lg font-semibold mb-1">Sitewide Settings</h2>
+          <p className="text-sm text-muted-foreground mb-5">
+            Applied to every published page: site name, header &amp; footer,
+            a recommended theme, and an optional custom stylesheet.
+          </p>
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <Label>Site Name</Label>
+                <Input value={settings.site_name} onChange={(e) => setSettings({ ...settings, site_name: e.target.value })} />
+              </div>
+              <div>
+                <Label>Tagline</Label>
+                <Input value={settings.tagline} onChange={(e) => setSettings({ ...settings, tagline: e.target.value })} />
+              </div>
+            </div>
+
+            <div>
+              <Label>Recommended Theme</Label>
+              <div className="flex gap-2 flex-wrap mt-1.5">
+                {Object.entries(THEME_PRESETS).map(([key, preset]) => (
+                  <button
+                    key={key}
+                    onClick={() => setSettings({ ...settings, theme_preset: key })}
+                    className={`px-3 py-1.5 rounded-md text-sm border transition-colors ${
+                      settings.theme_preset === key
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "border-border hover:bg-muted"
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <Label>Header (markdown — shown on every page)</Label>
+              <textarea
+                value={settings.header_text}
+                onChange={(e) => setSettings({ ...settings, header_text: e.target.value })}
+                rows={2}
+                placeholder={"e.g. [Home](/site/home)  [Services](/site/services)  [Contact](/site/contact)"}
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono"
+              />
+            </div>
+
+            <div>
+              <Label>Footer (markdown — shown on every page)</Label>
+              <textarea
+                value={settings.footer_text}
+                onChange={(e) => setSettings({ ...settings, footer_text: e.target.value })}
+                rows={3}
+                placeholder={"© 2026 My Site — [Privacy](/site/privacy) · [Terms](/site/terms)"}
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono"
+              />
+            </div>
+
+            <div>
+              <Label>Custom Stylesheet (CSS)</Label>
+              <textarea
+                value={settings.global_css}
+                onChange={(e) => setSettings({ ...settings, global_css: e.target.value })}
+                rows={6}
+                placeholder={".cms-site-header { background: #1e293b; color: #fff; }\n.cms-text h2 { color: #1d4ed8; }"}
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono"
+              />
+            </div>
+
+            <Button onClick={saveSettings} disabled={savingSettings}>
+              {savingSettings ? <Loader2 className="size-4 animate-spin mr-1" /> : null}
+              Save Site Settings
+            </Button>
+          </div>
+        </Card>
       )}
 
       {/* ============ SUBMISSIONS ============ */}

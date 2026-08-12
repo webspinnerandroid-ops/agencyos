@@ -173,7 +173,7 @@ interface SendEmailParams {
   html: string;
 }
 
-async function sendEmail(_params: SendEmailParams): Promise<void> {
+export async function sendEmail(_params: SendEmailParams): Promise<void> {
   console.log("\uD83D\uDCE7 [EMAIL NOTIFICATION]", {
     to: _params.to,
     subject: _params.subject,

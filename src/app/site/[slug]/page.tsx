@@ -1,6 +1,12 @@
 import { notFound } from "next/navigation";
 import { createServiceClient } from "@/lib/supabase/server";
-import { renderBlockHtml, CMS_STYLES, type CmsBlock } from "@/lib/cms";
+import {
+  renderBlockHtml,
+  CMS_STYLES,
+  CMS_HEADER_FOOTER_STYLES,
+  THEME_PRESETS,
+  type CmsBlock,
+} from "@/lib/cms";
 
 // Must be request-time rendered: pages are read from the DB per slug, and
 // notFound() must return a real 404 (static prerender returns 200 here).
@@ -8,8 +14,9 @@ export const dynamic = "force-dynamic";
 
 /**
  * Public CMS renderer — /site/<slug>.
- * Renders a published page's blocks. Unpublished pages 404 publicly.
- * Blocks render via the allowlisted renderers (no raw model HTML).
+ * Renders a published page's blocks wrapped in the tenant's sitewide header
+ * and footer, with the chosen theme preset + custom global stylesheet applied.
+ * Unpublished pages 404 publicly.
  */
 export default async function SitePage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
@@ -17,7 +24,7 @@ export default async function SitePage({ params }: { params: Promise<{ slug: str
 
   const { data: page, error } = await supabase
     .from("site_pages")
-    .select("id, title, blocks, is_published")
+    .select("id, title, blocks, is_published, tenant_id, kind, category")
     .eq("slug", slug)
     .eq("is_published", true)
     .maybeSingle();
@@ -26,20 +33,85 @@ export default async function SitePage({ params }: { params: Promise<{ slug: str
     notFound();
   }
 
+  // Sitewide settings for this tenant (header/footer + theme). Defaults when
+  // no row exists yet.
+  const { data: site } = await supabase
+    .from("cms_site_settings")
+    .select("site_name, tagline, header_blocks, footer_blocks, global_css, theme_preset")
+    .eq("tenant_id", page.tenant_id)
+    .maybeSingle();
+
+  const siteName = site?.site_name || "My Site";
+  const tagline = site?.tagline || "";
+  const presetCss = THEME_PRESETS[site?.theme_preset as string]?.css ?? THEME_PRESETS.clean.css;
+  const globalCss = site?.global_css || "";
+
+  const headerBlocks = (Array.isArray(site?.header_blocks) ? site.header_blocks : []) as CmsBlock[];
+  const footerBlocks = (Array.isArray(site?.footer_blocks) ? site.footer_blocks : []) as CmsBlock[];
+
+  const renderBlocks = (blocks: CmsBlock[]) =>
+    blocks.map((b) => renderBlockHtml(b, page.id)).join("\n");
+
+  // Blog archive pages: list published blog_post pages from the same tenant.
+  let archivePosts: { slug: string; title: string; category: string | null; created_at: string | null }[] = [];
+  if (page.kind === "blog_archive") {
+    const { data: posts } = await supabase
+      .from("site_pages")
+      .select("slug, title, category, created_at")
+      .eq("tenant_id", page.tenant_id)
+      .eq("kind", "blog_post")
+      .eq("is_published", true)
+      .order("created_at", { ascending: false })
+      .limit(100);
+    archivePosts = (posts ?? []) as typeof archivePosts;
+  }
+
   const blocks = (Array.isArray(page.blocks) ? page.blocks : []) as CmsBlock[];
-  const html = blocks.map((b) => renderBlockHtml(b, page.id)).join("\n");
+  const html = renderBlocks(blocks);
 
   return (
     <html>
       <head>
-        <title>{page.title}</title>
+        <title>{page.title} — {siteName}</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <style dangerouslySetInnerHTML={{ __html: CMS_STYLES }} />
+        <style dangerouslySetInnerHTML={{ __html: `${CMS_STYLES}\n${CMS_HEADER_FOOTER_STYLES}\n${presetCss}\n${globalCss}` }} />
       </head>
       <body style={{ margin: 0, background: "#fff" }}>
+        {/* Sitewide header */}
+        <header className="cms-site-header">
+          <div>
+            <span className="cms-site-name">{siteName}</span>
+            {tagline && <span className="cms-site-tagline"> — {tagline}</span>}
+          </div>
+          {headerBlocks.length > 0 && (
+            <div dangerouslySetInnerHTML={{ __html: renderBlocks(headerBlocks) }} />
+          )}
+        </header>
+
         <div className="cms-shell">
-          <div dangerouslySetInnerHTML={{ __html: html }} />
+          {page.kind === "blog_archive" && archivePosts.length > 0 ? (
+            <ul className="cms-archive">
+              {archivePosts.map((p) => (
+                <li key={p.slug}>
+                  <a href={`/site/${p.slug}`}>
+                    <span className="cms-archive-title">{p.title}</span>
+                    {p.category && <span className="cms-archive-cat">{p.category}</span>}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div dangerouslySetInnerHTML={{ __html: html }} />
+          )}
         </div>
+
+        {/* Sitewide footer */}
+        {footerBlocks.length > 0 && (
+          <footer className="cms-site-footer">
+            <div dangerouslySetInnerHTML={{ __html: renderBlocks(footerBlocks) }} />
+          </footer>
+        )}
+
         {/* Form widgets submit via fetch so the page doesn't navigate away. */}
         <script
           dangerouslySetInnerHTML={{

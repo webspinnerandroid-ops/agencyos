@@ -31,6 +31,8 @@ export interface CmsBlock {
   custom?: "form" | "map" | "youtube" | "instagram" | "embed" | "note" | "ai";
   /** Raw text / markdown for text blocks. */
   content?: string;
+  /** When true, text-block content is authored/rendered as raw HTML. */
+  html?: boolean;
   /** Image URL for image blocks. */
   url?: string;
   alt?: string;
@@ -54,6 +56,10 @@ export interface CmsPage {
   published_at: string | null;
   created_at: string;
   updated_at: string;
+  /** Content model: 'page' | 'blog_archive' | 'blog_post'. */
+  kind?: "page" | "blog_archive" | "blog_post";
+  /** Grouping label, e.g. 'services' for pages, 'company news' for posts. */
+  category?: string | null;
 }
 
 const BLOCK_ID_PREFIX = "blk_";
@@ -130,6 +136,7 @@ function mapEmbed(config: Record<string, unknown>): string {
 function formEmbed(pageId: string, blockId: string, config: Record<string, unknown>): string {
   const fields = Array.isArray(config.fields) ? config.fields : ["name", "email", "message"];
   const btn = esc(config.buttonText ?? "Submit");
+  const isNewsletter = config.newsletter === true;
   const inputs = fields
     .map((f) => {
       const name = esc(f);
@@ -141,7 +148,10 @@ function formEmbed(pageId: string, blockId: string, config: Record<string, unkno
         : `<label class="cms-field"><span>${label}</span><input type="${type}" name="${name}" required /></label>`;
     })
     .join("");
-  return `<form class="cms-form" data-page="${esc(pageId)}" data-block="${esc(blockId)}" action="/api/cms/forms" method="POST">${inputs}<button type="submit" class="cms-btn">${btn}</button><p class="cms-form-status" role="status"></p></form>`;
+  const consent = isNewsletter
+    ? `<label class="cms-field cms-consent"><input type="checkbox" name="consent" required /> I agree to receive emails and understand I can unsubscribe anytime.</label>`
+    : "";
+  return `<form class="cms-form" data-page="${esc(pageId)}" data-block="${esc(blockId)}" action="/api/cms/forms" method="POST">${inputs}${consent}<button type="submit" class="cms-btn">${btn}</button><p class="cms-form-status" role="status"></p></form>`;
 }
 
 const PADDING_CLASSES: Record<string, string> = {
@@ -175,7 +185,10 @@ function blockWrapper(block: CmsBlock): string {
 export function renderBlockHtml(block: CmsBlock, pageId?: string): string {
   switch (block.kind) {
     case "text":
-      return `${blockWrapper(block)}<div class="cms-text">${markdownToHtml(block.content ?? "")}</div></div>`;
+      // HTML mode outputs the authored markup directly (tenant editors only).
+      return block.html
+        ? `${blockWrapper(block)}<div class="cms-text">${block.content ?? ""}</div></div>`
+        : `${blockWrapper(block)}<div class="cms-text">${markdownToHtml(block.content ?? "")}</div></div>`;
     case "image":
       return block.url
         ? `${blockWrapper(block)}<figure class="cms-image"><img src="${esc(block.url)}" alt="${esc(block.alt ?? block.content ?? "")}" loading="lazy" /><figcaption>${esc(block.alt ?? "")}</figcaption></figure></div>`
@@ -214,6 +227,85 @@ export function renderBlockHtml(block: CmsBlock, pageId?: string): string {
       return "";
   }
 }
+
+// ----------------------------------------------------------------------------
+// Sitewide theming: recommended presets + shared base styles. The preset CSS
+// is tiny and scoped to .cms-* so any custom stylesheet can layer on top.
+// ----------------------------------------------------------------------------
+
+/** Recommended global stylesheet presets (selected in Site Settings). */
+export const THEME_PRESETS: Record<string, { label: string; css: string }> = {
+  clean: {
+    label: "Clean & Minimal",
+    css: `
+.cms-shell{max-width:960px;margin:0 auto;padding:40px 20px;line-height:1.7}
+.cms-site-header{border-bottom:1px solid #eee;padding:16px 20px}
+.cms-site-header .cms-site-name{font-size:1.4rem;font-weight:700;letter-spacing:-.02em}
+.cms-site-footer{border-top:1px solid #eee;margin-top:40px;padding:24px 20px;color:#666;font-size:.9rem}
+.cms-text h2{margin-top:2rem}
+.cms-block{margin:1.5rem 0}
+`,
+  },
+  dark: {
+    label: "Dark & Sleek",
+    css: `
+.cms-site-header,.cms-shell{background:#0f1115;color:#e7e9ee}
+.cms-shell{max-width:960px;margin:0 auto;padding:40px 20px;line-height:1.7}
+.cms-site-header{border-bottom:1px solid #262a33;padding:16px 20px;background:#0f1115;color:#e7e9ee}
+.cms-site-header .cms-site-name{font-size:1.4rem;font-weight:700;letter-spacing:-.02em}
+.cms-site-footer{border-top:1px solid #262a33;margin-top:40px;padding:24px 20px;color:#8b93a3;font-size:.9rem;background:#0f1115}
+.cms-text h2{margin-top:2rem}
+.cms-text a{color:#7db4ff}
+.cms-block{margin:1.5rem 0}
+.cms-section{background:#171a21;border:1px solid #262a33}
+.cms-image figcaption{color:#8b93a3}
+`,
+  },
+  corporate: {
+    label: "Corporate",
+    css: `
+.cms-shell{max-width:1100px;margin:0 auto;padding:48px 24px;line-height:1.65;color:#1f2937}
+.cms-site-header{border-bottom:2px solid #1d4ed8;padding:18px 24px;background:#fff}
+.cms-site-header .cms-site-name{font-size:1.5rem;font-weight:700;color:#1d4ed8;letter-spacing:-.01em}
+.cms-site-header .cms-site-tagline{color:#6b7280;font-size:.95rem}
+.cms-site-footer{border-top:2px solid #e5e7eb;margin-top:48px;padding:28px 24px;color:#6b7280;font-size:.9rem;background:#f9fafb}
+.cms-text h1{font-size:2.25rem;color:#111827}
+.cms-text h2{font-size:1.6rem;color:#111827;margin-top:2.2rem}
+.cms-text a{color:#1d4ed8;text-decoration:underline}
+.cms-block{margin:1.75rem 0}
+.cms-btn{background:#1d4ed8}
+`,
+  },
+  bold: {
+    label: "Bold & Creative",
+    css: `
+.cms-shell{max-width:960px;margin:0 auto;padding:48px 20px;line-height:1.7}
+.cms-site-header{background:linear-gradient(135deg,#7c3aed,#db2777);color:#fff;padding:20px 24px}
+.cms-site-header .cms-site-name{font-size:1.5rem;font-weight:800;letter-spacing:-.02em}
+.cms-site-header .cms-site-tagline{opacity:.85;font-size:.95rem}
+.cms-site-footer{margin-top:48px;padding:24px 20px;color:#6b7280;font-size:.9rem;border-top:4px solid #7c3aed}
+.cms-text h1{font-size:2.5rem;font-weight:800;letter-spacing:-.03em}
+.cms-text h2{font-size:1.8rem;font-weight:700;letter-spacing:-.02em;margin-top:2.2rem}
+.cms-text a{color:#7c3aed;font-weight:600}
+.cms-block{margin:1.5rem 0}
+.cms-section{background:linear-gradient(180deg,#faf5ff,#fff)}
+.cms-btn{background:linear-gradient(135deg,#7c3aed,#db2777);font-weight:700}
+`,
+  },
+};
+
+export const CMS_HEADER_FOOTER_STYLES = `
+.cms-site-header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.cms-site-name{font-weight:700}
+.cms-site-tagline{font-size:.9rem;opacity:.8}
+.cms-nav-links{display:flex;gap:16px;list-style:none;margin:0;padding:0}
+.cms-nav-links a{text-decoration:none;font-size:.95rem}
+.cms-archive{list-style:none;margin:0;padding:0}
+.cms-archive li{border-bottom:1px solid #eee;padding:14px 0}
+.cms-archive a{display:flex;align-items:center;justify-content:space-between;gap:12px;text-decoration:none}
+.cms-archive-title{font-weight:600;font-size:1.05rem}
+.cms-archive-cat{font-size:.8rem;color:#666;background:#f3f4f6;padding:2px 8px;border-radius:99px}
+`;
 
 /** Shared minimal CSS for rendered pages (kept here so preview + public match). */
 export const CMS_STYLES = `

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { X, ImageIcon } from "lucide-react";
+import { X, ImageIcon, Sparkles } from "lucide-react";
 import PublishButton from "@/components/PublishButton";
 import PostContent from "@/components/BlogContent";
 import ScoreBadge from "@/components/ScoreBadge";
@@ -30,6 +30,13 @@ export default function PostDetailModal({
   const [full, setFull] = useState<PostRow | null>(null);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState(false);
+  // AEO/GEO panel state
+  const [aeoGeo, setAeoGeo] = useState<{
+    result: any;
+    source: "heuristic" | "llm";
+  } | null>(null);
+  const [aeoLoading, setAeoLoading] = useState(false);
+  const [aeoError, setAeoError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -71,6 +78,39 @@ export default function PostDetailModal({
   const seoChecks = seo?.checks?.length ? seo.checks : (current.seo_checks as any[] | null) ?? [];
   const images: { url: string; description?: string; placement?: string }[] =
     (c.images as never[] | undefined) ?? [];
+
+  // Runs the AEO/GEO scorer for blog posts. Heuristic by default; the AI
+  // Deep Check button opts into the LLM-assisted pass (falls back cleanly).
+  const runAeoGeo = async (deep: boolean) => {
+    if (!post.id) return;
+    setAeoLoading(true);
+    setAeoError(null);
+    try {
+      const res = await fetch(`/api/posts/${post.id}/aeo-geo`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ deep }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setAeoError(data.error ?? "AEO/GEO check failed");
+        return;
+      }
+      setAeoGeo({ result: data.result, source: data.source });
+    } catch (err: any) {
+      setAeoError(err.message ?? "AEO/GEO check failed");
+    } finally {
+      setAeoLoading(false);
+    }
+  };
+
+  // Auto-run the free heuristic check when a blog post opens.
+  useEffect(() => {
+    if (preview.type === "blog" && !aeoGeo && !aeoLoading && !aeoError) {
+      runAeoGeo(false);
+    }
+  }, [preview.type]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleDelete = async () => {
     if (!confirm("Delete this post? This cannot be undone.")) return;
@@ -201,6 +241,94 @@ export default function PostDetailModal({
                 ))}
               </ul>
             </details>
+          )}
+
+          {/* AEO/GEO readiness (answer engines + AI citation) */}
+          {preview.type === "blog" && (
+            <div className="border rounded-lg p-3 space-y-2">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <h4 className="text-sm font-semibold">AEO / GEO Readiness</h4>
+                <button
+                  onClick={() => runAeoGeo(true)}
+                  disabled={aeoLoading}
+                  className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-md border hover:bg-muted disabled:opacity-50"
+                  title="Run the LLM-assisted deep check (costs one AI call)"
+                >
+                  <Sparkles className="size-3" />
+                  {aeoLoading ? "Checking…" : "AI Deep Check"}
+                </button>
+              </div>
+              {aeoError && (
+                <p className="text-xs text-destructive">{aeoError}</p>
+              )}
+              {aeoLoading && !aeoGeo && (
+                <p className="text-xs text-muted-foreground animate-pulse">Analyzing structure…</p>
+              )}
+              {aeoGeo?.result && (
+                <>
+                  <div className="flex items-center gap-2 text-xs">
+                    <span
+                      className={`px-2 py-0.5 rounded-full font-semibold ${
+                        aeoGeo.result.total >= 81
+                          ? "bg-green-100 text-green-700"
+                          : aeoGeo.result.total >= 50
+                          ? "bg-yellow-100 text-yellow-700"
+                          : "bg-red-100 text-red-700"
+                      }`}
+                    >
+                      {aeoGeo.result.total}/100
+                    </span>
+                    <span className="text-muted-foreground">
+                      AEO {aeoGeo.result.aeoScore}/50 · GEO {aeoGeo.result.geoSscore}/50
+                    </span>
+                    <span className="text-[10px] text-muted-foreground">
+                      {aeoGeo.source === "llm" ? "LLM-assisted" : "AI-estimated readiness, not a guarantee of citation"}
+                    </span>
+                  </div>
+                  <details open={aeoGeo.result.checks?.some((c: any) => !c.passed)}>
+                    <summary className="text-xs font-medium cursor-pointer">Checklist</summary>
+                    <ul className="space-y-1.5 mt-1.5">
+                      {(aeoGeo.result.checks ?? []).map((chk: any, i: number) => (
+                        <li
+                          key={chk.id ?? i}
+                          className={`text-xs flex items-start gap-2 ${
+                            chk.passed ? "text-muted-foreground" : "text-destructive"
+                          }`}
+                        >
+                          <span>{chk.passed ? "✓" : "✗"}</span>
+                          <span>
+                            <span className="font-medium">
+                              {chk.pillar === "AEO" ? "A" : "G"} · {chk.label}
+                            </span>
+                            <span className="block text-[11px] opacity-70">{chk.detail}</span>
+                          </span>
+                          <span className="ml-auto shrink-0">
+                            {chk.earned}/{chk.maxPoints}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                  {aeoGeo.result.qaPairs?.length > 0 && (
+                    <details>
+                      <summary className="text-xs font-medium cursor-pointer">
+                        Answer-library pairs ({aeoGeo.result.qaPairs.length})
+                      </summary>
+                      <ul className="mt-1.5 space-y-1.5">
+                        {aeoGeo.result.qaPairs.map((p: any, i: number) => (
+                          <li key={i} className="text-xs">
+                            <span className="font-medium">Q: {p.q}</span>
+                            <span className="block text-muted-foreground text-[11px]">
+                              A: {p.a}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  )}
+                </>
+              )}
+            </div>
           )}
 
           {/* Raw JSON toggle for debugging/advanced */}

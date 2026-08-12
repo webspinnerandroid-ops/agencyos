@@ -54,6 +54,8 @@ export default function GenerateVideosPage() {
   const [models, setModels] = useState<ModelOption[]>([]);
   const [selectedModelId, setSelectedModelId] = useState("");
   const [loading, setLoading] = useState(false);
+  const [enhancing, setEnhancing] = useState(false);
+  const [enhanceError, setEnhanceError] = useState<string | null>(null);
   const [videos, setVideos] = useState<VideoAsset[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"generate" | "library">("generate");
@@ -161,6 +163,33 @@ export default function GenerateVideosPage() {
   };
 
   // ------------------------------------------------------------------
+  // Enhance prompt (mirrors the image generator)
+  // ------------------------------------------------------------------
+  const handleEnhancePrompt = async () => {
+    if (!prompt.trim()) return;
+    setEnhancing(true);
+    setEnhanceError(null);
+    try {
+      const res = await fetch("/api/generate-video/enhance-prompt", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: prompt.trim() }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setEnhanceError(data.error ?? "Failed to enhance prompt");
+        return;
+      }
+      if (data.enhancedPrompt) setPrompt(data.enhancedPrompt);
+    } catch (err: any) {
+      setEnhanceError(err.message ?? "Failed to enhance prompt");
+    } finally {
+      setEnhancing(false);
+    }
+  };
+
+  // ------------------------------------------------------------------
   // Download / Reuse / Delete
   // ------------------------------------------------------------------
   const handleDownload = async (url: string) => {
@@ -243,15 +272,31 @@ export default function GenerateVideosPage() {
                 <label htmlFor="vprompt" className="block text-sm font-medium mb-1.5">
                   Video Prompt
                 </label>
-                <textarea
-                  id="vprompt"
-                  rows={4}
-                  placeholder="A drone shot flying over a Canadian lake at sunset, mist over the water, cinematic lighting..."
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                  maxLength={2000}
-                  className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring resize-y"
-                />
+                <div className="flex gap-2">
+                  <textarea
+                    id="vprompt"
+                    rows={4}
+                    placeholder="A drone shot flying over a Canadian lake at sunset, mist over the water, cinematic lighting..."
+                    value={prompt}
+                    onChange={(e) => setPrompt(e.target.value)}
+                    maxLength={2000}
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus:outline-none focus:ring-2 focus:ring-ring resize-y"
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleEnhancePrompt}
+                    disabled={enhancing || !prompt.trim()}
+                    title="Expand this into a detailed, professional prompt"
+                    className="shrink-0 self-start"
+                  >
+                    {enhancing ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+                    <span className="hidden sm:inline ml-1">Enhance</span>
+                  </Button>
+                </div>
+                {enhanceError && (
+                  <p className="text-xs text-destructive mt-1">{enhanceError}</p>
+                )}
                 <span className="text-xs text-muted-foreground mt-1 block">
                   {prompt.length}/2000 characters
                 </span>

@@ -59,6 +59,8 @@ export default async function DashboardLayout({
       label: "Plan",
       items: [
         { href: "/dashboard/seo", label: "SEO" },
+        { href: "/dashboard/seo/outreach", label: "Outreach" },
+        { href: "/dashboard/seo/opportunities", label: "Opportunities" },
         { href: "/dashboard/calendar", label: "Calendar" },
         { href: "/dashboard/workspaces", label: "Workspaces" },
         { href: "/dashboard/cms", label: "Website" },

@@ -55,6 +55,9 @@ export default function GenerateVideosPage() {
   const [aspect, setAspect] = useState("1280x720");
   const [models, setModels] = useState<ModelOption[]>([]);
   const [selectedModelId, setSelectedModelId] = useState("");
+  // Generation mode drives the model picker: choosing Image→Video
+  // auto-selects an i2v model, Text→Video auto-selects a t2v model.
+  const [mode, setMode] = useState<"t2v" | "i2v">("t2v");
   const [referenceImage, setReferenceImage] = useState<string | null>(null);
   const [referenceUploading, setReferenceUploading] = useState(false);
   const [referenceError, setReferenceError] = useState<string | null>(null);
@@ -71,6 +74,9 @@ export default function GenerateVideosPage() {
   // ------------------------------------------------------------------
   // Load video models (from task-model mapping for video_generation)
   // ------------------------------------------------------------------
+  const isI2VModel = (id: string) =>
+    id.includes("i2v") || id.includes("image-to-video");
+
   const loadModels = useCallback(async () => {
     try {
       const res = await fetch("/api/ai/models?task=video_generation", { credentials: "include" });
@@ -82,6 +88,29 @@ export default function GenerateVideosPage() {
       // ignore — picker stays empty and the API falls back to the mapping
     }
   }, []);
+
+  // Auto-select the first model matching the current mode (t2v vs i2v).
+  useEffect(() => {
+    if (models.length === 0) return;
+    const matches = models.filter((m) =>
+      mode === "i2v" ? isI2VModel(m.model_identifier) : !isI2VModel(m.model_identifier)
+    );
+    if (matches.length > 0) {
+      setSelectedModelId(matches[0].id);
+    }
+  }, [models, mode]);
+
+  // Switching mode flips the auto-pick above; picking a model manually also
+  // syncs the mode so the two never disagree.
+  const handleModeChange = (next: "t2v" | "i2v") => {
+    setMode(next);
+  };
+
+  const handleModelChange = (id: string) => {
+    setSelectedModelId(id);
+    const m = models.find((x) => x.id === id);
+    if (m) setMode(isI2VModel(m.model_identifier) ? "i2v" : "t2v");
+  };
 
   useEffect(() => {
     loadModels();
@@ -138,9 +167,7 @@ export default function GenerateVideosPage() {
   // Reference image upload (image-to-video models need a public URL)
   // ------------------------------------------------------------------
   const selectedModel = models.find((m) => m.id === selectedModelId);
-  const isI2V =
-    (selectedModel?.model_identifier ?? "").includes("i2v") ||
-    (selectedModel?.model_identifier ?? "").includes("image-to-video");
+  const isI2V = mode === "i2v";
 
   const handleReferenceFile = async (file: File | undefined | null) => {
     setReferenceError(null);
@@ -242,24 +269,13 @@ export default function GenerateVideosPage() {
   };
 
   // ------------------------------------------------------------------
-  // Download / Reuse / Delete
+  // Open / Reuse / Delete
   // ------------------------------------------------------------------
-  const handleDownload = async (url: string) => {
-    try {
-      const res = await fetch(url);
-      const blob = await res.blob();
-      const blobUrl = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = blobUrl;
-      a.download = `generated-video-${Date.now()}.mp4`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(blobUrl);
-    } catch {
-      // open raw URL as fallback
-      window.open(url, "_blank");
-    }
+  // Opens the video in a new tab where the visitor can watch it and save
+  // it via the browser's own controls (this is CDN-served, so a direct
+  // download link is more reliable than a fetch-and-blob dance).
+  const handleOpen = (url: string) => {
+    window.open(url, "_blank", "noopener,noreferrer");
   };
 
   const handleReuse = (v: VideoAsset) => {
@@ -354,7 +370,44 @@ export default function GenerateVideosPage() {
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="space-y-4">
+                {/* Generation mode — auto-selects the matching model */}
+                <div>
+                  <label className="block text-sm font-medium mb-1.5">
+                    Generation Mode
+                  </label>
+                  <div className="grid grid-cols-2 gap-2 max-w-xs">
+                    <button
+                      type="button"
+                      onClick={() => handleModeChange("t2v")}
+                      className={`rounded-md border px-3 py-2 text-sm font-medium transition-colors ${
+                        mode === "t2v"
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-input text-muted-foreground hover:bg-muted"
+                      }`}
+                    >
+                      Text → Video
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleModeChange("i2v")}
+                      className={`rounded-md border px-3 py-2 text-sm font-medium transition-colors ${
+                        mode === "i2v"
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-input text-muted-foreground hover:bg-muted"
+                      }`}
+                    >
+                      Image → Video
+                    </button>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {mode === "i2v"
+                      ? "Image-to-video — animate a reference image. A compatible model is selected automatically."
+                      : "Text-to-video — generate from a prompt alone. A compatible model is selected automatically."}
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
                   <label htmlFor="vmodel" className="block text-sm font-medium mb-1.5">
                     Video Model
@@ -362,7 +415,7 @@ export default function GenerateVideosPage() {
                   <select
                     id="vmodel"
                     value={selectedModelId}
-                    onChange={(e) => setSelectedModelId(e.target.value)}
+                    onChange={(e) => handleModelChange(e.target.value)}
                     className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                   >
                     <option value="">Use AI Settings mapping</option>
@@ -458,6 +511,7 @@ export default function GenerateVideosPage() {
                     ))}
                   </select>
                 </div>
+                </div>
               </div>
 
               {error && (
@@ -540,8 +594,14 @@ export default function GenerateVideosPage() {
                       </span>
                       <div className="flex gap-1">
                         {v.status === "completed" && v.url && (
-                          <Button variant="outline" size="sm" className="text-xs h-7" onClick={() => handleDownload(v.url!)}>
-                            <Download className="size-3 mr-1" />Download
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-xs h-7"
+                            onClick={() => handleOpen(v.url!)}
+                            title="Opens the video in a new tab to watch or save"
+                          >
+                            <Download className="size-3 mr-1" />Open / Download
                           </Button>
                         )}
                         <button

@@ -29,6 +29,33 @@ export default function LoginPage() {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   );
 
+  // Navigate only once the session cookie is actually visible server-side.
+  // Without this, a hard navigation to /dashboard right after sign-in can
+  // arrive before the cookie is written, the proxy bounces it back to
+  // /login, and the user sees a silent refresh loop. Poll /api/auth/session
+  // (the same cookie the proxy checks) until it succeeds, then redirect.
+  const redirectWhenReady = (onFail: (msg: string) => void, onReady: () => void) => {
+    let attempts = 0;
+    const check = async () => {
+      attempts += 1;
+      try {
+        const res = await fetch("/api/auth/session", { credentials: "include" });
+        if (res.ok) {
+          onReady();
+          return;
+        }
+      } catch {
+        // ignore and retry
+      }
+      if (attempts < 8) {
+        setTimeout(check, 350);
+      } else {
+        onFail("You're signed in, but the session couldn't be established on the server. Refresh the page and try again.");
+      }
+    };
+    check();
+  };
+
   const handleTotp = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!/^\d{6}$/.test(totpCode.trim())) {
@@ -50,7 +77,10 @@ export default function LoginPage() {
         setTotpLoading(false);
         return;
       }
-      window.location.href = "/dashboard";
+      redirectWhenReady(
+        (msg) => { setTotpError(msg); setTotpLoading(false); },
+        () => { window.location.href = "/dashboard"; }
+      );
     } catch (err: any) {
       setTotpError(err.message ?? "Verification failed");
       setTotpLoading(false);
@@ -102,10 +132,15 @@ export default function LoginPage() {
         return;
       }
     } catch {
-      // Fall through to the dashboard if the status check fails.
+      // Fall through — the session check below will surface any real problem.
     }
-    // Use hard navigation so middleware can read fresh cookies
-    window.location.href = '/dashboard';
+    // Navigate only once the session cookie is visible server-side (see
+    // redirectWhenReady above) so the proxy never bounces us back to /login.
+    redirectWhenReady(
+      (msg) => { setError(msg); setLoading(false); },
+      () => { window.location.href = '/dashboard'; }
+    );
+    // Leave loading on until we either redirect or surface the failure.
   };
 
   return (

@@ -19,6 +19,7 @@ interface UsageMetric {
 interface UsageData {
   trial: boolean;
   planId: string;
+  hubs: string[];
   periodStart: string;
   periodEnd: string | null;
   metrics: UsageMetric[];
@@ -78,13 +79,27 @@ export default function ProfilePage() {
               <div>
                 <p className="text-sm text-muted-foreground">Current plan</p>
                 <p className="text-xl font-bold capitalize">
-                  {data.planId}
-                  {data.trial && (
-                    <span className="ml-2 text-xs font-normal px-2 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300">
-                      Free trial
-                    </span>
-                  )}
+                  {data.trial
+                    ? "Free trial"
+                    : data.planId
+                      ? data.planId
+                      : data.hubs.length > 0
+                        ? "Hubs (a la carte)"
+                        : "No plan"}
                 </p>
+                {!data.trial && !data.planId && data.hubs.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    {data.hubs.map((h) => (
+                      <span
+                        key={h}
+                        className="px-2 py-0.5 rounded-full bg-primary/10 border border-primary/20 text-xs font-medium capitalize text-primary"
+                      >
+                        {h.replace("_", " ")}
+                      </span>
+                    ))}
+                  </div>
+                )}
+
                 <p className="text-xs text-muted-foreground mt-1">
                   Cycle: {new Date(data.periodStart).toLocaleDateString("en-US", { month: "long", day: "numeric" })}
                   {data.periodEnd

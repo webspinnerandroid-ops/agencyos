@@ -150,7 +150,55 @@ async function main() {
     }
   }
 
-  console.log("\nDone! All Stripe products and prices are configured.");
+  console.log("\n--- Setting up hub products (hub-and-spoke) ---");
+
+  const HUBS: { hubId: string; name: string; description: string; price: number }[] = [
+    { hubId: "content", name: "Content Hub", description: "Blogs, SEO scoring, content calendar + publish to your site", price: 2900 },
+    { hubId: "social", name: "Social Hub", description: "Captions, scheduling, approval workflows, 3 social profiles", price: 2900 },
+    { hubId: "video", name: "Video Hub", description: "Text-to-video and image-to-video generation + library", price: 2900 },
+    { hubId: "website", name: "Website Hub", description: "Web Builder — build and host client websites", price: 2900 },
+    { hubId: "outreach", name: "Outreach Hub", description: "Guest-post outreach, reply watching and opportunities", price: 2900 },
+    { hubId: "ai_team", name: "AI Team", description: "The full employee roster — chat, campaigns and workflows", price: 4900 },
+    { hubId: "bundle_3", name: "Any 3 Hubs Bundle", description: "Pick any three hubs for one bundled price", price: 6900 },
+  ];
+
+  for (const hub of HUBS) {
+    const existing = await stripe.products.search({
+      query: `metadata["hub_id"]:"${hub.hubId}"`,
+    });
+    let product: Stripe.Product;
+    if (existing.data.length > 0) {
+      product = existing.data[0];
+      product = await stripe.products.update(product.id, {
+        name: hub.name,
+        description: hub.description,
+        metadata: { hub_id: hub.hubId },
+      });
+      console.log(`  Hub product already exists: ${product.name} (${product.id})`);
+    } else {
+      product = await stripe.products.create({
+        name: hub.name,
+        description: hub.description,
+        metadata: { hub_id: hub.hubId },
+      });
+      console.log(`  Created hub product: ${product.id}`);
+    }
+    const existingPrices = await stripe.prices.list({ product: product.id, type: "recurring", active: true, limit: 10 });
+    if (!existingPrices.data.some((p) => p.recurring?.interval === "month")) {
+      await stripe.prices.create({
+        product: product.id,
+        unit_amount: hub.price,
+        currency: "usd",
+        recurring: { interval: "month" },
+        metadata: { hub_id: hub.hubId, price_type: "flat" },
+      });
+      console.log(`  Created hub monthly price ($${hub.price / 100}/mo)`);
+    } else {
+      console.log(`  Hub monthly price already exists for ${hub.name}`);
+    }
+  }
+
+  console.log("\nDone! All Stripe products, prices and hubs are configured.");
   console.log("Visit https://dashboard.stripe.com/test/products to verify.");
 }
 

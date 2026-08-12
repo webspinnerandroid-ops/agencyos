@@ -184,7 +184,7 @@ export default function AdminDeployPage() {
           <Button onClick={save} disabled={saving}>
             {saving ? <Loader2 className="size-4 animate-spin mr-1" /> : null} Save SSH settings
           </Button>
-          <Button variant="outline" onClick={testConnection} disabled={testing || !config.ssh_host || !config.ssh_user}>
+          <Button variant="outline" onClick={testConnection} disabled={testing || !config.ssh_host}>
             {testing ? <Loader2 className="size-4 animate-spin mr-1" /> : <PlugZap className="size-4 mr-1" />}
             {testing ? "Testing…" : "Test & auto-detect"}
           </Button>
@@ -214,7 +214,7 @@ export default function AdminDeployPage() {
           </div>
         )}
         <p className="text-xs text-muted-foreground">
-          Password is stored encrypted and never shown again (displayed as dots). Deploy can take several minutes — build output appears below.
+          Test the connection with the values above before saving — a successful test auto-detects and saves the app path and process name. Password is stored encrypted and never shown again (displayed as dots). Deploy can take several minutes — build output appears below.
         </p>
       </Card>
 

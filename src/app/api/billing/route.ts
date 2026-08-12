@@ -3,6 +3,13 @@ import Stripe from "stripe";
 import { getTenantId } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getCurrentUsage } from "@/lib/usage";
+import {
+  HUBS,
+  HUB_BY_ID,
+  HUB_PRICES,
+  HUB_BUNDLE_3_PRICE,
+  getTenantHubs,
+} from "@/lib/plan-limits";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 
@@ -24,6 +31,9 @@ export async function GET(_request: NextRequest) {
 
   // Fetch usage for current month
   const usage = await getCurrentUsage(tenantId);
+
+  // Purchased a-la-carte hubs (hub-and-spoke model)
+  const hubs = await getTenantHubs(tenantId);
 
   // Fetch Stripe subscription details if available
   let stripePlan: Stripe.Subscription | null = null;
@@ -107,6 +117,15 @@ export async function GET(_request: NextRequest) {
       : null,
     usage,
     invoices,
+    hubs: HUBS.map((h) => ({
+      id: h.id,
+      name: h.name,
+      tagline: h.tagline,
+      features: h.features,
+      price: HUB_PRICES[h.id] ?? 29,
+      active: hubs.includes(h.id),
+    })),
+    hubBundlePrice: HUB_BUNDLE_3_PRICE,
   });
 }
 
@@ -119,7 +138,15 @@ export async function POST(request: NextRequest) {
   const tenantId = await getTenantId();
   const supabase = await createServiceClient();
 
-  let body: { planId?: string; priceId?: string; action?: string; couponCode?: string };
+  let body: {
+    planId?: string;
+    priceId?: string;
+    action?: string;
+    couponCode?: string;
+    hubId?: string;
+    bundle?: string;
+    hubIds?: string[];
+  };
   try {
     body = await request.json();
   } catch {
@@ -162,9 +189,9 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  if (!body.planId && !body.priceId) {
+  if (!body.planId && !body.priceId && !body.hubId && !body.bundle) {
     return NextResponse.json(
-      { error: "planId or priceId is required" },
+      { error: "planId, priceId, hubId or bundle is required" },
       { status: 400 }
     );
   }
@@ -207,6 +234,59 @@ export async function POST(request: NextRequest) {
     }
 
     stripePriceId = monthlyPrice.id;
+  }
+
+  // A-la-carte hub (or any-3 bundle): look up the Stripe price by hub metadata.
+  let checkoutKind: "tier" | "hub" = "tier";
+  if (!stripePriceId && (body.hubId || body.bundle)) {
+    checkoutKind = "hub";
+    if (body.hubId) {
+      const hub = HUB_BY_ID[body.hubId];
+      if (!hub) {
+        return NextResponse.json({ error: `Unknown hub: ${body.hubId}` }, { status: 400 });
+      }
+      const products = await stripe.products.search({
+        query: `metadata["hub_id"]:"${body.hubId}"`,
+      });
+      if (products.data.length === 0) {
+        return NextResponse.json(
+          { error: `No Stripe product found for hub: ${body.hubId} — run the hub setup script first.` },
+          { status: 404 }
+        );
+      }
+      const prices = await stripe.prices.list({
+        product: products.data[0].id,
+        type: "recurring",
+        active: true,
+        limit: 5,
+      });
+      const monthlyPrice = prices.data.find((p) => p.recurring?.interval === "month");
+      if (!monthlyPrice) {
+        return NextResponse.json({ error: "No monthly price found for this hub" }, { status: 500 });
+      }
+      stripePriceId = monthlyPrice.id;
+    } else if (body.bundle === "any_3") {
+      const products = await stripe.products.search({
+        query: `metadata["hub_id"]:"bundle_3"`,
+      });
+      if (products.data.length === 0) {
+        return NextResponse.json(
+          { error: "No Stripe product found for the 3-hub bundle — run the hub setup script first." },
+          { status: 404 }
+        );
+      }
+      const prices = await stripe.prices.list({
+        product: products.data[0].id,
+        type: "recurring",
+        active: true,
+        limit: 5,
+      });
+      const monthlyPrice = prices.data.find((p) => p.recurring?.interval === "month");
+      if (!monthlyPrice) {
+        return NextResponse.json({ error: "No monthly price found for the hub bundle" }, { status: 500 });
+      }
+      stripePriceId = monthlyPrice.id;
+    }
   }
 
   // Check for existing Stripe customer
@@ -308,7 +388,11 @@ export async function POST(request: NextRequest) {
     ],
     metadata: {
       tenant_id: tenantId,
-      plan_id: body.planId ?? "",
+      ...(checkoutKind === "hub"
+        ? body.bundle === "any_3"
+          ? { hub_ids: (body.hubIds ?? []).filter(Boolean).join(",") }
+          : { hub_id: body.hubId ?? "" }
+        : { plan_id: body.planId ?? "" }),
       ...(couponCode ? { coupon_code: couponCode } : {}),
     },
     success_url: `${origin}/dashboard/billing?success=true`,

@@ -3,7 +3,7 @@ import { getTenantId } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getCurrentUsage } from "@/lib/usage";
 import { isTrialTenant } from "@/lib/trial-limits";
-import { PLAN_LIMITS, usageMetricLabel } from "@/lib/plan-limits";
+import { getEffectiveLimits, usageMetricLabel } from "@/lib/plan-limits";
 
 const METRICS = [
   "blog_posts",
@@ -36,18 +36,20 @@ export async function GET() {
       .eq("tenant_id", tenantId)
       .maybeSingle();
 
-    const planId = String(sub?.plan_id ?? "foundation");
+    const planId = String(sub?.plan_id ?? "");
+    const { limits: effectiveLimits, hubs } = await getEffectiveLimits(tenantId);
     const usage = await getCurrentUsage(tenantId);
     const usedMap = new Map(usage.map((u) => [u.metric, u.count]));
 
     const metrics = METRICS.map((metric) => {
       const used = usedMap.get(metric) ?? 0;
-      // Trial: weekly caps of 1 per content type; plan: monthly limits.
+      // Trial: weekly caps of 1 per content type; otherwise the effective
+      // limits (all-in-one tier OR the sum of purchased hubs).
       const limit = trial
         ? metric === "blog_posts" || metric === "image_generations" || metric === "video_generations"
           ? 1
-          : PLAN_LIMITS.foundation[metric] ?? null
-        : (PLAN_LIMITS[planId]?.[metric] ?? null);
+          : null
+        : (effectiveLimits[metric] ?? null);
       const percent = limit && limit > 0 ? Math.round((used / limit) * 100) : null;
       return {
         metric,
@@ -81,6 +83,7 @@ export async function GET() {
     return NextResponse.json({
       trial,
       planId,
+      hubs,
       periodStart,
       periodEnd: sub?.current_period_end ?? null,
       metrics,

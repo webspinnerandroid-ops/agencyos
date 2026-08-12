@@ -8,7 +8,17 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Building2, Users, FileText, Key, TrendingUp, Shield, X, UserCog } from "lucide-react";
-import { getDashboardStats, getAllTenants, getLicenses, getLicenseAudit, issueLicense, updateLicensePlan, renewLicense, revokeLicense, deleteLicense, deleteUser, deleteTenant, getAllUsers, assignLevel, type TenantSummary, type LicenseRecord, type LicenseAuditEntry, type UserRecord } from "./actions";
+import { getDashboardStats, getAllTenants, getLicenses, getLicenseAudit, issueLicense, updateLicensePlan, renewLicense, revokeLicense, deleteLicense, deleteUser, deleteTenant, getAllUsers, assignLevel, grantHub, revokeHub, type TenantSummary, type LicenseRecord, type LicenseAuditEntry, type UserRecord } from "./actions";
+
+// Hub-and-spoke add-ons the super admin can grant/revoke without payment.
+const HUBS = [
+  { id: "content", name: "Content" },
+  { id: "social", name: "Social" },
+  { id: "video", name: "Video" },
+  { id: "website", name: "Website" },
+  { id: "outreach", name: "Outreach" },
+  { id: "ai_team", name: "AI Team" },
+];
 
 const PLANS = [
   { id: "starter", name: "Starter" },
@@ -248,7 +258,7 @@ export default function AdminDashboardPage() {
       )}
 
       <Card><CardHeader><CardTitle className="flex items-center gap-2"><Key className="size-5 text-primary" /> Licenses</CardTitle></CardHeader><CardContent>
-        <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b text-left"><th className="py-2 px-3 text-muted-foreground">Key</th><th className="py-2 px-3 text-muted-foreground">Tenant</th><th className="py-2 px-3 text-muted-foreground">Plan</th><th className="py-2 px-3 text-muted-foreground">Expires</th><th className="py-2 px-3 text-muted-foreground">Seats</th><th className="py-2 px-3 text-muted-foreground">Status</th><th className="py-2 px-3 text-muted-foreground">Actions</th></tr></thead><tbody>
+        <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b text-left"><th className="py-2 px-3 text-muted-foreground">Key</th><th className="py-2 px-3 text-muted-foreground">Tenant</th><th className="py-2 px-3 text-muted-foreground">Plan</th><th className="py-2 px-3 text-muted-foreground">Expires</th><th className="py-2 px-3 text-muted-foreground">Seats</th><th className="py-2 px-3 text-muted-foreground">Status</th><th className="py-2 px-3 text-muted-foreground">Hubs</th><th className="py-2 px-3 text-muted-foreground">Actions</th></tr></thead><tbody>
         {licenses.map(l => (
           <tr key={l.id} className="border-b last:border-0">
             <td className="py-3 px-3 font-mono text-xs">{l.license_key}</td>
@@ -273,6 +283,47 @@ export default function AdminDashboardPage() {
             <td className="py-3 px-3 text-xs">{l.expires_at ? new Date(l.expires_at).toLocaleDateString() : "—"}</td>
             <td className="py-3 px-3">{l.seats_used}/{l.seats_total}</td>
             <td className="py-3 px-3"><Badge className={statusColor(l.status)}>{l.status}</Badge></td>
+            <td className="py-3 px-3">
+              <div className="flex flex-wrap gap-1 items-center max-w-[180px]">
+                {(l.hubs ?? []).map(h => {
+                  const name = HUBS.find(x => x.id === h)?.name ?? h;
+                  return (
+                    <span key={h} className="inline-flex items-center gap-1 rounded-full bg-primary/10 border border-primary/20 px-2 py-0.5 text-[10px] font-medium text-primary">
+                      {name}
+                      <button
+                        onClick={() => startTransition(async () => {
+                          const r = await revokeHub(l.tenant_id, h);
+                          setFeedback(r.success
+                            ? { type: "success", message: `Removed ${name} hub.` }
+                            : { type: "error", message: r.error ?? "Failed to remove hub." });
+                          loadData();
+                        })}
+                        title={`Remove ${name} hub`}
+                        className="hover:text-destructive"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  );
+                })}
+                {HUBS.filter(h => !(l.hubs ?? []).includes(h.id)).map(h => (
+                  <button
+                    key={h.id}
+                    onClick={() => startTransition(async () => {
+                      const r = await grantHub(l.tenant_id, h.id);
+                      setFeedback(r.success
+                        ? { type: "success", message: `Granted ${h.name} hub (no payment).` }
+                        : { type: "error", message: r.error ?? "Failed to grant hub." });
+                      loadData();
+                    })}
+                    title={`Grant ${h.name} hub without payment`}
+                    className="inline-flex items-center rounded-full border border-dashed px-2 py-0.5 text-[10px] text-muted-foreground hover:border-primary hover:text-primary transition-colors"
+                  >
+                    + {h.name}
+                  </button>
+                ))}
+              </div>
+            </td>
             <td className="py-3 px-3 flex gap-1 flex-wrap">
               <Button
                 variant="outline"

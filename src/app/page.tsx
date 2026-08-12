@@ -85,34 +85,37 @@ const landingNavSections = [
 
 const plans = [
   {
-    name: "Starter",
+    name: "Foundation",
     price: "49",
-    description: "Perfect for solo agencies getting started.",
-    features: ["10 blog posts / month", "3 social profiles", "Basic AI content generation", "Content calendar", "Analytics dashboard", "White-label portal", "Email support"],
-    planId: "starter",
+    description: "Everything on the platform, at starter levels.",
+    features: ["All six hubs included", "4 blogs / 40 socials per month", "40 images, 8 videos per month", "200K AI tokens / month", "Content calendar + approvals", "White-label portal", "Email support"],
+    planId: "foundation",
   },
   {
     name: "Growth",
     price: "99",
     description: "For growing agencies with multiple clients.",
-    features: ["50 blog posts / month", "10 social profiles", "Advanced AI content generation", "Content calendar", "Analytics dashboard", "Priority support", "SEO campaign automation", "Competitor analysis"],
+    features: ["All six hubs included", "12 blogs / 150 socials per month", "150 images, 30 videos per month", "750K AI tokens / month", "SEO campaign automation", "Competitor analysis", "Priority support"],
     planId: "growth",
     popular: true,
   },
   {
     name: "Dominance",
-    price: "199",
-    description: "Full content engine with white-label capabilities.",
-    features: ["Unlimited blog posts", "Unlimited social profiles", "Elite AI content generation", "Content calendar", "Analytics dashboard", "Dedicated account manager", "White-label portal", "Custom integrations"],
+    price: "299",
+    description: "Full-scale content engine, white-label ready.",
+    features: ["All six hubs included", "40 blogs / 500 socials per month", "500 images, 120 videos per month", "2.5M AI tokens / month", "Outreach + link building", "Dedicated account manager", "Custom integrations"],
     planId: "dominance",
   },
-  {
-    name: "Premium",
-    price: "299",
-    description: "Full-suite platform with unlimited scale and strategy.",
-    features: ["Unlimited everything", "Unlimited AI tokens", "Link building & outreach", "Content calendar", "Analytics dashboard", "Dedicated account manager", "White-label portal", "Quarterly strategy sessions", "24/7 priority support"],
-    planId: "premium",
-  },
+];
+
+// Hub-and-spoke: a-la-carte add-ons for buyers who want just one piece.
+const hubs = [
+  { name: "Content Hub", price: "29", blurb: "Blogs, SEO scoring, content calendar + publish" },
+  { name: "Social Hub", price: "29", blurb: "Captions, scheduling, approvals, 3 profiles" },
+  { name: "Video Hub", price: "29", blurb: "Text-to-video & image-to-video generation" },
+  { name: "Website Hub", price: "29", blurb: "Web Builder — build and host client sites" },
+  { name: "Outreach Hub", price: "29", blurb: "Guest posts, reply watching, opportunities" },
+  { name: "AI Team", price: "49", blurb: "The full employee roster, chat + campaigns" },
 ];
 
 const features = [
@@ -279,7 +282,7 @@ export default async function LandingPage() {
             <h2 className="text-3xl font-bold tracking-tight">Simple, Transparent Pricing</h2>
             <p className="mt-4 text-muted-foreground max-w-2xl mx-auto">Start with a 14-day free trial. No credit card required. Upgrade anytime.</p>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8 max-w-6xl mx-auto">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-5xl mx-auto">
             {plans.map((plan) => (
               <div key={plan.planId} className={`relative rounded-xl border p-8 flex flex-col ${plan.popular ? "border-primary ring-2 ring-primary shadow-lg" : ""}`}>
                 {plan.popular && <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-primary text-primary-foreground text-xs font-semibold px-3 py-1 rounded-full">Most Popular</div>}
@@ -297,6 +300,21 @@ export default async function LandingPage() {
                 <Link href={`/register?plan=${plan.planId}`} className="mt-8"><Button className="w-full" variant={plan.popular ? "default" : "outline"}>{plan.popular ? "Start Free Trial" : "Get Started"} <ArrowRight className="size-4 ml-2" /></Button></Link>
               </div>
             ))}
+          </div>
+
+          {/* Hub-and-spoke: a-la-carte add-ons */}
+          <div className="mt-14 max-w-5xl mx-auto">
+            <h3 className="text-center text-lg font-semibold mb-1">Or pick just the hub you need</h3>
+            <p className="text-center text-sm text-muted-foreground mb-8">A-la-carte add-ons — stack a few, or take an all-in-one tier above. Any 3 hubs for $69/mo.</p>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+              {hubs.map((hub) => (
+                <div key={hub.name} className="rounded-xl border p-5 text-center flex flex-col">
+                  <h4 className="font-semibold">{hub.name}</h4>
+                  <p className="text-xs text-muted-foreground mt-1 mb-3 flex-1">{hub.blurb}</p>
+                  <p className="text-2xl font-bold">${hub.price}<span className="text-sm font-normal text-muted-foreground">/mo</span></p>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </section>

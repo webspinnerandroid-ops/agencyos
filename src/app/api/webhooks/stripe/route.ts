@@ -34,6 +34,27 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) 
     return;
   }
 
+  // ------------------------------------------------------------------
+  // Hub purchase (hub-and-spoke): add the hub to the tenant's settings so
+  // usage limits expand immediately. bundle_3 grants the any-3 bundle.
+  // ------------------------------------------------------------------
+  if (session.metadata?.hub_id || session.metadata?.hub_ids) {
+    const { setTenantHubs, getTenantHubs } = await import("@/lib/plan-limits");
+    const current = await getTenantHubs(tenantId);
+    const additions = session.metadata?.hub_ids
+      ? session.metadata.hub_ids.split(",").filter(Boolean)
+      : session.metadata?.hub_id
+        ? [session.metadata.hub_id]
+        : [];
+    const next = [...current];
+    for (const hubId of additions) {
+      if (!next.includes(hubId)) next.push(hubId);
+    }
+    await setTenantHubs(tenantId, next);
+    console.log(`[stripe-webhook] Hubs [${additions.join(", ")}] activated for tenant ${tenantId}`);
+    return;
+  }
+
   // Upsert subscription record
   const { data: existing } = await supabase
     .from("subscriptions")

@@ -54,6 +54,7 @@ export interface LicenseRecord {
   issued_at: string;
   expires_at: string | null;
   tenant_name?: string;
+  hubs?: string[];
 }
 
 export interface LicenseAuditEntry {
@@ -192,7 +193,26 @@ export async function getLicenses(): Promise<ActionResponse<LicenseRecord[]>> {
       .order("issued_at", { ascending: false });
     if (error) throw new Error(error.message);
     const mapped = (data ?? []).map((l: any) => ({ ...l, tenant_name: l.tenant?.name ?? "N/A" }));
-    return { success: true, data: mapped };
+
+    // Attach each tenant's purchased hubs (hub-and-spoke) so the admin table
+    // can grant/revoke them without payment.
+    const tenantIds = [...new Set((mapped as any[]).map((l) => l.tenant_id).filter(Boolean))] as string[];
+    const hubByTenant = new Map<string, string[]>();
+    if (tenantIds.length > 0) {
+      const { data: settingsRows } = await supabase
+        .from("tenant_settings")
+        .select("tenant_id, settings")
+        .in("tenant_id", tenantIds);
+      for (const row of settingsRows ?? []) {
+        const hubs = (row.settings as any)?.hubs;
+        hubByTenant.set(row.tenant_id, Array.isArray(hubs) ? hubs : []);
+      }
+    }
+    const withHubs = (mapped as any[]).map((l) => ({
+      ...l,
+      hubs: hubByTenant.get(l.tenant_id) ?? [],
+    }));
+    return { success: true, data: withHubs as LicenseRecord[] };
   } catch (err) {
     return { success: false, error: (err as Error).message };
   }
@@ -375,6 +395,83 @@ export async function renewLicense(
     });
 
     return { success: true, data: { expires_at: newExpiry.toISOString() } };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+/**
+ * Grant a hub to a tenant without payment (super admin only) — adds the hub
+ * to tenant_settings.settings.hubs so usage limits expand immediately.
+ */
+export async function grantHub(
+  tenantId: string,
+  hubId: string
+): Promise<ActionResponse> {
+  try {
+    await requireSuperAdmin();
+    const supabase = await createServiceClient();
+
+    const { data: existing } = await supabase
+      .from("tenant_settings")
+      .select("settings")
+      .eq("tenant_id", tenantId)
+      .maybeSingle();
+    const hubs: string[] = Array.isArray((existing?.settings as any)?.hubs)
+      ? ((existing?.settings as any).hubs as string[])
+      : [];
+    if (!hubs.includes(hubId)) {
+      hubs.push(hubId);
+    }
+    const settings = {
+      ...(((existing?.settings as any) ?? {}) as object),
+      hubs,
+    };
+    if (existing) {
+      await supabase
+        .from("tenant_settings")
+        .update({ settings, updated_at: new Date().toISOString() })
+        .eq("tenant_id", tenantId);
+    } else {
+      await supabase.from("tenant_settings").insert({ tenant_id: tenantId, settings });
+    }
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+/**
+ * Revoke a hub from a tenant without payment (super admin only).
+ */
+export async function revokeHub(
+  tenantId: string,
+  hubId: string
+): Promise<ActionResponse> {
+  try {
+    await requireSuperAdmin();
+    const supabase = await createServiceClient();
+
+    const { data: existing } = await supabase
+      .from("tenant_settings")
+      .select("settings")
+      .eq("tenant_id", tenantId)
+      .maybeSingle();
+    const hubs: string[] = Array.isArray((existing?.settings as any)?.hubs)
+      ? ((existing?.settings as any).hubs as string[])
+      : [];
+    const next = hubs.filter((h) => h !== hubId);
+    const settings = {
+      ...(((existing?.settings as any) ?? {}) as object),
+      hubs: next,
+    };
+    if (existing) {
+      await supabase
+        .from("tenant_settings")
+        .update({ settings, updated_at: new Date().toISOString() })
+        .eq("tenant_id", tenantId);
+    }
+    return { success: true };
   } catch (err) {
     return { success: false, error: (err as Error).message };
   }

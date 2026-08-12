@@ -766,19 +766,32 @@ export default function AnalyticsPage() {
                             {post.content?.slice(0, 80) ?? "—"}
                           </td>
                           <td className="py-3 pr-4 whitespace-nowrap">
-                            {post.links && post.links.length > 0 ? (
+                            {post.platforms && post.platforms.length > 0 ? (
                               <div className="flex flex-wrap gap-1">
-                                {post.links.map((l) => (
-                                  <a
-                                    key={l.platform + l.url}
-                                    href={l.url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full bg-primary/10 text-primary hover:bg-primary/20 capitalize"
-                                  >
-                                    {l.platform} <ExternalLink className="size-2.5" />
-                                  </a>
-                                ))}
+                                {post.platforms.map((platform) => {
+                                  const link = (post.links ?? []).find(
+                                    (l) => l.platform === platform
+                                  );
+                                  const label = (
+                                    <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded-full bg-primary/10 capitalize">
+                                      {platform}
+                                      {link && <ExternalLink className="size-2.5" />}
+                                    </span>
+                                  );
+                                  return link ? (
+                                    <a
+                                      key={platform}
+                                      href={link.url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="hover:bg-primary/20"
+                                    >
+                                      {label}
+                                    </a>
+                                  ) : (
+                                    <span key={platform}>{label}</span>
+                                  );
+                                })}
                               </div>
                             ) : (
                               <span className="text-muted-foreground">—</span>

@@ -174,19 +174,25 @@ export async function GET(request: NextRequest) {
           ? ((totalLikes + totalComments + totalShares) / totalImpressions) * 100
           : 0;
 
+      // Where the post was published: platform assignments first, plus any
+      // real platforms the metric snapshots were fetched from (older rows
+      // may predate post_platforms entries). "unknown" is filtered out.
+      const platformSet = new Set<string>();
+      for (const pp of (post.post_platforms as unknown as Array<{
+        social_accounts: { platform: string } | null;
+      }> | undefined) ?? []) {
+        if (pp.social_accounts?.platform) platformSet.add(pp.social_accounts.platform);
+      }
+      for (const s of snapshots) {
+        if (s.platform && s.platform !== "unknown") platformSet.add(s.platform);
+      }
+
       return {
         id: post.id,
         content: postContentText(post.content),
         scheduled_at: post.scheduled_at,
         client_id: post.client_id,
-        platforms:
-          (post.post_platforms as unknown as Array<{
-            social_accounts: { platform: string } | null;
-          }> | undefined)
-            ?.map(
-              (pp) => pp.social_accounts?.platform
-            )
-            .filter(Boolean) ?? [],
+        platforms: [...platformSet],
         links,
         totalLikes,
         totalComments,

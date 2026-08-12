@@ -520,7 +520,7 @@ export default function GeneratePage() {
               </div>
 
               {/* Headings outline */}
-              {result.blogPost.headings.length > 0 && (
+              {(result.blogPost.headings ?? []).length > 0 && (
                 <div>
                   <Label className="text-xs">Heading Structure</Label>
                   <ul className="mt-1 space-y-0.5 pl-4 border-l-2 border-muted">

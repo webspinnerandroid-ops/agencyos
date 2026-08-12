@@ -381,9 +381,11 @@ export async function POST(request: NextRequest) {
       brandVoice ? `Use this brand voice: ${brandVoice}.` : ""
     }`;
 
-    // Helper to count words in a string
-    const countWords = (text: string) =>
-      text.split(/\s+/).filter((w) => w.length > 0).length;
+    // Helper to count words in a string (defensive: a truncated model
+    // response can omit the body key entirely — treat it as empty rather
+    // than crashing on .split of undefined).
+    const countWords = (text: unknown) =>
+      String(text ?? "").split(/\s+/).filter((w) => w.length > 0).length;
 
     // Brand-aware word target: respect the profile's max_word_count
     // (presets cap at 200-800 for e.g. ecommerce) and never demand more
@@ -409,6 +411,19 @@ export async function POST(request: NextRequest) {
         functionName: "generate_blog_post",
       }
     );
+
+    // Normalize a truncated/partial structured response: a missing body or
+    // headings array must not crash downstream code (the word-count retry
+    // below re-prompts the model when the body is empty).
+    blogPost = {
+      title: blogPost.title ?? "",
+      slug: blogPost.slug ?? "",
+      metaDescription: blogPost.metaDescription ?? "",
+      headings: Array.isArray(blogPost.headings) ? blogPost.headings : [],
+      body: typeof blogPost.body === "string" ? blogPost.body : "",
+      images: Array.isArray(blogPost.images) ? blogPost.images : [],
+      suggestedImagePrompt: blogPost.suggestedImagePrompt,
+    };
 
     const blogWordCount = countWords(blogPost.body);
     console.log(`[generate-content] Blog word count: ${blogWordCount} (min: ${MIN_BLOG_WORDS})`);

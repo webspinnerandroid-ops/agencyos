@@ -1,10 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Loader2,
   Plus,
@@ -14,6 +13,8 @@ import {
   Save,
   RotateCcw,
   Menu,
+  GripVertical,
+  ArrowRight,
 } from "lucide-react";
 
 interface NavItem {
@@ -31,6 +32,10 @@ export default function NavBuilderPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [dragItem, setDragItem] = useState<{ section: number; item: number } | null>(null);
+  const [dragSection, setDragSection] = useState<number | null>(null);
+  const dragOverItem = useRef<{ section: number; item: number } | null>(null);
+  const dragOverSection = useRef<number | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -53,14 +58,6 @@ export default function NavBuilderPage() {
     load();
   }, [load]);
 
-  const move = <T,>(arr: T[], from: number, dir: -1 | 1): T[] => {
-    const to = from + dir;
-    if (to < 0 || to >= arr.length) return arr;
-    const next = [...arr];
-    [next[from], next[to]] = [next[to], next[from]];
-    return next;
-  };
-
   const patchSection = (i: number, patch: Partial<NavSection>) =>
     setSections((prev) =>
       prev ? prev.map((s, idx) => (idx === i ? { ...s, ...patch } : s)) : prev
@@ -76,6 +73,89 @@ export default function NavBuilderPage() {
           )
         : prev
     );
+
+  const swapSections = (from: number, dir: -1 | 1) =>
+    setSections((prev) => {
+      if (!prev) return prev;
+      const to = from + dir;
+      if (to < 0 || to >= prev.length) return prev;
+      const next = [...prev];
+      [next[from], next[to]] = [next[to], next[from]];
+      return next;
+    });
+
+  const swapItems = (si: number, from: number, dir: -1 | 1) =>
+    patchSection(si, {
+      items: (() => {
+        const items = sections?.[si]?.items ?? [];
+        const to = from + dir;
+        if (to < 0 || to >= items.length) return items;
+        const next = [...items];
+        [next[from], next[to]] = [next[to], next[from]];
+        return next;
+      })(),
+    });
+
+  // ---- Drag & drop ----------------------------------------------------
+  const onDropItem = (target: { section: number; item: number }) => {
+    const from = dragItem;
+    setDragItem(null);
+    dragOverItem.current = null;
+    if (!from || !sections) return;
+    if (from.section === target.section) {
+      // Reorder within the same section.
+      const items = [...sections[from.section].items];
+      const [moved] = items.splice(from.item, 1);
+      const to = from.item < target.item ? target.item - 1 : target.item;
+      items.splice(Math.max(0, Math.min(to, items.length)), 0, moved);
+      patchSection(from.section, { items });
+    } else {
+      // Move to another section.
+      const moved = sections[from.section].items[from.item];
+      const src = [...sections[from.section].items];
+      src.splice(from.item, 1);
+      const dst = [...sections[target.section].items];
+      dst.splice(Math.min(target.item, dst.length), 0, moved);
+      setSections((prev) =>
+        prev
+          ? prev.map((s, idx) =>
+              idx === from.section ? { ...s, items: src } : idx === target.section ? { ...s, items: dst } : s
+            )
+          : prev
+      );
+    }
+  };
+
+  const onDropSection = (target: number) => {
+    const from = dragSection;
+    setDragSection(null);
+    dragOverSection.current = null;
+    if (from === null || !sections) return;
+    setSections((prev) => {
+      if (!prev) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(from, 1);
+      const to = from < target ? target - 1 : target;
+      next.splice(Math.max(0, Math.min(to, next.length)), 0, moved);
+      return next;
+    });
+  };
+
+  // Explicit "move item to a different section" (dropdown on each item).
+  const moveItemToSection = (si: number, ii: number, targetSection: number) => {
+    if (targetSection === si || !sections) return;
+    const moved = sections[si].items[ii];
+    const src = [...sections[si].items];
+    src.splice(ii, 1);
+    const dst = [...sections[targetSection].items, moved];
+    setSections((prev) =>
+      prev
+        ? prev.map((s, idx) =>
+            idx === si ? { ...s, items: src } : idx === targetSection ? { ...s, items: dst } : s
+          )
+        : prev
+    );
+  };
 
   const save = async () => {
     if (!sections) return;
@@ -142,8 +222,9 @@ export default function NavBuilderPage() {
           <Menu className="size-7 text-primary" /> Menu Builder
         </h1>
         <p className="text-muted-foreground mt-1">
-          Reorder, rename, add, or remove items in the app menu. Changes apply
-          to this workspace&apos;s navigation immediately.
+          Drag items to reorder or drop them onto another section. Use the
+          dropdown to move an item to a section, or the arrows for fine control.
+          Save when done — changes apply immediately.
         </p>
       </div>
 
@@ -156,8 +237,17 @@ export default function NavBuilderPage() {
 
       <div className="space-y-4">
         {(sections ?? []).map((section, si) => (
-          <Card key={si} className="p-4">
+          <Card
+            key={si}
+            draggable
+            onDragStart={(e) => { setDragSection(si); e.dataTransfer.effectAllowed = "move"; }}
+            onDragOver={(e) => { e.preventDefault(); dragOverSection.current = si; }}
+            onDragLeave={() => { if (dragOverSection.current === si) dragOverSection.current = null; }}
+            onDrop={(e) => { e.preventDefault(); e.stopPropagation(); onDropSection(si); }}
+            className={`p-4 cursor-grab active:cursor-grabbing ${dragOverSection.current === si && dragSection !== null && dragSection !== si ? "ring-2 ring-primary" : ""}`}
+          >
             <div className="flex items-center gap-2 mb-3">
+              <GripVertical className="size-4 text-muted-foreground shrink-0" />
               <Input
                 value={section.label}
                 onChange={(e) => patchSection(si, { label: e.target.value })}
@@ -165,21 +255,33 @@ export default function NavBuilderPage() {
                 aria-label={`Section ${si + 1} label`}
               />
               <div className="flex items-center gap-0.5 ml-auto">
-                <Button variant="ghost" size="sm" disabled={si === 0} onClick={() => setSections((p) => (p ? move(p, si, -1) : p))} title="Move section up"><ChevronUp className="size-4" /></Button>
-                <Button variant="ghost" size="sm" disabled={si === (sections?.length ?? 0) - 1} onClick={() => setSections((p) => (p ? move(p, si, 1) : p))} title="Move section down"><ChevronDown className="size-4" /></Button>
+                <Button variant="ghost" size="sm" disabled={si === 0} onClick={() => swapSections(si, -1)} title="Move section up"><ChevronUp className="size-4" /></Button>
+                <Button variant="ghost" size="sm" disabled={si === (sections?.length ?? 0) - 1} onClick={() => swapSections(si, 1)} title="Move section down"><ChevronDown className="size-4" /></Button>
                 <Button variant="ghost" size="sm" className="text-destructive" onClick={() => setSections((p) => (p ? p.filter((_, i) => i !== si) : p))} title="Remove section"><Trash2 className="size-4" /></Button>
               </div>
             </div>
 
             <div className="space-y-2">
               {section.items.map((item, ii) => (
-                <div key={ii} className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground w-6 text-right">{ii + 1}.</span>
+                <div
+                  key={ii}
+                  draggable
+                  onDragStart={(e) => { setDragItem({ section: si, item: ii }); e.dataTransfer.effectAllowed = "move"; }}
+                  onDragOver={(e) => { e.preventDefault(); dragOverItem.current = { section: si, item: ii }; }}
+                  onDragLeave={() => { if (dragOverItem.current?.section === si && dragOverItem.current?.item === ii) dragOverItem.current = null; }}
+                  onDrop={(e) => { e.preventDefault(); e.stopPropagation(); onDropItem({ section: si, item: ii }); }}
+                  className={`flex items-center gap-2 rounded-md border p-1.5 cursor-grab active:cursor-grabbing ${
+                    dragOverItem.current?.section === si && dragOverItem.current?.item === ii && dragItem
+                      ? "ring-2 ring-primary"
+                      : "border-transparent"
+                  }`}
+                >
+                  <GripVertical className="size-3.5 text-muted-foreground shrink-0" />
                   <Input
                     value={item.label}
                     onChange={(e) => patchItem(si, ii, { label: e.target.value })}
                     placeholder="Menu label"
-                    className="w-48"
+                    className="w-44"
                   />
                   <Input
                     value={item.href}
@@ -187,8 +289,21 @@ export default function NavBuilderPage() {
                     placeholder="/dashboard/…"
                     className="font-mono flex-1"
                   />
-                  <Button variant="ghost" size="sm" disabled={ii === 0} onClick={() => patchSection(si, { items: move(section.items, ii, -1) })} title="Move up"><ChevronUp className="size-3.5" /></Button>
-                  <Button variant="ghost" size="sm" disabled={ii === section.items.length - 1} onClick={() => patchSection(si, { items: move(section.items, ii, 1) })} title="Move down"><ChevronDown className="size-3.5" /></Button>
+                  <select
+                    value={si}
+                    onChange={(e) => moveItemToSection(si, ii, Number(e.target.value))}
+                    className="rounded-md border border-input bg-background px-1.5 py-1 text-xs"
+                    title="Move item to another section"
+                  >
+                    {(sections ?? []).map((s, targetIdx) => (
+                      <option key={targetIdx} value={targetIdx}>
+                        {targetIdx === si ? `${s.label} (here)` : s.label}
+                      </option>
+                    ))}
+                  </select>
+                  <ArrowRight className="size-3.5 text-muted-foreground" />
+                  <Button variant="ghost" size="sm" disabled={ii === 0} onClick={() => swapItems(si, ii, -1)} title="Move up"><ChevronUp className="size-3.5" /></Button>
+                  <Button variant="ghost" size="sm" disabled={ii === section.items.length - 1} onClick={() => swapItems(si, ii, 1)} title="Move down"><ChevronDown className="size-3.5" /></Button>
                   <Button variant="ghost" size="sm" className="text-destructive" onClick={() => patchSection(si, { items: section.items.filter((_, j) => j !== ii) })} title="Remove item"><Trash2 className="size-3.5" /></Button>
                 </div>
               ))}

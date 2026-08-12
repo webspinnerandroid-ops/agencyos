@@ -40,6 +40,7 @@ export async function POST(request: NextRequest) {
       clientId: body.clientId,
       tags: body.tags,
       modelId: body.modelId,
+      imageUrl: body.imageUrl,
     });
 
     // Track usage (1 video + a nominal token cost).

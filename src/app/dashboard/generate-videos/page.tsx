@@ -12,6 +12,8 @@ import {
   Trash2,
   Film,
   Pencil,
+  ImageUp,
+  X,
 } from "lucide-react";
 
 // ============================================================================
@@ -53,6 +55,10 @@ export default function GenerateVideosPage() {
   const [aspect, setAspect] = useState("1280x720");
   const [models, setModels] = useState<ModelOption[]>([]);
   const [selectedModelId, setSelectedModelId] = useState("");
+  const [referenceImage, setReferenceImage] = useState<string | null>(null);
+  const [referenceUploading, setReferenceUploading] = useState(false);
+  const [referenceError, setReferenceError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [loading, setLoading] = useState(false);
   const [enhancing, setEnhancing] = useState(false);
   const [enhanceError, setEnhanceError] = useState<string | null>(null);
@@ -129,10 +135,55 @@ export default function GenerateVideosPage() {
   }, [fetchLibrary]);
 
   // ------------------------------------------------------------------
+  // Reference image upload (image-to-video models need a public URL)
+  // ------------------------------------------------------------------
+  const selectedModel = models.find((m) => m.id === selectedModelId);
+  const isI2V =
+    (selectedModel?.model_identifier ?? "").includes("i2v") ||
+    (selectedModel?.model_identifier ?? "").includes("image-to-video");
+
+  const handleReferenceFile = async (file: File | undefined | null) => {
+    setReferenceError(null);
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setReferenceError("Please select an image file (PNG, JPG, WEBP).");
+      return;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setReferenceError("Image must be 10MB or smaller.");
+      return;
+    }
+    setReferenceUploading(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch("/api/cms/upload", {
+        method: "POST",
+        credentials: "include",
+        body: form,
+      });
+      const data = await res.json();
+      if (!res.ok || !data.url) {
+        setReferenceError(data.error ?? "Upload failed");
+        return;
+      }
+      setReferenceImage(data.url);
+    } catch (err: any) {
+      setReferenceError(err?.message ?? "Upload failed");
+    } finally {
+      setReferenceUploading(false);
+    }
+  };
+
+  // ------------------------------------------------------------------
   // Generate
   // ------------------------------------------------------------------
   const handleGenerate = async () => {
     if (!prompt.trim()) return;
+    if (isI2V && !referenceImage) {
+      setError("This model is image-to-video — upload a reference image first.");
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -145,6 +196,7 @@ export default function GenerateVideosPage() {
           duration: Number(duration),
           resolution: aspect,
           modelId: selectedModelId || undefined,
+          imageUrl: referenceImage ?? undefined,
         }),
       });
       const data = await res.json();
@@ -326,6 +378,56 @@ export default function GenerateVideosPage() {
                     </p>
                   )}
                 </div>
+                {isI2V && (
+                  <div>
+                    <label className="block text-sm font-medium mb-1.5">
+                      Reference Image (required for image-to-video)
+                    </label>
+                    <div className="flex flex-wrap items-center gap-3">
+                      {referenceImage ? (
+                        <div className="relative">
+                          <img
+                            src={referenceImage}
+                            alt="Reference"
+                            className="h-20 w-20 object-cover rounded-md border"
+                          />
+                          <button
+                            onClick={() => setReferenceImage(null)}
+                            className="absolute -top-2 -right-2 p-0.5 rounded-full bg-red-500 text-white hover:bg-red-600"
+                            title="Remove reference image"
+                          >
+                            <X className="size-3" />
+                          </button>
+                        </div>
+                      ) : (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => fileInputRef.current?.click()}
+                          disabled={referenceUploading}
+                        >
+                          {referenceUploading ? (
+                            <Loader2 className="size-3.5 animate-spin mr-1" />
+                          ) : (
+                            <ImageUp className="size-3.5 mr-1" />
+                          )}
+                          Upload Image
+                        </Button>
+                      )}
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => handleReferenceFile(e.target.files?.[0])}
+                      />
+                    </div>
+                    {referenceError && (
+                      <p className="text-xs text-destructive mt-1">{referenceError}</p>
+                    )}
+                  </div>
+                )}
                 <div>
                   <label htmlFor="vdur" className="block text-sm font-medium mb-1.5">
                     Duration

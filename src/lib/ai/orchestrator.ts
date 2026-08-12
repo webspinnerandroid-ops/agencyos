@@ -1336,11 +1336,22 @@ async function callFalAPI(
 async function callWanAPI(
   resolution: ModelResolution,
   prompt: string,
-  options?: { duration?: number }
+  options?: { duration?: number; imageUrl?: string }
 ): Promise<VideoGenerationResult> {
+  const isI2V = resolution.model.includes("i2v");
+  const input: Record<string, unknown> = { prompt };
+  if (isI2V) {
+    if (!options?.imageUrl) {
+      throw new Error(
+        "This model needs a reference image. Pass an image URL (image-to-video)."
+      );
+    }
+    // DashScope first-frame-to-video expects the image under input.img_url.
+    input.img_url = options.imageUrl;
+  }
   const submitBody: Record<string, unknown> = {
     model: resolution.model,
-    input: { prompt },
+    input,
   };
   // Wan 2.1/2.2 flash accept a duration hint (5s default, max 5s for flash).
   const duration = Math.min(options?.duration ?? 5, 5);

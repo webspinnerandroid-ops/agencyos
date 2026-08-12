@@ -72,25 +72,34 @@ export async function GET() {
     for (const k of (keyCounts.data ?? []) as any[]) {
       tenantKeyCount.set(k.provider_id, (tenantKeyCount.get(k.provider_id) ?? 0) + 1);
     }
-    const envKeys = new Map<string, string>();
-    if (process.env.OPENAI_API_KEY) envKeys.set("text", process.env.OPENAI_API_KEY);
-    if (process.env.DEEPSEEK_API_KEY) envKeys.set("text", process.env.DEEPSEEK_API_KEY);
-    if (process.env.GOOGLE_API_KEY) envKeys.set("image", process.env.GOOGLE_API_KEY);
-    if (process.env.RUNWAY_API_KEY) envKeys.set("video", process.env.RUNWAY_API_KEY);
-    if (process.env.FAL_AI_API_KEY) envKeys.set("video", process.env.FAL_AI_API_KEY);
-    if (process.env.ELEVENLABS_API_KEY) envKeys.set("voice", process.env.ELEVENLABS_API_KEY);
+    // Platform env keys mapped per PROVIDER (not per type — two providers of the
+    // same type must not share one key's status). A provider is "connected" when
+    // the platform has a matching env key OR a tenant has stored its own key.
+    const envKeyByProvider: Record<string, string> = {
+      DeepSeek: process.env.DEEPSEEK_API_KEY ?? "",
+      OpenAI: process.env.OPENAI_API_KEY ?? "",
+      "OpenAI Image": process.env.OPENAI_API_KEY ?? "",
+      "OpenAI Embedding": process.env.OPENAI_API_KEY ?? "",
+      Google: process.env.GOOGLE_API_KEY ?? "",
+      "Google Imagen": process.env.GOOGLE_API_KEY ?? "",
+      Runway: process.env.RUNWAY_API_KEY ?? "",
+      "fal.ai": process.env.FAL_AI_API_KEY ?? "",
+      "Alibaba Wan": process.env.DASHSCOPE_API_KEY ?? process.env.WAN_API_KEY ?? "",
+      ElevenLabs: process.env.ELEVENLABS_API_KEY ?? "",
+      "Stability AI": process.env.STABILITY_API_KEY ?? "",
+    };
 
     const list = (providers.data ?? []).map((p: any) => {
       const b = balanceMap.get(p.id);
-      const envConnected = envKeys.has(p.type ?? "");
+      const envKey = envKeyByProvider[p.name] ?? "";
       const tenantKeys = tenantKeyCount.get(p.id) ?? 0;
       return {
         id: p.id,
         name: p.name,
         type: p.type,
         base_url: p.base_url,
-        connected: envConnected || tenantKeys > 0,
-        env_key: envConnected ? "configured" : undefined,
+        connected: Boolean(envKey) || tenantKeys > 0,
+        env_key: envKey ? "configured" : undefined,
         tenant_key_count: tenantKeys,
         balance_usd: b?.balance_usd ?? null,
         currency: b?.currency ?? "USD",

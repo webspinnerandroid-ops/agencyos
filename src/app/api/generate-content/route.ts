@@ -21,6 +21,7 @@ import {
 } from "@/lib/content-links";
 import { rateLimitRequest } from "@/lib/rate-limit";
 import { checkTrialContentLimit } from "@/lib/trial-limits";
+import { checkUsageLimit } from "@/lib/plan-limits";
 import { persistImageToStorage } from "@/lib/media/storage";
 import {
   MAX_BLOG_IMAGES,
@@ -301,11 +302,22 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Trial tenants: one blog per week.
+    // Trial tenants: one blog per week. Paid plans: monthly per-tier caps.
     if (platforms.includes("blog")) {
       const trial = await checkTrialContentLimit(tenantId, "blog");
       if (!trial.allowed) {
         return NextResponse.json({ error: trial.reason }, { status: 429 });
+      }
+      const plan = await checkUsageLimit(tenantId, "blog_posts");
+      if (!plan.allowed) {
+        return NextResponse.json({ error: plan.reason ?? "Monthly blog limit reached" }, { status: 429 });
+      }
+    }
+    const socialCount = platforms.filter((p: string) => p !== "blog").length;
+    if (socialCount > 0) {
+      const plan = await checkUsageLimit(tenantId, "social_posts");
+      if (!plan.allowed) {
+        return NextResponse.json({ error: plan.reason ?? "Monthly social-post limit reached" }, { status: 429 });
       }
     }
 

@@ -32,6 +32,7 @@ export function buildNavSections(isSuperAdmin: boolean): NavSection[] {
     {
       label: "Manage",
       items: [
+        { href: "/dashboard/profile", label: "Profile & Usage" },
         { href: "/dashboard/settings/ai", label: "AI" },
         { href: "/dashboard/settings", label: "Settings" },
         { href: "/dashboard/billing", label: "Billing" },

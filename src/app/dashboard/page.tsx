@@ -2,6 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import { getTenantId } from "@/lib/auth";
 import { getCurrentWorkspaceId } from "@/lib/workspace";
 import { RecentContentList } from "./recent-content";
+import { UsageBanner } from "./usage-banner";
 
 export const dynamic = "force-dynamic";
 
@@ -110,6 +111,7 @@ export default async function DashboardPage({ searchParams }: { searchParams?: P
 
   return (
     <div className="space-y-8">
+      <UsageBanner />
       {showOnboarding && (
         <section className="rounded-xl border bg-card p-6" aria-label="Getting started">
           <h2 className="text-xl font-semibold tracking-tight">Getting started</h2>

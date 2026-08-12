@@ -52,6 +52,7 @@ import {
 import { scoreContent } from "@/lib/rankmath";
 import { incrementUsage } from "@/lib/usage";
 import { checkTrialContentLimit } from "@/lib/trial-limits";
+import { checkUsageLimit } from "@/lib/plan-limits";
 import { createCampaignPlan } from "@/lib/campaign-plans";
 
 // ----------------------------------------------------------------------------
@@ -354,10 +355,14 @@ async function cherylGenerateBlog(
   const supabase = await createServiceClient();
 
   // Trial tenants: one blog per week — enforced here too so the AI team
-  // can't bypass the API-route cap.
+  // can't bypass the API-route cap. Paid plans: monthly per-tier cap.
   const trial = await checkTrialContentLimit(tenantId, "blog");
   if (!trial.allowed) {
     throw new Error(trial.reason ?? "Weekly trial limit reached");
+  }
+  const plan = await checkUsageLimit(tenantId, "blog_posts");
+  if (!plan.allowed) {
+    throw new Error(plan.reason ?? "Monthly blog limit reached");
   }
 
   // Real pages from the KB — internal-link markers resolve against these.

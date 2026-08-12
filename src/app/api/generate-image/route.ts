@@ -4,9 +4,11 @@ import { generateImage } from "@/lib/ai/orchestrator";
 import { incrementUsage } from "@/lib/usage";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getCurrentWorkspaceId } from "@/lib/workspace";
+import { checkUsageLimit } from "@/lib/plan-limits";
 import { rateLimitRequest } from "@/lib/rate-limit";
 import { persistImageToStorage } from "@/lib/media/storage";
 import { checkTrialContentLimit } from "@/lib/trial-limits";
+import { buildWorkspacePromptContext, augmentPromptWithContext } from "@/lib/ai/workspace-context";
 
 export async function POST(request: NextRequest) {
   try {
@@ -26,10 +28,14 @@ export async function POST(request: NextRequest) {
     const workspaceId = await getCurrentWorkspaceId();
     const supabase = await createServiceClient();
 
-    // Trial tenants: one image per week.
+    // Trial tenants: one image per week. Paid plans: monthly per-tier cap.
     const trial = await checkTrialContentLimit(tenantId, "image");
     if (!trial.allowed) {
       return NextResponse.json({ error: trial.reason }, { status: 429 });
+    }
+    const plan = await checkUsageLimit(tenantId, "image_generations");
+    if (!plan.allowed) {
+      return NextResponse.json({ error: plan.reason ?? "Monthly image limit reached" }, { status: 429 });
     }
 
     let body: { prompt: string; size?: string; n?: number; clientId?: string; referenceImage?: string };
@@ -49,8 +55,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Prompt too long (max 4000 characters)" }, { status: 400 });
     }
 
+    // Ground the prompt in the workspace brand profile + knowledgebase so
+    // standalone image generation matches the client's look and content.
+    const { context } = await buildWorkspacePromptContext(tenantId);
+    const groundedPrompt = augmentPromptWithContext(prompt, context);
+
     // Generate images using configured provider (DALL-E, Stability, Google Imagen)
-    const rawImages = await generateImage(tenantId, prompt.trim(), {
+    const rawImages = await generateImage(tenantId, groundedPrompt, {
       size: (size as any) ?? "1024x1024",
       n: n ?? 1,
       clientId: clientId ?? undefined,

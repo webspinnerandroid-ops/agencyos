@@ -19,11 +19,13 @@ export async function GET(request: NextRequest) {
 
     const task = request.nextUrl.searchParams.get("task") ?? "video_generation";
 
-    // Providers the tenant has an explicit key for.
+    // Only providers THIS TENANT has configured. Platform env defaults are the
+    // super-admin's keys and must not leak into tenant-facing selectors.
     const { data: tenantKeys } = await supabase
       .from("tenant_api_keys")
       .select("provider_id")
-      .eq("tenant_id", tenantId);
+      .eq("tenant_id", tenantId)
+      .eq("is_active", true);
     const keyedProviderIds = new Set((tenantKeys ?? []).map((k: any) => k.provider_id));
 
     // Models with their provider.
@@ -36,20 +38,12 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    // Platform default keys by provider type (env vars) — these cover the
-    // providers the platform runs on without per-tenant keys.
-    const envKeys = new Set<string>();
-    if (process.env.OPENAI_API_KEY || process.env.DEEPSEEK_API_KEY) envKeys.add("text");
-    if (process.env.GOOGLE_API_KEY || process.env.OPENAI_API_KEY) envKeys.add("image");
-    if (process.env.RUNWAY_API_KEY || process.env.FAL_AI_API_KEY) envKeys.add("video");
-    if (process.env.ELEVENLABS_API_KEY) envKeys.add("voice");
-
     const models = (data ?? []).filter((m: any) => {
       const provider = m.provider as { id: string; name: string; type?: string } | null;
       if (!provider) return false;
       if (m.is_deprecated === true) return false;
-      // Connected = explicit tenant key, or platform env fallback for its type.
-      return keyedProviderIds.has(provider.id) || envKeys.has(provider.type ?? "");
+      // Connected = an ACTIVE tenant key for this provider only.
+      return keyedProviderIds.has(provider.id);
     });
 
     return NextResponse.json({ models });

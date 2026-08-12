@@ -2,7 +2,7 @@ import { type NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import { getTenantThemeSafe, encodeTenantTheme } from "@/lib/tenant"
 
-const PUBLIC_ROUTES = ["/login", "/register", "/forgot-password", "/reset-password", "/pending-approval", "/help", "/about", "/contact", "/privacy", "/terms", "/seo/proposal", "/api/webhooks", "/api/auth/callback", "/api/register", "/api/inngest", "/api/docusign/connect", "/api/seo/public-proposal", "/_next", "/favicon.ico", "/robots.txt", "/sitemap.xml", "/og-image.png", "/"]
+const PUBLIC_ROUTES = ["/login", "/register", "/forgot-password", "/reset-password", "/pending-approval", "/help", "/about", "/contact", "/privacy", "/terms", "/seo/proposal", "/site", "/api/webhooks", "/api/auth/callback", "/api/register", "/api/inngest", "/api/docusign/connect", "/api/seo/public-proposal", "/api/cms/forms", "/_next", "/favicon.ico", "/robots.txt", "/sitemap.xml", "/og-image.png", "/"]
 
 function isPublicRoute(pathname: string): boolean {
   return PUBLIC_ROUTES.some(

@@ -1,7 +1,6 @@
 import { serve } from "inngest/next";
 import { inngest } from "@/lib/inngest/client";
 import { publishScheduledPosts } from "@/lib/inngest/functions/publishScheduledPosts";
-import { fetchAnalytics } from "@/lib/inngest/functions/fetchAnalytics";
 import { monthlyBillingReset } from "@/lib/inngest/functions/monthlyBillingReset";
 import { syncInboxes } from "@/lib/inngest/functions/syncInboxes";
 import { syncSocialInbox } from "@/lib/inngest/functions/syncSocialInbox";
@@ -20,5 +19,5 @@ import { autoRewritePost } from "@/lib/inngest/functions/autoRewritePost";
  */
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [publishScheduledPosts, fetchAnalytics, monthlyBillingReset, syncInboxes, syncSocialInbox, processSequences, teamChatTask, weeklyOpportunityScan, autoRewritePost],
+  functions: [publishScheduledPosts, monthlyBillingReset, syncInboxes, syncSocialInbox, processSequences, teamChatTask, weeklyOpportunityScan, autoRewritePost],
 });

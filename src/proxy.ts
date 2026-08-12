@@ -95,33 +95,63 @@ function cacheSet<T>(
   }
 }
 
-/** Find the Supabase auth-token cookie dynamically (supports any project ref + chunked cookies) */
+/** Current Supabase project ref from env, e.g. "axqcmiisztnqcntprhdy". */
+function currentSupabaseRef(): string | undefined {
+  return process.env.NEXT_PUBLIC_SUPABASE_URL?.match(
+    /https:\/\/([a-z0-9]+)\.supabase\.co/
+  )?.[1]
+}
+
+/**
+ * Find the Supabase auth-token cookie (supports chunked cookies). Prefers the
+ * cookie for the CURRENT project ref — a stale session cookie from a different
+ * Supabase project (old env, previous project) must not shadow the real one,
+ * or a fresh sign-in gets bounced straight back to /login.
+ */
 function findSupabaseAccessToken(request: NextRequest): string | undefined {
-  const candidates: string[] = []
-  const chunked: Map<string, string[]> = new Map()
+  const byName = new Map<string, string[]>()
+  const chunked = new Map<string, Map<number, string>>()
 
   for (const cookie of request.cookies.getAll()) {
-    // Supabase auth token: sb-{project-ref}-auth-token
-    if (cookie.name.match(/^sb-.+-auth-token$/)) {
-      candidates.push(cookie.value)
-    }
     // Cookie chunking: sb-{project-ref}-auth-token.{0,1,2,...}
     const chunkMatch = cookie.name.match(/^(sb-.+-auth-token)\.(\d+)$/)
     if (chunkMatch) {
       const base = chunkMatch[1]
       const idx = parseInt(chunkMatch[2], 10)
-      if (!chunked.has(base)) chunked.set(base, [])
-      chunked.get(base)![idx] = cookie.value
+      if (!chunked.has(base)) chunked.set(base, new Map())
+      chunked.get(base)!.set(idx, cookie.value)
+      continue
+    }
+    const base = cookie.name.replace(/\.\d+$/, "")
+    if (base.match(/^sb-.+-auth-token$/)) {
+      if (!byName.has(base)) byName.set(base, [])
+      byName.get(base)![0] = cookie.value
     }
   }
 
-  // Reassemble chunked cookies
+  // Reassemble chunked cookies under their base name.
   for (const [base, parts] of chunked) {
-    const assembled = parts.filter(Boolean).join("")
-    if (assembled) candidates.push(assembled)
+    const assembled = [...parts.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([, v]) => v)
+      .join("")
+    if (assembled) {
+      if (!byName.has(base)) byName.set(base, [])
+      byName.get(base)![0] = assembled
+    }
   }
 
-  return candidates[0]
+  // Prefer the current project's cookie so a stale foreign session can't
+  // shadow the real one (the cause of "signed in but bounced back to /login").
+  const ref = currentSupabaseRef()
+  if (ref) {
+    const preferred = byName.get(`sb-${ref}-auth-token`)
+    if (preferred?.[0]) return preferred[0]
+  }
+  for (const [, parts] of byName) {
+    if (parts[0]) return parts[0]
+  }
+  return undefined
 }
 
 /** Parse access + refresh tokens out of the raw Supabase auth cookie value. */
@@ -148,11 +178,34 @@ function parseAuthCookieValue(cookieValue: string): {
 
 /** Base cookie name for the Supabase auth token, e.g. sb-<ref>-auth-token. */
 function findAuthCookieName(request: NextRequest): string | undefined {
+  const ref = currentSupabaseRef()
+  if (ref) {
+    const name = `sb-${ref}-auth-token`
+    for (const cookie of request.cookies.getAll()) {
+      if (cookie.name.replace(/\.\d+$/, "") === name) return name
+    }
+  }
   for (const cookie of request.cookies.getAll()) {
     const base = cookie.name.replace(/\.\d+$/, "")
     if (base.match(/^sb-.+-auth-token$/)) return base
   }
   return undefined
+}
+
+/**
+ * Sweep stale auth cookies from other Supabase projects off the browser so
+ * they stop shadowing the current session (and stop growing unbounded).
+ */
+function clearForeignAuthCookies(request: NextRequest, response: NextResponse) {
+  const ref = currentSupabaseRef()
+  if (!ref) return
+  const expected = `sb-${ref}-auth-token`
+  for (const cookie of request.cookies.getAll()) {
+    const base = cookie.name.replace(/\.\d+$/, "")
+    if (base !== expected && base.match(/^sb-.+-auth-token$/)) {
+      response.cookies.delete(cookie.name)
+    }
+  }
 }
 
 const AUTH_COOKIE_CHUNK_SIZE = 3180
@@ -407,6 +460,10 @@ export default async function middleware(request: NextRequest) {
   if (refreshedSession) {
     setSupabaseAuthCookie(request, response, refreshedSession)
   }
+
+  // Drop stale auth cookies from other Supabase projects — they shadow the
+  // real session and were the root cause of sign-in bounce loops.
+  clearForeignAuthCookies(request, response)
 
   return response
 }

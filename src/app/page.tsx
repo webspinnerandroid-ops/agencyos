@@ -149,8 +149,19 @@ export default async function LandingPage() {
       <header className="border-b">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between h-16">
           <div className="flex items-center gap-2">
-            <Brain className="size-6 text-primary" />
-            <span className="text-xl font-bold tracking-tight">Agency OS</span>
+            {process.env.NEXT_PUBLIC_BRAND_LOGO_URL ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={process.env.NEXT_PUBLIC_BRAND_LOGO_URL}
+                alt="Agency OS"
+                className="h-9 w-auto object-contain"
+              />
+            ) : (
+              <>
+                <Brain className="size-6 text-primary" />
+                <span className="text-xl font-bold tracking-tight">Agency OS</span>
+              </>
+            )}
           </div>
           <div className="hidden sm:flex items-center gap-4">
             <a href="#features" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Features</a>

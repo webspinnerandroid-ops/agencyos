@@ -60,8 +60,17 @@ export default async function DashboardLayout({
       <header className="border-b bg-background sticky top-0 z-50">
         <div className="flex items-center justify-between max-w-7xl mx-auto px-4 sm:px-6 h-14">
           <div className="flex items-center gap-3">
-            <a href="/dashboard" className="text-lg font-bold tracking-tight shrink-0">
-              Agency OS
+            <a href="/dashboard" className="shrink-0">
+              {process.env.NEXT_PUBLIC_BRAND_LOGO_URL ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={process.env.NEXT_PUBLIC_BRAND_LOGO_URL}
+                  alt="Agency OS"
+                  className="h-8 w-auto object-contain"
+                />
+              ) : (
+                <span className="text-lg font-bold tracking-tight">Agency OS</span>
+              )}
             </a>
             <div className="hidden sm:block">
               <WorkspaceSelector />

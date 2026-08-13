@@ -76,7 +76,7 @@ async function scDaily(accessToken, siteUrl, days = 90) {
   const res = await fetch(
     `https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(siteUrl)}/searchAnalytics/query`,
     { method: "POST", headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ startDate: dateNDaysAgo(days), endDate: "today", dimensions: ["date"], rowLimit: 60 }),
+      body: JSON.stringify({ startDate: dateNDaysAgo(days), endDate: new Date().toISOString().slice(0, 10), dimensions: ["date"], rowLimit: 100 }),
       signal: AbortSignal.timeout(30_000) }
   );
   const text = await res.text();

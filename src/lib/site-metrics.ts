@@ -105,9 +105,10 @@ export async function fetchSCDailyMetrics(
       },
       body: JSON.stringify({
         startDate: dateNDaysAgo(days),
-        endDate: "today",
+        // SC v3 requires a concrete YYYY-MM-DD ("today" is rejected, unlike GA4).
+        endDate: new Date().toISOString().slice(0, 10),
         dimensions: ["date"],
-        rowLimit: 60,
+        rowLimit: 100,
       }),
       signal: AbortSignal.timeout(30_000),
     }

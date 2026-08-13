@@ -146,6 +146,12 @@ const IGNORE = new Set([
   // only to DocuSign + the agency that created it) and all writes are keyed
   // by that row's id — the row's own tenant_id is never attacker-supplied.
   "src/app/api/docusign/connect/route.ts",
+  // competitor-backfill.ts: cross-tenant maintenance worker (scheduled Inngest
+  // job + one-off script) that scores every tenant's stored competitor URLs
+  // with the service role. It only ever writes competitors_json back to the
+  // same seo_campaigns row it read (keyed by the row's own id, never a
+  // tenant-supplied value) and is never reachable from a user session.
+  "src/lib/seo/competitor-backfill.ts",
 ]);
 
 const CHAIN_WINDOW = 900; // chars after .from(...) — enough for chained filters

@@ -21,11 +21,26 @@ export interface SubscriptionRecord {
   portal_url?: string | null;
   account_email?: string | null;
   notes?: string | null;
-  auto_check?: "stripe" | "resend" | "manual" | null;
+  auto_check?: "stripe" | "resend" | "fal" | "openai" | "google" | "manual" | null;
 }
 
+export type AutoCheckType =
+  | "stripe"
+  | "resend"
+  | "fal"
+  | "openai"
+  | "google"
+  | "manual";
+
 const CYCLES = new Set(["monthly", "annual", "payg"]);
-const AUTO = new Set(["stripe", "resend", "manual"]);
+const AUTO = new Set<AutoCheckType>([
+  "stripe",
+  "resend",
+  "fal",
+  "openai",
+  "google",
+  "manual",
+]);
 
 function cleanBody(body: unknown): SubscriptionRecord | null {
   if (!body || typeof body !== "object") return null;
@@ -65,8 +80,8 @@ function cleanBody(body: unknown): SubscriptionRecord | null {
         : undefined,
     notes:
       typeof b.notes === "string" ? b.notes.slice(0, 2000) || null : undefined,
-    auto_check: AUTO.has(String(b.auto_check))
-      ? (b.auto_check as "stripe" | "resend" | "manual")
+    auto_check: AUTO.has(String(b.auto_check) as AutoCheckType)
+      ? (String(b.auto_check) as AutoCheckType)
       : undefined,
   };
 }
@@ -74,6 +89,9 @@ function cleanBody(body: unknown): SubscriptionRecord | null {
 const ENV_KEY_FOR_CHECK: Record<string, string> = {
   stripe: "STRIPE_SECRET_KEY",
   resend: "RESEND_API_KEY",
+  fal: "FAL_AI_API_KEY",
+  openai: "OPENAI_API_KEY",
+  google: "GOOGLE_API_KEY",
 };
 
 // ------------------------------------------------------------------

@@ -30456,7 +30456,7 @@ var require_mime_type = __commonJS({
   }
 });
 
-// scripts/backfill-competitor-scores.ts
+// src/lib/seo/competitor-backfill.ts
 var import_supabase_js = require("@supabase/supabase-js");
 
 // node_modules/cheerio/dist/esm/options.js
@@ -45411,15 +45411,10 @@ function scoreCompetitorHtml(html3, url) {
   }
 }
 
-// scripts/backfill-competitor-scores.ts
-var sb = (0, import_supabase_js.createClient)(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY,
-  { auth: { persistSession: false, autoRefreshToken: false } }
-);
-var APPLY = process.argv.includes("--apply");
+// src/lib/seo/competitor-backfill.ts
 var USER_AGENT = "Mozilla/5.0 (compatible; AgencyOS-SeoAuditor/1.0; +https://agency-os.dev)";
 var FETCH_TIMEOUT_MS = 15e3;
+var POLITE_DELAY_MS = 250;
 function normalizeUrl(u) {
   let s = (u || "").trim().replace(/\\/g, "/");
   if (!s) return "";
@@ -45427,71 +45422,82 @@ function normalizeUrl(u) {
   return s;
 }
 function isScored(c) {
+  if (c.crawled === false) return true;
   return typeof c.seoScore === "number" || typeof c.aeoScore === "number" || typeof c.geoScore === "number";
 }
-var htmlCache = /* @__PURE__ */ new Map();
-async function fetchOnce(url) {
-  const controller = new AbortController();
-  const t = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  try {
-    const res = await fetch(url, {
-      headers: {
-        "User-Agent": USER_AGENT,
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-      },
-      signal: controller.signal,
-      redirect: "follow"
-    });
-    return res.ok ? await res.text() : null;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(t);
-  }
-}
-async function fetchHtml(url) {
-  if (htmlCache.has(url)) return htmlCache.get(url) ?? null;
-  let html3 = await fetchOnce(url);
-  if (html3 === null) {
-    await sleep(800);
-    html3 = await fetchOnce(url);
-  }
-  htmlCache.set(url, html3);
-  return html3;
-}
 var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-async function main() {
-  const { data: rows, error } = await sb.from("seo_campaigns").select("id, tenant_id, url, competitors_json").order("created_at", { ascending: false }).limit(500);
-  if (error) {
-    console.error("Query failed:", error.message);
-    process.exit(1);
-  }
-  let rowsChanged = 0;
-  let entriesScored = 0;
-  let entriesSkipped = 0;
-  let fetchFailures = 0;
+function makeClient() {
+  return (0, import_supabase_js.createClient)(
+    process.env.NEXT_PUBLIC_SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY,
+    { auth: { persistSession: false, autoRefreshToken: false } }
+  );
+}
+async function backfillCompetitorScores(options = {}) {
+  const { apply = true, limit = 500, onLog } = options;
+  const log = onLog ?? (() => {
+  });
+  const supabase = makeClient();
+  const { data: rows, error } = await supabase.from("seo_campaigns").select("id, tenant_id, url, competitors_json").order("created_at", { ascending: false }).limit(limit);
+  if (error) throw new Error(`Query failed: ${error.message}`);
+  const stats = {
+    rowsTouched: 0,
+    scored: 0,
+    skipped: 0,
+    unreachable: 0
+  };
+  const htmlCache = /* @__PURE__ */ new Map();
+  const fetchOnce = async (url) => {
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    try {
+      const res = await fetch(url, {
+        headers: {
+          "User-Agent": USER_AGENT,
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+        },
+        signal: controller.signal,
+        redirect: "follow"
+      });
+      return res.ok ? await res.text() : null;
+    } catch {
+      return null;
+    } finally {
+      clearTimeout(t);
+    }
+  };
+  const fetchHtml = async (url) => {
+    if (htmlCache.has(url)) return htmlCache.get(url) ?? null;
+    let html3 = await fetchOnce(url);
+    if (html3 === null) {
+      await sleep(800);
+      html3 = await fetchOnce(url);
+    }
+    htmlCache.set(url, html3);
+    return html3;
+  };
   for (const row of rows ?? []) {
     const comps = Array.isArray(row.competitors_json) ? row.competitors_json : [];
     if (comps.length === 0) continue;
-    let rowDirty = false;
+    let dirty = false;
     for (const c of comps) {
       if (!c || typeof c !== "object") continue;
       const rawUrl = c.competitorUrl;
       if (!rawUrl) continue;
       if (isScored(c)) {
-        entriesSkipped++;
+        stats.skipped++;
         continue;
       }
       const url = normalizeUrl(rawUrl);
       const html3 = await fetchHtml(url);
       if (!html3) {
-        fetchFailures++;
+        stats.unreachable++;
         c.seoScore = null;
         c.aeoScore = null;
         c.geoScore = null;
         c.competitorWordCount = null;
         c.crawled = false;
-        rowDirty = true;
+        dirty = true;
         continue;
       }
       const s = scoreCompetitorHtml(html3, url);
@@ -45500,32 +45506,38 @@ async function main() {
       c.geoScore = s.geoScore;
       c.competitorWordCount = s.wordCount;
       c.crawled = s.crawled;
-      entriesScored++;
-      rowDirty = true;
-      await sleep(250);
+      stats.scored++;
+      dirty = true;
+      await sleep(POLITE_DELAY_MS);
     }
-    if (!rowDirty) continue;
-    rowsChanged++;
-    if (!APPLY) {
-      console.log(
-        `[dry] would update ${row.id} (${row.url}): ${comps.length} competitors`
-      );
+    if (!dirty) continue;
+    stats.rowsTouched++;
+    if (!apply) {
+      log(`[dry] would update ${row.id} (${row.url})`);
       continue;
     }
-    const { error: upErr } = await sb.from("seo_campaigns").update({ competitors_json: comps }).eq("id", row.id);
-    if (upErr) {
-      console.error(`[fail] ${row.id}: ${upErr.message}`);
-    } else {
-      console.log(`[ok] updated ${row.id} (${row.url})`);
-    }
+    const { error: upErr } = await supabase.from("seo_campaigns").update({ competitors_json: comps }).eq("id", row.id);
+    if (upErr) log(`[fail] ${row.id}: ${upErr.message}`);
+    else log(`[ok] updated ${row.id} (${row.url})`);
   }
+  return stats;
+}
+
+// scripts/backfill-competitor-scores.ts
+var APPLY = process.argv.includes("--apply");
+async function main() {
+  const stats = await backfillCompetitorScores({
+    apply: APPLY,
+    limit: 500,
+    onLog: (m) => console.log(m)
+  });
   console.log(
     `
 Done. ${APPLY ? "APPLIED" : "DRY RUN (use --apply to write)"}
-  rows touched: ${rowsChanged}
-  competitor entries scored: ${entriesScored}
-  already scored (skipped): ${entriesSkipped}
-  unreachable (marked crawled=false): ${fetchFailures}`
+  rows touched: ${stats.rowsTouched}
+  competitor entries scored: ${stats.scored}
+  already scored (skipped): ${stats.skipped}
+  unreachable (marked crawled=false): ${stats.unreachable}`
   );
 }
 main().catch((e) => {

@@ -29,6 +29,10 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
+  // puppeteer-core is dynamically imported only for the optional headless
+  // competitor-crawl fallback; keep it external so it resolves from
+  // node_modules at runtime (and isn't pulled into the client bundle).
+  serverExternalPackages: ["puppeteer-core"],
   typescript: {
     ignoreBuildErrors: false,
   },

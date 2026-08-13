@@ -70,6 +70,80 @@ export async function checkResendUsage(apiKey: string): Promise<AutoCheckResult>
   }
 }
 
+/**
+ * fal.ai: available account credit (the admin API key uses a `Key ` prefix,
+ * not `Bearer`). Returns the current credit balance in USD.
+ */
+export async function checkFalBilling(apiKey: string): Promise<AutoCheckResult> {
+  const res = await fetch(
+    "https://api.fal.ai/v1/account/billing?expand=credits",
+    {
+      headers: { Authorization: `Key ${apiKey}` },
+      signal: AbortSignal.timeout(15_000),
+    }
+  );
+  if (!res.ok) {
+    const body = (await res.text().catch(() => "")).slice(0, 150);
+    throw new Error(`HTTP ${res.status}: ${body}`);
+  }
+  const data = (await res.json()) as {
+    credits?: { current_balance?: number; currency?: string };
+  };
+  const balance = Number(data.credits?.current_balance);
+  if (Number.isFinite(balance)) {
+    return {
+      creditRemaining: Math.round(balance * 100) / 100,
+      detail: `Available credit (fal.ai, ${data.credits?.currency ?? "USD"})`,
+    };
+  }
+  return {
+    creditRemaining: null,
+    detail: "fal.ai returned billing info without a credit balance",
+  };
+}
+
+/**
+ * OpenAI: there is no account-balance endpoint for a plain API key (the
+ * dashboard credit_grants API requires a session token). Verify the key
+ * works so the row shows a real status, and point at the usage portal for
+ * the number.
+ */
+export async function checkOpenAIKey(apiKey: string): Promise<AutoCheckResult> {
+  const res = await fetch("https://api.openai.com/v1/models", {
+    headers: { Authorization: `Bearer ${apiKey}` },
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!res.ok) {
+    const body = (await res.text().catch(() => "")).slice(0, 150);
+    throw new Error(`HTTP ${res.status}: ${body}`);
+  }
+  return {
+    creditRemaining: null,
+    detail:
+      "Key valid — OpenAI doesn't expose a balance via API key; see platform.openai.com/usage",
+  };
+}
+
+/**
+ * Google AI (Gemini/Imagen): AI Studio keys are free-tier or Cloud-billed and
+ * expose no credit balance. Verify the key works, then flag manual tracking.
+ */
+export async function checkGoogleAIKey(apiKey: string): Promise<AutoCheckResult> {
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`,
+    { signal: AbortSignal.timeout(15_000) }
+  );
+  if (!res.ok) {
+    const body = (await res.text().catch(() => "")).slice(0, 150);
+    throw new Error(`HTTP ${res.status}: ${body}`);
+  }
+  return {
+    creditRemaining: null,
+    detail:
+      "Key valid — Google AI (Gemini/Imagen) doesn't expose a credit balance via API key",
+  };
+}
+
 /** Map a registry auto_check type to a live check. Throws on unknown types. */
 export async function autoCheck(
   autoCheckType: string,
@@ -80,6 +154,12 @@ export async function autoCheck(
       return checkStripeBalance(apiKey);
     case "resend":
       return checkResendUsage(apiKey);
+    case "fal":
+      return checkFalBilling(apiKey);
+    case "openai":
+      return checkOpenAIKey(apiKey);
+    case "google":
+      return checkGoogleAIKey(apiKey);
     default:
       throw new Error(`No auto-check implemented for "${autoCheckType}"`);
   }

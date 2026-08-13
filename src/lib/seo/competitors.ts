@@ -13,6 +13,7 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import type { CompetitorData } from "@/lib/ai/seo-prompts";
 import { scoreCompetitorHtml } from "@/lib/seo/audit-report";
+import { fetchCompetitorHtml } from "@/lib/seo/competitor-fetch";
 
 // ============================================================================
 // Types
@@ -227,33 +228,13 @@ export async function listManualCompetitors(
 // fetchPage helper (lightweight version for competitor analysis)
 // ============================================================================
 
-const FETCH_TIMEOUT_MS = 10000;
-const USER_AGENT =
-  "Mozilla/5.0 (compatible; AgencyOS-SeoAuditor/1.0; +https://agency-os.dev)";
-
 async function fetchCompetitorPage(
   url: string
 ): Promise<{ html: string; statusCode: number; loadTimeMs: number } | null> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-
-  try {
-    const response = await fetch(url, {
-      headers: {
-        "User-Agent": USER_AGENT,
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      },
-      signal: controller.signal,
-      redirect: "follow",
-    });
-
-    const html = await response.text();
-    return { html, statusCode: response.status, loadTimeMs: Date.now() };
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timeout);
-  }
+  const started = Date.now();
+  const html = await fetchCompetitorHtml(url);
+  if (!html) return null;
+  return { html, statusCode: 200, loadTimeMs: Date.now() - started };
 }
 
 // ============================================================================

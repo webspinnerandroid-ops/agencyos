@@ -313,6 +313,9 @@ export default function SubscriptionsPage() {
               <option value="manual">Manual</option>
               <option value="stripe">Stripe (balance)</option>
               <option value="resend">Resend (email quota)</option>
+              <option value="fal">fal.ai (credit balance)</option>
+              <option value="openai">OpenAI (key check)</option>
+              <option value="google">Google AI (key check)</option>
             </select>
           </div>
           <div className="space-y-1">
@@ -440,7 +443,7 @@ export default function SubscriptionsPage() {
 
       <p className="text-xs text-muted-foreground flex items-center gap-1">
         <Link2 className="size-3" />
-        Portal links are stored per row (edit any row to set one). Auto-check needs the server env keys: STRIPE_SECRET_KEY and RESEND_API_KEY.
+        Portal links are stored per row (edit any row to set one). Auto-check needs the server env keys: STRIPE_SECRET_KEY, RESEND_API_KEY, FAL_AI_API_KEY, OPENAI_API_KEY, and GOOGLE_API_KEY.
       </p>
     </div>
   );

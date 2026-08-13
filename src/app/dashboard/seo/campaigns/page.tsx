@@ -1814,6 +1814,7 @@ function CampaignDetails({ campaign }: { campaign: StoredCampaign }) {
                   <th className="py-2 pr-4 font-medium">Volume (est.)</th>
                   <th className="py-2 pr-4 font-medium">Difficulty (est.)</th>
                   <th className="py-2 pr-4 font-medium">Intent</th>
+                  <th className="py-2 pr-4 font-medium">Current Rank</th>
                   <th className="py-2 pr-4 font-medium">Target Rank</th>
                 </tr>
               </thead>
@@ -1835,6 +1836,18 @@ function CampaignDetails({ campaign }: { campaign: StoredCampaign }) {
                       <span className="text-xs bg-muted px-1.5 py-0.5 rounded">
                         {intentLabels[kw.intent] ?? kw.intent}
                       </span>
+                    </td>
+                    <td className="py-2">
+                      {kw.currentRanking != null ? (
+                        <span className="font-medium">#{kw.currentRanking}</span>
+                      ) : (
+                        <span
+                          className="text-muted-foreground"
+                          title="Not measured — the audit does not capture live rankings. Connect a rankings source to populate this."
+                        >
+                          —
+                        </span>
+                      )}
                     </td>
                     <td className="py-2">#{kw.targetRanking}</td>
                   </tr>

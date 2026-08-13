@@ -141,6 +141,54 @@ export const PLAN_LIMITS: Record<string, { [k: string]: number }> = {
     ai_tokens: 2_500_000,
     social_profiles: 30,
   },
+  // Legacy / custom tiers retained so the billing page renders their names
+  // and defaults correctly instead of falling back to raw lowercase ids.
+  enterprise: {
+    blog_posts: 100,
+    social_posts: 1000,
+    image_generations: 1000,
+    video_generations: 250,
+    ai_tokens: 5_000_000,
+    social_profiles: 60,
+  },
+};
+
+/** Friendly display names for plan ids, including legacy/custom tiers. */
+export const PLAN_NAMES: Record<string, string> = {
+  foundation: "Foundation",
+  growth: "Growth",
+  dominance: "Dominance",
+  starter: "Starter",
+  premium: "Premium",
+  enterprise: "Enterprise",
+};
+
+/**
+ * Default feature bullets for the billing page, used when a subscription has
+ * no Stripe product metadata to read features from (e.g. locally-assigned
+ * plans like "enterprise").
+ */
+export const PLAN_FEATURES: Record<string, string[]> = {
+  enterprise: [
+    "All six hubs included — content, social, video, website, outreach, AI team",
+    "Highest usage limits across every hub",
+    "Priority support",
+  ],
+  dominance: [
+    "All six hubs included",
+    "40 blog posts, 500 social posts and 120 videos per month",
+    "2.5M AI tokens per month",
+  ],
+  growth: [
+    "All six hubs included",
+    "12 blog posts, 150 social posts and 30 videos per month",
+    "750K AI tokens per month",
+  ],
+  foundation: [
+    "All six hubs included",
+    "4 blog posts, 40 social posts and 8 videos per month",
+    "200K AI tokens per month",
+  ],
 };
 
 /** Friendly label for a usage metric shown to users. */

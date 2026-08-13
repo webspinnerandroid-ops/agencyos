@@ -8,6 +8,9 @@ import {
   HUB_BY_ID,
   HUB_PRICES,
   HUB_BUNDLE_3_PRICE,
+  PLAN_LIMITS,
+  PLAN_NAMES,
+  PLAN_FEATURES,
   getTenantHubs,
 } from "@/lib/plan-limits";
 
@@ -56,7 +59,7 @@ export async function GET(_request: NextRequest) {
 
   // Extract features and limits from Stripe product metadata
   let features: string[] = [];
-  let limits: { ai_tokens?: number; social_profiles?: number } = {};
+  let limits: Record<string, number | undefined> = {};
 
   if (stripeProduct?.metadata) {
     try {
@@ -72,6 +75,16 @@ export async function GET(_request: NextRequest) {
         ? Number(stripeProduct.metadata.social_profile_limit)
         : undefined,
     };
+  }
+
+  // Fall back to built-in defaults when the subscription has no Stripe
+  // product metadata (locally-assigned or legacy plans like "enterprise").
+  const planId = subscription?.plan_id ?? "";
+  if (features.length === 0) {
+    features = PLAN_FEATURES[planId] ?? [];
+  }
+  if (Object.keys(limits).every((k) => limits[k] == null)) {
+    limits = PLAN_LIMITS[planId] ?? {};
   }
 
   // Build billing history from invoices
@@ -107,7 +120,8 @@ export async function GET(_request: NextRequest) {
     subscription: subscription
       ? {
           planId: subscription.plan_id,
-          planName: stripeProduct?.name ?? subscription.plan_id,
+          planName:
+            stripeProduct?.name ?? PLAN_NAMES[subscription.plan_id] ?? subscription.plan_id,
           status: subscription.status,
           currentPeriodEnd: subscription.current_period_end,
           createdAt: subscription.created_at,

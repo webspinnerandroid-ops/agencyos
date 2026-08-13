@@ -489,6 +489,8 @@ export default function PublicSeoProposalPage() {
                     <th className="text-left py-2">Volume (est.)</th>
                     <th className="text-left py-2">Difficulty (est.)</th>
                     <th className="text-left py-2">Intent</th>
+                    <th className="text-left py-2">Current Rank</th>
+                    <th className="text-left py-2">Target Rank</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -498,6 +500,10 @@ export default function PublicSeoProposalPage() {
                       <td className="py-2">{kw.searchVolume.toLocaleString()}</td>
                       <td className="py-2">{kw.difficulty}</td>
                       <td className="py-2">{kw.intent}</td>
+                      <td className="py-2">
+                        {kw.currentRanking != null ? `#${kw.currentRanking}` : "—"}
+                      </td>
+                      <td className="py-2">#{kw.targetRanking}</td>
                     </tr>
                   ))}
                 </tbody>

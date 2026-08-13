@@ -9,6 +9,10 @@ import { useEffect, useState, useCallback } from "react";
 interface PlanLimits {
   ai_tokens?: number;
   social_profiles?: number;
+  blog_posts?: number;
+  social_posts?: number;
+  image_generations?: number;
+  video_generations?: number;
 }
 
 interface SubscriptionInfo {
@@ -99,6 +103,14 @@ function metricLimit(metric: string, limits: PlanLimits): number | null {
       return limits.ai_tokens ?? null;
     case "social_profiles":
       return limits.social_profiles ?? null;
+    case "blog_posts":
+      return limits.blog_posts ?? null;
+    case "social_posts":
+      return limits.social_posts ?? null;
+    case "image_generations":
+      return limits.image_generations ?? null;
+    case "video_generations":
+      return limits.video_generations ?? null;
     default:
       return null;
   }
@@ -333,6 +345,14 @@ export default function BillingPage() {
   // ------------------------------------------------------------------
   const { subscription, usage, invoices } = data!;
 
+  // Plans genuinely higher than the current tier (unknown/custom tiers like
+  // "enterprise" are treated as top tier — never show downgrades).
+  const currentPlanIndex = subscription
+    ? PLANS.findIndex((pp) => pp.id === subscription.planId)
+    : -1;
+  const upgradePlans =
+    currentPlanIndex >= 0 ? PLANS.slice(currentPlanIndex + 1) : [];
+
   return (
     <div className="space-y-8 animate-in fade-in">
       {/* Header */}
@@ -440,17 +460,13 @@ export default function BillingPage() {
                 </button>
               </div>
 
-              {/* Show upgrade options if on a lower tier */}
-              {subscription.planId !== "dominance" && (
+              {/* Show upgrade options only for genuinely higher tiers */}
+              {upgradePlans.length > 0 && (
                 <div className="flex flex-col gap-2 min-w-[180px]">
                   <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">
                     Upgrade
                   </p>
-                  {PLANS.filter(
-                    (p) =>
-                      PLANS.findIndex((pp) => pp.id === subscription.planId) <
-                      PLANS.findIndex((pp) => pp.id === p.id)
-                  ).map((plan) => (
+                  {upgradePlans.map((plan) => (
                     <button
                       key={plan.id}
                       onClick={() => handleUpgrade(plan.id)}

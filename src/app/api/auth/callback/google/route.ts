@@ -74,6 +74,7 @@ export async function GET(request: NextRequest) {
       await supabase.from("google_business_profiles").insert({
         tenant_id: stateRow.tenant_id,
         account_name: accountName,
+        account_email: meData.email ?? null,
         encrypted_token: encrypted,
         connected: true,
       });

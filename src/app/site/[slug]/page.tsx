@@ -51,7 +51,7 @@ export default async function SitePage({
   // no row exists yet.
   const { data: site } = await supabase
     .from("cms_site_settings")
-    .select("site_name, tagline, header_blocks, footer_blocks, site_nav, global_css, theme_preset")
+    .select("site_name, tagline, logo_url, header_blocks, footer_blocks, site_nav, global_css, theme_preset")
     .eq("tenant_id", page.tenant_id)
     .maybeSingle();
 
@@ -101,7 +101,11 @@ export default async function SitePage({
         {/* Sitewide header */}
         <header className="cms-site-header">
           <div>
-            <span className="cms-site-name">{siteName}</span>
+            {site?.logo_url ? (
+              <img src={site.logo_url} alt={siteName} className="cms-site-logo" />
+            ) : (
+              <span className="cms-site-name">{siteName}</span>
+            )}
             {tagline && <span className="cms-site-tagline"> — {tagline}</span>}
           </div>
           {siteNav.length > 0 && (

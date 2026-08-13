@@ -24,6 +24,7 @@ import {
   Palette,
   Eye,
   Link2,
+  Upload,
 } from "lucide-react";
 import {
   newBlockId,
@@ -84,6 +85,7 @@ export default function CmsPage() {
   const [settings, setSettings] = useState<{
     site_name: string;
     tagline: string;
+    logo_url: string;
     header_text: string;
     footer_text: string;
     site_nav: { label: string; href: string }[];
@@ -92,6 +94,7 @@ export default function CmsPage() {
   }>({
     site_name: "My Site",
     tagline: "",
+    logo_url: "",
     header_text: "",
     footer_text: "",
     site_nav: [],
@@ -459,6 +462,7 @@ export default function CmsPage() {
         setSettings({
           site_name: s.site_name ?? "My Site",
           tagline: s.tagline ?? "",
+          logo_url: s.logo_url ?? "",
           header_text: headerBlocks.map((b) => b.content ?? "").join("\n\n"),
           footer_text: footerBlocks.map((b) => b.content ?? "").join("\n\n"),
           site_nav: Array.isArray(s.site_nav)
@@ -494,6 +498,7 @@ export default function CmsPage() {
         body: JSON.stringify({
           site_name: settings.site_name,
           tagline: settings.tagline,
+          logo_url: settings.logo_url || null,
           header_blocks: toBlock(settings.header_text),
           footer_blocks: toBlock(settings.footer_text),
           site_nav: settings.site_nav,
@@ -1159,6 +1164,50 @@ export default function CmsPage() {
                 <Label>Tagline</Label>
                 <Input value={settings.tagline} onChange={(e) => setSettings({ ...settings, tagline: e.target.value })} />
               </div>
+            </div>
+
+            <div>
+              <Label>Logo (image URL)</Label>
+              <div className="flex gap-2">
+                <Input
+                  placeholder="https://…/logo.png"
+                  value={settings.logo_url}
+                  onChange={(e) => setSettings({ ...settings, logo_url: e.target.value })}
+                />
+                <label className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md border border-border text-sm cursor-pointer hover:bg-muted shrink-0">
+                  <Upload className="size-4" />
+                  Upload
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      const fd = new FormData();
+                      fd.append("file", file);
+                      const res = await fetch("/api/cms/upload", {
+                        method: "POST",
+                        credentials: "include",
+                        body: fd,
+                      });
+                      const data = await res.json();
+                      if (res.ok && data.url) {
+                        setSettings({ ...settings, logo_url: data.url });
+                        show("success", "Logo uploaded — save settings to apply.");
+                      } else {
+                        show("error", data.error ?? "Upload failed");
+                      }
+                    }}
+                  />
+                </label>
+              </div>
+              {settings.logo_url && (
+                <div className="mt-2">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src={settings.logo_url} alt="Logo preview" className="h-12 w-auto object-contain rounded border border-border" />
+                </div>
+              )}
             </div>
 
             <div>

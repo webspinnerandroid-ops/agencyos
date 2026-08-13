@@ -359,6 +359,8 @@ export const THEME_PRESETS: Record<string, { label: string; css: string }> = {
 
 export const CMS_HEADER_FOOTER_STYLES = `
 .cms-site-header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.cms-site-brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit}
+.cms-site-logo{max-height:48px;width:auto;display:block}
 .cms-site-name{font-weight:700}
 .cms-site-tagline{font-size:.9rem;opacity:.8}
 .cms-site-nav{display:flex;gap:18px;list-style:none;margin:0;padding:0;flex-wrap:wrap;align-items:center}

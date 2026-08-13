@@ -13,6 +13,7 @@ export interface SiteSettings {
   id?: string;
   site_name: string;
   tagline: string;
+  logo_url: string | null;
   header_blocks: CmsBlock[];
   footer_blocks: CmsBlock[];
   site_nav: SiteNavItem[];
@@ -59,6 +60,7 @@ export async function GET() {
       settings: data ?? {
         site_name: "My Site",
         tagline: "",
+        logo_url: null,
         header_blocks: [],
         footer_blocks: [],
         site_nav: [],
@@ -87,6 +89,7 @@ export async function PUT(request: NextRequest) {
       workspace_id: workspaceId,
       site_name: String(body.site_name ?? "").slice(0, 120) || "My Site",
       tagline: String(body.tagline ?? "").slice(0, 300),
+      logo_url: body.logo_url ? String(body.logo_url).slice(0, 2000) : null,
       header_blocks: Array.isArray(body.header_blocks) ? body.header_blocks : [],
       footer_blocks: Array.isArray(body.footer_blocks) ? body.footer_blocks : [],
       site_nav: sanitizeSiteNav(body.site_nav),

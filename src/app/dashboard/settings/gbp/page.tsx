@@ -4,9 +4,9 @@ import { useCallback, useEffect, useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Trash2, MapPin, Store, ExternalLink } from "lucide-react";
+import { Loader2, Trash2, MapPin, Store, ExternalLink, RefreshCw } from "lucide-react";
 import type { GoogleBusinessProfile } from "./actions";
-import { getProfiles, removeProfile } from "./actions";
+import { getProfiles, removeProfile, syncGbpProfiles } from "./actions";
 import { initiateGoogleGbpOAuth, checkOAuthConfig, type OAuthConfigStatus } from "../social/actions";
 
 function statusBadge(connected: boolean) {
@@ -73,6 +73,19 @@ export default function GbpPage() {
     });
   };
 
+  const handleRefresh = () => {
+    startTransition(async () => {
+      setFeedback(null);
+      const res = await syncGbpProfiles();
+      if (res.success) {
+        if (res.data) setProfiles(res.data);
+        setFeedback({ type: "success", message: `Refreshed from Google — ${res.data?.length ?? 0} profile(s) found.` });
+      } else {
+        setFeedback({ type: "error", message: res.error ?? "Refresh failed." });
+      }
+    });
+  };
+
   const hasConnected = profiles.some(p => p.connected);
 
   return (
@@ -82,9 +95,14 @@ export default function GbpPage() {
           <h1 className="text-3xl font-bold tracking-tight">Google Business Profile</h1>
           <p className="text-muted-foreground mt-1">Connect and manage Google Business Profile listings for your clients.</p>
         </div>
-        <Button onClick={handleGoogleConnect} disabled={isPending} style={{ backgroundColor: "#4285F4" }}>
-          {isPending ? <><Loader2 className="size-4 animate-spin mr-2" /> Connecting...</> : hasConnected ? "Reconnect (replaces existing)" : "Connect Google Account"}
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={handleRefresh} disabled={isPending || !hasConnected}>
+            {isPending ? <><Loader2 className="size-4 animate-spin mr-2" /> Refreshing...</> : <><RefreshCw className="size-4 mr-2" /> Refresh from Google</>}
+          </Button>
+          <Button onClick={handleGoogleConnect} disabled={isPending} style={{ backgroundColor: "#4285F4" }}>
+            {isPending ? <><Loader2 className="size-4 animate-spin mr-2" /> Connecting...</> : hasConnected ? "Reconnect (replaces existing)" : "Connect Google Account"}
+          </Button>
+        </div>
       </div>
 
       {feedback && (
@@ -128,9 +146,11 @@ export default function GbpPage() {
                     <Store className="size-5 text-primary shrink-0" />
                     <div className="min-w-0">
                       <p className="text-sm font-medium">{profile.account_name}</p>
-                      <div className="flex items-center gap-2 mt-0.5">
+                      <div className="flex flex-wrap items-center gap-2 mt-0.5">
                         <Badge className={`text-xs ${statusBadge(profile.connected)}`}>{profile.connected ? "Connected" : "Pending"}</Badge>
-                        <span className="text-xs text-muted-foreground font-mono">{profile.location_id ?? "N/A"}</span>
+                        {profile.location_name && <span className="text-xs text-muted-foreground">{profile.location_name}</span>}
+                        {profile.account_email && <span className="text-xs text-muted-foreground font-mono">{profile.account_email}</span>}
+                        {!profile.location_name && profile.location_id && <span className="text-xs text-muted-foreground font-mono">{profile.location_id}</span>}
                         {(profile as any).client?.name && <span className="text-xs text-muted-foreground">• Client: {(profile as any).client.name}</span>}
                       </div>
                     </div>

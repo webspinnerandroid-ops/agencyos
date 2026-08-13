@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
+import { exchangeGoogleCode, encodeTokenBundle } from "@/lib/connections";
 
 export async function GET(request: NextRequest) {
   const url = new URL(request.url);
@@ -8,7 +9,7 @@ export async function GET(request: NextRequest) {
   const error = url.searchParams.get("error");
 
   if (error || !code || !state) {
-    return NextResponse.redirect(new URL("/dashboard/settings/social?error=oauth_denied", request.url));
+    return NextResponse.redirect(new URL("/dashboard/connections?error=oauth_denied", request.url));
   }
 
   const supabase = createClient(
@@ -24,50 +25,39 @@ export async function GET(request: NextRequest) {
     .single();
 
   if (stateErr || !stateRow) {
-    return NextResponse.redirect(new URL("/dashboard/settings/social?error=invalid_state", request.url));
+    return NextResponse.redirect(new URL("/dashboard/connections?error=invalid_state", request.url));
   }
 
   try {
-    const clientId = process.env.GOOGLE_CLIENT_ID!;
-    const clientSecret = process.env.GOOGLE_CLIENT_SECRET!;
-    const redirectUri = `${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/api/auth/callback/google`;
-
-    const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        code,
-        client_id: clientId,
-        client_secret: clientSecret,
-        redirect_uri: redirectUri,
-        grant_type: "authorization_code",
-      }),
-    });
-
-    const tokenData = await tokenRes.json();
-
-    if (tokenData.error) {
-      console.error("[google-callback] Token error:", tokenData.error);
-      const redirectTarget = stateRow.platform === "google_business"
-        ? "/dashboard/settings/gbp?error=token_exchange_failed"
-        : "/dashboard/settings/social?error=token_exchange_failed";
-      return NextResponse.redirect(new URL(redirectTarget, request.url));
-    }
+    const tokens = await exchangeGoogleCode(code);
 
     // Get user info
     const meRes = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
-      headers: { Authorization: `Bearer ${tokenData.access_token}` },
+      headers: { Authorization: `Bearer ${tokens.access_token}` },
     });
     const meData = await meRes.json();
     const accountName = meData.name ?? meData.email ?? "Google Account";
 
-    const encrypted = Buffer.from(JSON.stringify({
-      access_token: tokenData.access_token,
-      refresh_token: tokenData.refresh_token,
-      expires_in: tokenData.expires_in,
-    })).toString("base64");
+    const encrypted = encodeTokenBundle(tokens);
 
-    if (stateRow.platform === "google_business") {
+    const isConnectionsPlatform =
+      stateRow.platform === "google_analytics" ||
+      stateRow.platform === "search_console";
+
+    if (isConnectionsPlatform) {
+      await supabase.from("tenant_connections").upsert(
+        {
+          tenant_id: stateRow.tenant_id,
+          provider: stateRow.platform,
+          account_email: meData.email ?? null,
+          account_name: accountName,
+          encrypted_token: encrypted,
+          scopes: tokens.scope ?? null,
+          connected: true,
+        },
+        { onConflict: "tenant_id,provider" }
+      );
+    } else if (stateRow.platform === "google_business") {
       await supabase.from("google_business_profiles").insert({
         tenant_id: stateRow.tenant_id,
         account_name: accountName,
@@ -102,10 +92,19 @@ export async function GET(request: NextRequest) {
         ? "/dashboard/settings/gbp?success=connected"
         : stateRow.platform === "gmail"
           ? "/dashboard/settings?success=gmail_connected"
-          : "/dashboard/settings/social?success=connected";
+          : isConnectionsPlatform
+            ? `/dashboard/connections?success=${stateRow.platform}_connected`
+            : "/dashboard/settings/social?success=connected";
     return NextResponse.redirect(new URL(redirectTarget, request.url));
   } catch (err) {
     console.error("[google-callback] Error:", err);
-    return NextResponse.redirect(new URL("/dashboard/settings/social?error=server_error", request.url));
+    const fallback =
+      stateRow.platform === "google_analytics" ||
+      stateRow.platform === "search_console"
+        ? "/dashboard/connections?error=server_error"
+        : stateRow.platform === "google_business"
+          ? "/dashboard/settings/gbp?error=server_error"
+          : "/dashboard/settings/social?error=server_error";
+    return NextResponse.redirect(new URL(fallback, request.url));
   }
 }

@@ -36,6 +36,7 @@ export function buildNavSections(isSuperAdmin: boolean): NavSection[] {
       label: "Manage",
       items: [
         { href: "/dashboard/workspaces", label: "Workspaces" },
+        { href: "/dashboard/connections", label: "Connections" },
         { href: "/dashboard/profile", label: "Profile & Usage" },
         { href: "/dashboard/settings/ai", label: "AI" },
         { href: "/dashboard/settings", label: "Settings" },

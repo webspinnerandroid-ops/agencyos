@@ -54,6 +54,54 @@ function isScored(c: CompetitorEntry): boolean {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Re-fetch and re-score a single campaign's competitor entries in place
+ * (pure — no DB access; the caller owns the fetch + write). Used by the
+ * "Re-run audit" action so past campaigns can refresh their benchmark scores
+ * without regenerating proposals. Previously-crawled entries are re-fetched
+ * so a site that came back online (or a headless fallback that's now
+ * enabled) gets a fresh score; dead/blocked entries are marked crawled=false.
+ */
+export async function rescoreCompetitorEntries(
+  entries: CompetitorEntry[]
+): Promise<{ entries: CompetitorEntry[]; scored: number; unreachable: number }> {
+  const htmlCache = new Map<string, string | null>();
+  const fetchHtml = async (url: string): Promise<string | null> => {
+    if (htmlCache.has(url)) return htmlCache.get(url) ?? null;
+    const html = await fetchCompetitorHtml(url);
+    htmlCache.set(url, html);
+    return html;
+  };
+
+  let scored = 0;
+  let unreachable = 0;
+  for (const c of entries) {
+    if (!c || typeof c !== "object") continue;
+    const rawUrl = c.competitorUrl;
+    if (!rawUrl) continue;
+    const url = normalizeUrl(rawUrl);
+    const html = await fetchHtml(url);
+    if (!html) {
+      unreachable++;
+      c.seoScore = null;
+      c.aeoScore = null;
+      c.geoScore = null;
+      c.competitorWordCount = null;
+      c.crawled = false;
+      continue;
+    }
+    const s = scoreCompetitorHtml(html, url);
+    c.seoScore = s.seoScore;
+    c.aeoScore = s.aeoScore;
+    c.geoScore = s.geoScore;
+    c.competitorWordCount = s.wordCount;
+    c.crawled = s.crawled;
+    scored++;
+    await sleep(POLITE_DELAY_MS);
+  }
+  return { entries, scored, unreachable };
+}
+
 function makeClient() {
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,

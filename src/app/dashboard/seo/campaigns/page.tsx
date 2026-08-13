@@ -12,7 +12,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Trash2, Rocket, Loader2, Globe, FolderPlus, FileText, Puzzle, Wrench, FileSearch } from "lucide-react";
+import { Trash2, Rocket, Loader2, Globe, FolderPlus, FileText, Puzzle, Wrench, FileSearch, RefreshCw } from "lucide-react";
 import { WEBSITE_PLAN } from "@/lib/website-plan";
 
 // ============================================================================
@@ -229,6 +229,8 @@ export default function SeoCampaignsPage() {
   const [startIncludeWebsite, setStartIncludeWebsite] = useState(false);
   const [startCreateWorkspace, setStartCreateWorkspace] = useState(true);
   const [startBusy, setStartBusy] = useState(false);
+  const [rerunningAuditId, setRerunningAuditId] = useState<string | null>(null);
+  const [auditNotice, setAuditNotice] = useState<string | null>(null);
 
   // Fetch clients on mount
   useEffect(() => {
@@ -432,6 +434,40 @@ export default function SeoCampaignsPage() {
       setStartBusy(false);
     }
   }, [startCreateWorkspace, startIncludeWebsite]);
+
+  // ------------------------------------------------------------------
+  // Re-run a past campaign's competitor benchmark scores (no LLM cost, no
+  // client-site re-crawl — only the stored competitor URLs are re-scored).
+  const handleRerunAudit = useCallback(async (campaignId: string) => {
+    setRerunningAuditId(campaignId);
+    setAuditNotice(null);
+    try {
+      const res = await fetch(`/api/seo/campaigns/${campaignId}/re-run-audit`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setAuditNotice(data.error ?? "Failed to re-run audit");
+        return;
+      }
+      const apply = (prev: StoredCampaign[]) =>
+        prev.map((c) =>
+          c.id === campaignId
+            ? { ...c, competitors_json: data.competitors ?? c.competitors_json }
+            : c
+        );
+      setCampaigns(apply);
+      setPastCampaigns(apply);
+      setAuditNotice(
+        `Competitor benchmark refreshed — ${data.scored} scored, ${data.unreachable} unreachable.`
+      );
+    } catch {
+      setAuditNotice("Network error while re-running audit");
+    } finally {
+      setRerunningAuditId(null);
+    }
+  }, []);
 
   // ------------------------------------------------------------------
   // Send a proposal for DocuSign signature. If the client has no email on
@@ -1089,6 +1125,36 @@ export default function SeoCampaignsPage() {
                           Collapse
                         </Button>
                       </div>
+                      {campaign.audit_json && (
+                        <div className="space-y-4 rounded-lg border border-border p-4">
+                          <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <h3 className="text-md font-semibold">
+                              Site Audit & Competitor Benchmark
+                            </h3>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleRerunAudit(campaign.id)}
+                              disabled={rerunningAuditId !== null}
+                              title="Re-score this campaign's competitor benchmarks from a fresh crawl (no LLM cost, no client-site re-crawl)."
+                            >
+                              {rerunningAuditId === campaign.id ? (
+                                <Loader2 className="size-3.5 animate-spin mr-1" />
+                              ) : (
+                                <RefreshCw className="size-3.5 mr-1" />
+                              )}
+                              Re-run audit
+                            </Button>
+                          </div>
+                          {auditNotice && (
+                            <p className="text-xs text-muted-foreground">{auditNotice}</p>
+                          )}
+                          <AuditDetails
+                            audit={campaign.audit_json}
+                            competitors={campaign.competitors_json ?? []}
+                          />
+                        </div>
+                      )}
                       <CampaignDetails campaign={campaign} />
                     </div>
                   )}

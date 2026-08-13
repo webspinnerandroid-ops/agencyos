@@ -136,6 +136,11 @@ const IGNORE = new Set([
   // static regex) plus assertTenantOwner on the by-id lookup. Same verified
   // pattern as the approve route above.
   "src/app/api/seo/campaigns/[id]/docusign/route.ts",
+  // campaign re-run-audit route: same verified pattern — fetch + update go
+  // through tenantScopedClient (runtime tenant filter invisible to the static
+  // regex) plus assertTenantOwner on the by-id lookup. The rescore helper it
+  // calls is pure (no DB access); the client's own audit_json is untouched.
+  "src/app/api/seo/campaigns/[id]/re-run-audit/route.ts",
   // public-proposal sign route: public by design, gated by the clientId
   // share-link secret (same trust model as the allowlisted public-proposal
   // route) — every operation verifies campaign.client_id === clientId

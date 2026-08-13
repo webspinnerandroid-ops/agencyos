@@ -23,10 +23,17 @@ export interface ConnectionRecord {
   scopes: string | null;
   selected_resource: string | null;
   resource_label: string | null;
+  available_resources: TrafficSourceOption[] | null;
   connected: boolean;
   last_synced_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+/** A pickable GA4 property or Search Console site. */
+export interface TrafficSourceOption {
+  resource: string; // GA4 property id or SC site URL
+  label: string; // human-readable name
 }
 
 export interface TokenBundle {
@@ -226,6 +233,30 @@ export async function listSearchConsoleSites(
   return (data.siteEntry ?? [])
     .filter((s) => s.siteUrl)
     .map((s) => ({ siteUrl: s.siteUrl!, permissionLevel: s.permissionLevel ?? "" }));
+}
+
+/**
+ * Flatten the connectable resources for a provider into pickable options
+ * (the shape cached in tenant_connections.available_resources).
+ */
+export async function listProviderResources(
+  provider: ConnectionProvider,
+  accessToken: string
+): Promise<TrafficSourceOption[]> {
+  if (provider === "google_analytics") {
+    const props = await listGA4Properties(accessToken);
+    return props.map((p) => ({
+      resource: p.propertyId,
+      label: `${p.displayName}${p.accountName ? ` — ${p.accountName}` : ""}`,
+    }));
+  }
+  const sites = await listSearchConsoleSites(accessToken);
+  return sites.map((s) => ({
+    resource: s.siteUrl,
+    label: s.permissionLevel?.includes("Owner")
+      ? `${s.siteUrl} (owner)`
+      : s.siteUrl,
+  }));
 }
 
 // ---------------------------------------------------------------------------

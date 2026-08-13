@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { exchangeGoogleCode, encodeTokenBundle, siteUrl } from "@/lib/connections";
+import {
+  exchangeGoogleCode,
+  encodeTokenBundle,
+  listProviderResources,
+  siteUrl,
+} from "@/lib/connections";
 
 export async function GET(request: NextRequest) {
   const url = new URL(request.url);
@@ -51,6 +56,18 @@ export async function GET(request: NextRequest) {
       stateRow.platform === "search_console";
 
     if (isConnectionsPlatform) {
+      // Cache the connectable GA4 properties / SC sites so the Traffic tab
+      // can offer a property picker without a live Google round-trip on
+      // every load. Best-effort — a failed list never blocks connecting.
+      let availableResources: { resource: string; label: string }[] | null = null;
+      try {
+        availableResources = await listProviderResources(
+          stateRow.platform as "google_analytics" | "search_console",
+          tokens.access_token
+        );
+      } catch (err) {
+        console.error("[google-callback] resource list:", (err as Error).message);
+      }
       await supabase.from("tenant_connections").upsert(
         {
           tenant_id: stateRow.tenant_id,
@@ -59,6 +76,7 @@ export async function GET(request: NextRequest) {
           account_name: accountName,
           encrypted_token: encrypted,
           scopes: tokens.scope ?? null,
+          available_resources: availableResources,
           connected: true,
         },
         { onConflict: "tenant_id,provider" }

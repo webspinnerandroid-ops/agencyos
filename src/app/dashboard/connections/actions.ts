@@ -11,6 +11,7 @@ import {
   getAccessToken,
   googleOAuthConfigured,
   listGA4Properties,
+  listProviderResources,
   listSearchConsoleSites,
 } from "@/lib/connections";
 
@@ -119,12 +120,29 @@ export async function getResources(
         .eq("id", conn.id);
     }
 
+    let options: unknown[] = [];
     if (provider === "google_analytics") {
-      const props = await listGA4Properties(accessToken);
-      return { success: true, data: { kind: "ga4", options: props } };
+      options = await listGA4Properties(accessToken);
+    } else {
+      options = await listSearchConsoleSites(accessToken);
     }
-    const sites = await listSearchConsoleSites(accessToken);
-    return { success: true, data: { kind: "search_console", options: sites } };
+
+    // Cache the flattened pickable list so the Traffic tab property picker
+    // needs no Google round-trip. Best-effort.
+    try {
+      const cached = await listProviderResources(provider, accessToken);
+      await supabase
+        .from("tenant_connections")
+        .update({ available_resources: cached })
+        .eq("id", conn.id);
+    } catch (err) {
+      console.error("[getResources] cache:", (err as Error).message);
+    }
+
+    return {
+      success: true,
+      data: { kind: provider === "google_analytics" ? "ga4" : "search_console", options },
+    };
   } catch (err) {
     return { success: false, error: (err as Error).message };
   }

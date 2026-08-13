@@ -113,7 +113,7 @@ async function scDaily(accessToken, siteUrl, days = 90) {
         ? (await gaDaily(accessToken, resource)).map((r) => ({ tenant_id: conn.tenant_id, provider: "google_analytics", resource, metric_date: r.date, sessions: r.sessions, users: r.users, pageviews: r.pageviews, engagement_rate: r.engagementRate }))
         : (await scDaily(accessToken, resource)).map((r) => ({ tenant_id: conn.tenant_id, provider: "search_console", resource, metric_date: r.date, clicks: r.clicks, impressions: r.impressions, ctr: r.ctr, position: r.position }));
       if (rows.length === 0) { console.log(`  ${conn.provider}: no rows`); continue; }
-      const { error: uerr } = await sb.from("traffic_snapshots").upsert(rows, { onConflict: "tenant_id,provider,metric_date" });
+      const { error: uerr } = await sb.from("traffic_snapshots").upsert(rows, { onConflict: "tenant_id,provider,resource,metric_date" });
       if (uerr) throw new Error(uerr.message);
       await sb.from("tenant_connections").update({ last_synced_at: new Date().toISOString() }).eq("id", conn.id);
       updated += rows.length;

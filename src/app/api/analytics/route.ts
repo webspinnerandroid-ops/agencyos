@@ -3,6 +3,13 @@ import { getTenantId } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getCurrentWorkspaceId } from "@/lib/workspace";
 import { platformPostUrl } from "@/lib/social-links";
+import {
+  type ConnectionProvider,
+  type ConnectionRecord,
+  type TrafficSourceOption,
+  getAccessToken,
+  listProviderResources,
+} from "@/lib/connections";
 
 /** Post content is a JSON blob (blog) or a string (social) — normalize to text. */
 function postContentText(content: unknown): string {
@@ -30,6 +37,7 @@ export async function GET(request: NextRequest) {
     const startDate = searchParams.get("startDate");
     const endDate = searchParams.get("endDate");
     const postId = searchParams.get("postId");
+    const resource = searchParams.get("resource");
 
     // If a specific post ID is requested, return snapshots for that post only
     if (postId) {
@@ -221,13 +229,17 @@ export async function GET(request: NextRequest) {
         .limit(1);
       if (anyRows && anyRows.length > 0) hasTrafficData = true;
 
-      const { data, error } = await supabase
+      let query = supabase
         .from("traffic_snapshots")
         .select("provider, resource, metric_date, sessions, users, pageviews, engagement_rate, clicks, impressions, ctr, position, fetched_at")
         .eq("tenant_id", tenantId)
         .gte("metric_date", startDate ?? "1970-01-01")
         .lte("metric_date", (endDate ?? new Date().toISOString().slice(0, 10)))
         .order("metric_date", { ascending: true });
+      if (resource) {
+        query = query.eq("resource", resource);
+      }
+      const { data, error } = await query;
       if (error) {
         if (!/does not exist|schema cache/i.test(error.message)) {
           console.error("[analytics] traffic query:", error.message);
@@ -237,6 +249,51 @@ export async function GET(request: NextRequest) {
       }
     } catch (err) {
       console.error("[analytics] traffic query:", (err as Error).message);
+    }
+
+    // Pickable GA4 properties / SC sites for the Traffic tab, cached in
+    // available_resources at connect time. Lazily backfilled (one Google
+    // call, then stored) when the cache is missing — e.g. connections made
+    // before migration 054.
+    const trafficSources: Record<
+      ConnectionProvider,
+      { active: string | null; resources: TrafficSourceOption[] }
+    > = {
+      google_analytics: { active: null, resources: [] },
+      search_console: { active: null, resources: [] },
+    };
+    try {
+      const { data: conns, error: connErr } = await supabase
+        .from("tenant_connections")
+        .select("*")
+        .eq("tenant_id", tenantId)
+        .eq("connected", true)
+        .in("provider", ["google_analytics", "search_console"]);
+      if (!connErr) {
+        for (const raw of conns ?? []) {
+          const conn = raw as ConnectionRecord;
+          const entry = trafficSources[conn.provider];
+          entry.active = conn.selected_resource ?? null;
+          if (Array.isArray(conn.available_resources) && conn.available_resources.length) {
+            entry.resources = conn.available_resources;
+            continue;
+          }
+          // Backfill the cache once (best-effort; degraded to empty list).
+          try {
+            const { accessToken } = await getAccessToken(conn);
+            const opts = await listProviderResources(conn.provider, accessToken);
+            entry.resources = opts;
+            await supabase
+              .from("tenant_connections")
+              .update({ available_resources: opts })
+              .eq("id", conn.id);
+          } catch (err) {
+            console.error("[analytics] sources backfill:", (err as Error).message);
+          }
+        }
+      }
+    } catch (err) {
+      console.error("[analytics] traffic sources:", (err as Error).message);
     }
 
     // Compute summary
@@ -267,6 +324,7 @@ export async function GET(request: NextRequest) {
       workspaceId: workspaceId ?? null,
       traffic: trafficRows ?? [],
       hasTrafficData,
+      trafficSources,
       summary: {
         totalPosts,
         totalLikes,

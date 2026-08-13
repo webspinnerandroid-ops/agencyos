@@ -96,7 +96,9 @@ export const syncSiteMetrics = inngest.createFunction(
           if (rows.length === 0) return { inserted: 0 };
           const { error } = await supabase
             .from("traffic_snapshots")
-            .upsert(rows, { onConflict: "tenant_id,provider,metric_date" });
+            .upsert(rows, {
+              onConflict: "tenant_id,provider,resource,metric_date",
+            });
           if (error) throw new Error(error.message);
 
           await supabase

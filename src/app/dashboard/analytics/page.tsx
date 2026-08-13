@@ -101,11 +101,20 @@ interface TrafficRow {
   position: number | null;
 }
 
+interface TrafficSource {
+  active: string | null;
+  resources: { resource: string; label: string }[];
+}
+
 interface AnalyticsResponse {
   posts: AnalyticsPost[];
   workspaceId: string | null;
   traffic: TrafficRow[];
   hasTrafficData: boolean;
+  trafficSources: {
+    google_analytics: TrafficSource;
+    search_console: TrafficSource;
+  };
   summary: AnalyticsSummary;
 }
 
@@ -117,6 +126,78 @@ function formatNumber(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
   if (n >= 1_000) return (n / 1_000).toFixed(1) + "K";
   return n.toString();
+}
+
+/**
+ * Plain-language, computed insights for a provider's daily traffic rows —
+ * what the metrics mean plus facts derived from the actual numbers.
+ */
+function buildTrafficInsights(rows: TrafficRow[], isGA: boolean): string[] {
+  if (rows.length === 0) return [];
+  const sorted = [...rows].sort((a, b) =>
+    a.metric_date.localeCompare(b.metric_date)
+  );
+  const half = Math.floor(sorted.length / 2);
+  const sumBy = (fn: (r: TrafficRow) => number) =>
+    sorted.reduce((s, r) => s + fn(r), 0);
+  const avgBy = (fn: (r: TrafficRow) => number) => sumBy(fn) / sorted.length;
+  const lines: string[] = [];
+
+  if (isGA) {
+    const sessions = sumBy((r) => r.sessions ?? 0);
+    const users = sumBy((r) => r.users ?? 0);
+    lines.push(
+      `Sessions are visits; users are unique visitors. ${sessions.toLocaleString()} sessions from ${users.toLocaleString()} users over the period — sessions exceed users when people come back.`
+    );
+    const best = sorted.reduce((a, b) =>
+      (b.sessions ?? 0) > (a.sessions ?? 0) ? b : a
+    );
+    lines.push(
+      `Busiest day: ${format(parseISO(best.metric_date), "MMM d, yyyy")} with ${best.sessions ?? 0} sessions.`
+    );
+    lines.push(
+      `Average engagement rate ${(avgBy((r) => r.engagement_rate ?? 0) * 100).toFixed(1)}% — the share of sessions that were engaged (roughly 10+ seconds or a conversion).`
+    );
+  } else {
+    const clicks = sumBy((r) => r.clicks ?? 0);
+    const impressions = sumBy((r) => r.impressions ?? 0);
+    const position = avgBy((r) => r.position ?? 0);
+    lines.push(
+      `Clicks are visits from Google Search; impressions are how often your pages appeared; CTR = clicks ÷ impressions.`
+    );
+    lines.push(
+      `Average position ${position.toFixed(1)} — lower is better (1 = top result, ≈10 is the bottom of page one).`
+    );
+    if (impressions > 0) {
+      lines.push(
+        `${clicks.toLocaleString()} clicks from ${impressions.toLocaleString()} impressions (${((clicks / impressions) * 100).toFixed(2)}% CTR).`
+      );
+    }
+    const best = sorted.reduce((a, b) =>
+      (b.clicks ?? 0) > (a.clicks ?? 0) ? b : a
+    );
+    if ((best.clicks ?? 0) > 0) {
+      lines.push(
+        `Best day for clicks: ${format(parseISO(best.metric_date), "MMM d, yyyy")} with ${best.clicks} clicks.`
+      );
+    }
+  }
+
+  if (half >= 2) {
+    const first = sorted.slice(0, half);
+    const second = sorted.slice(half);
+    const metric = (r: TrafficRow) =>
+      isGA ? r.sessions ?? 0 : r.clicks ?? 0;
+    const s1 = first.reduce((s, r) => s + metric(r), 0);
+    const s2 = second.reduce((s, r) => s + metric(r), 0);
+    if (s1 > 0 && s2 !== s1) {
+      const pct = Math.round(((s2 - s1) / s1) * 100);
+      lines.push(
+        `${isGA ? "Sessions" : "Clicks"} in the second half of the period are ${pct > 0 ? "up" : "down"} ${Math.abs(pct)}% vs the first half.`
+      );
+    }
+  }
+  return lines;
 }
 
 // ------------------------------------------------------------------
@@ -141,6 +222,13 @@ export default function AnalyticsPage() {
   // View mode: social engagement vs SEO monitoring vs site traffic.
   const [tab, setTab] = useState<"social" | "seo" | "traffic">("social");
   const [seoData, setSeoData] = useState<any>(null);
+  // Per-provider property picker state for the Traffic tab.
+  const [trafficSel, setTrafficSel] = useState<
+    Record<"google_analytics" | "search_console", string>
+  >({ google_analytics: "", search_console: "" });
+  const [syncingProvider, setSyncingProvider] = useState<
+    "google_analytics" | "search_console" | null
+  >(null);
 
   // ---- Fetch clients ----
   const fetchClients = useCallback(async () => {
@@ -200,6 +288,30 @@ export default function AnalyticsPage() {
   useEffect(() => {
     fetchAnalytics();
   }, [fetchAnalytics]);
+
+  // ---- On-demand sync for a picked GA4 property / SC site ----
+  const syncTraffic = useCallback(
+    async (
+      provider: "google_analytics" | "search_console",
+      resource: string
+    ) => {
+      setSyncingProvider(provider);
+      try {
+        await fetch("/api/analytics/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider, resource }),
+          credentials: "include",
+        });
+        await fetchAnalytics();
+      } catch {
+        // fetchAnalytics surfaces load errors in the UI
+      } finally {
+        setSyncingProvider(null);
+      }
+    },
+    [fetchAnalytics]
+  );
 
   // ---- Fetch SEO analytics (audits, content scores, publish counts) ----
   const fetchSeo = useCallback(async () => {
@@ -610,7 +722,7 @@ export default function AnalyticsPage() {
               <Loader2 className="size-8 animate-spin mr-3" />
               Loading traffic…
             </div>
-          ) : (data.traffic ?? []).length === 0 ? (
+          ) : (data.traffic ?? []).length === 0 && !data.hasTrafficData ? (
             <Card>
               <CardContent className="py-16 text-center">
                 {data.hasTrafficData ? (
@@ -656,11 +768,25 @@ export default function AnalyticsPage() {
               </CardContent>
             </Card>
           ) : (
-            (["google_analytics", "search_console"] as const).map((provider) => {
-              const rows = (data.traffic ?? []).filter((r) => r.provider === provider);
-              if (rows.length === 0) return null;
-              const resource = rows[0].resource;
+            <>
+            {(["google_analytics", "search_console"] as const).map((provider) => {
+              const src = data.trafficSources?.[provider] ?? {
+                active: null,
+                resources: [],
+              };
+              const picked =
+                trafficSel[provider] ||
+                src.active ||
+                src.resources[0]?.resource ||
+                "";
+              // When no property list is known yet (migration not applied /
+              // cache empty), fall back to every synced row for the provider
+              // so the cards still show data instead of a dead empty state.
+              const rows = (data.traffic ?? []).filter(
+                (r) => r.provider === provider && (!picked || r.resource === picked)
+              );
               const isGA = provider === "google_analytics";
+              const insights = buildTrafficInsights(rows, isGA);
               const totals = rows.reduce(
                 (acc, r) => ({
                   sessions: acc.sessions + (r.sessions ?? 0),
@@ -688,13 +814,64 @@ export default function AnalyticsPage() {
               return (
                 <Card key={provider}>
                   <CardHeader>
-                    <CardTitle className="flex items-center gap-2">
-                      {isGA ? <BarChart3 className="size-5 text-primary" /> : <TrendingUp className="size-5 text-primary" />}
-                      {isGA ? "Google Analytics 4" : "Search Console"}
-                    </CardTitle>
-                    <CardDescription className="truncate">{resource}</CardDescription>
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <CardTitle className="flex items-center gap-2">
+                        {isGA ? <BarChart3 className="size-5 text-primary" /> : <TrendingUp className="size-5 text-primary" />}
+                        {isGA ? "Google Analytics 4" : "Search Console"}
+                      </CardTitle>
+                      {src.resources.length > 0 && (
+                        <select
+                          className="rounded-md border bg-background px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-ring"
+                          value={picked}
+                          onChange={(e) =>
+                            setTrafficSel((p) => ({
+                              ...p,
+                              [provider]: e.target.value,
+                            }))
+                          }
+                        >
+                          {src.resources.map((o) => (
+                            <option key={o.resource} value={o.resource}>
+                              {o.label}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </div>
+                    <CardDescription className="truncate">{picked || "No property selected"}</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4">
+                  {rows.length === 0 ? (
+                    <div className="py-12 text-center">
+                      <p className="font-semibold">
+                        No data for this property in the selected range
+                      </p>
+                      <p className="text-sm text-muted-foreground mt-1 max-w-md mx-auto">
+                        {picked
+                          ? "This property hasn't been synced yet, or its data falls outside the selected dates."
+                          : "Connect this source and pick a property to track."}
+                      </p>
+                      {picked && (
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          className="mt-4"
+                          disabled={syncingProvider === provider}
+                          onClick={() => syncTraffic(provider, picked)}
+                        >
+                          {syncingProvider === provider ? (
+                            <>
+                              <Loader2 className="size-3.5 animate-spin" />
+                              Syncing…
+                            </>
+                          ) : (
+                            "Sync this property"
+                          )}
+                        </Button>
+                      )}
+                    </div>
+                  ) : (
+                    <>
                     {/* Summary cards */}
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                       {isGA ? (
@@ -787,10 +964,27 @@ export default function AnalyticsPage() {
                         </tbody>
                       </table>
                     </div>
+
+                    {/* Plain-language insights for this report */}
+                    {insights.length > 0 && (
+                      <div className="rounded-md bg-muted/50 border border-border p-3 space-y-1">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                          What this means
+                        </p>
+                        {insights.map((line, i) => (
+                          <p key={i} className="text-xs text-muted-foreground">
+                            {line}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+                    </>
+                  )}
                   </CardContent>
                 </Card>
               );
-            })
+            })}
+            </>
           )}
         </>
       )}

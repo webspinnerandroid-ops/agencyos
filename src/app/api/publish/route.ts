@@ -240,6 +240,19 @@ export async function POST(request: NextRequest) {
         .eq("id", postId)
         .eq("tenant_id", tenantId);
       results.push({ platform: "cms", success: true, url: `/site/${slug}` });
+
+      // IndexNow: tell search engines the page just went live (platform host
+      // + any custom domains mapped to this tenant). Best-effort, never blocks.
+      const { pingPagePublish } = await import("@/lib/indexnow");
+      void pingPagePublish(tenantId, slug).then((res) => {
+        const failed = res.filter((r) => !r.ok);
+        if (failed.length > 0) {
+          console.error(
+            "[publish] IndexNow ping failed:",
+            failed.map((f) => f.detail).join("; ")
+          );
+        }
+      });
     } else if (platform === "wordpress" || platform === "blog") {
       const wpResult = await publishToWordPress(postId, tenantId, action || "publish", scheduledAt, categoryId);
       results.push(...wpResult.results);

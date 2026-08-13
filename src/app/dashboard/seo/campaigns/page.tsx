@@ -60,6 +60,11 @@ interface CompetitorData {
   weaknesses: string[];
   topKeywords: string[];
   contentStrategy: string;
+  seoScore?: number | null;
+  aeoScore?: number | null;
+  geoScore?: number | null;
+  competitorWordCount?: number | null;
+  crawled?: boolean;
 }
 
 interface StoredCampaign {
@@ -1363,9 +1368,33 @@ function AuditDetails({ audit, competitors }: { audit: AuditJson; competitors: C
         <div>
           <h3 className="text-md font-semibold mb-2">Competitor Analysis</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {competitors.map((comp, i) => (
+            {competitors.map((comp, i) => {
+              const compScores = [
+                { label: "SEO", v: comp.seoScore },
+                { label: "AEO", v: comp.aeoScore },
+                { label: "GEO", v: comp.geoScore },
+              ];
+              return (
               <div key={i} className="p-4 rounded-lg border">
                 <h4 className="font-medium text-sm mb-2 text-primary">{comp.competitorUrl?.replace(/^https?:\/\//, "")}</h4>
+                {comp.crawled !== false && compScores.some((s) => s.v != null) && (
+                  <div className="mb-2 flex flex-wrap items-center gap-3 text-xs">
+                    {compScores.map((s) => (
+                      <span key={s.label} className="flex items-baseline gap-1">
+                        <span className="text-muted-foreground uppercase tracking-wide">{s.label}</span>
+                        <span className={`font-bold ${s.v == null ? "text-muted-foreground" : s.v >= 81 ? "text-green-600" : s.v >= 50 ? "text-yellow-600" : "text-red-600"}`}>
+                          {s.v ?? "—"}
+                        </span>
+                      </span>
+                    ))}
+                    {comp.competitorWordCount != null && (
+                      <span className="text-muted-foreground">· {comp.competitorWordCount.toLocaleString()} words</span>
+                    )}
+                  </div>
+                )}
+                {comp.crawled === false && (
+                  <div className="mb-2 text-xs text-muted-foreground italic">Not crawlable — benchmark unavailable.</div>
+                )}
                 {comp.strengths?.length > 0 && (
                   <div className="mb-2">
                     <span className="text-xs font-semibold text-green-600">Strengths</span>
@@ -1391,7 +1420,8 @@ function AuditDetails({ audit, competitors }: { audit: AuditJson; competitors: C
                   </div>
                 )}
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}

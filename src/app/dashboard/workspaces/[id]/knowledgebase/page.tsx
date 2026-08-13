@@ -51,14 +51,16 @@ export default function KnowledgebasePage() {
 
   const load = useCallback(() => {
     startLoading(async () => {
+      // workspaceId is the route param — items must NEVER fall back to the
+      // cookie workspace here, or another workspace's knowledge base leaks in.
       const [fRes, iRes] = await Promise.all([
-        getFolders(currentFolderId),
-        getItems(currentFolderId),
+        getFolders(currentFolderId, workspaceId),
+        getItems(currentFolderId, workspaceId),
       ]);
       if (fRes.success && fRes.data) setFolders(fRes.data);
       if (iRes.success && iRes.data) setItems(iRes.data);
     });
-  }, [currentFolderId]);
+  }, [currentFolderId, workspaceId]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -90,7 +92,7 @@ export default function KnowledgebasePage() {
   const handleAddFolder = () => {
     if (!newFolderName.trim()) return;
     startTransition(async () => {
-      const res = await createFolder(newFolderName, currentFolderId);
+      const res = await createFolder(newFolderName, currentFolderId, workspaceId);
       if (res.success) { setNewFolderName(""); setShowAddFolder(false); setFeedback({ type: "success", message: "Folder created." }); load(); }
       else setFeedback({ type: "error", message: res.error ?? "Failed." });
     });
@@ -99,7 +101,7 @@ export default function KnowledgebasePage() {
   const handleAddUrl = () => {
     if (!urlName.trim() || !urlValue.trim()) return;
     startTransition(async () => {
-      const res = await addUrlItem(urlName, urlValue, currentFolderId);
+      const res = await addUrlItem(urlName, urlValue, currentFolderId, workspaceId);
       if (res.success) { setUrlName(""); setUrlValue(""); setShowAddUrl(false); setFeedback({ type: "success", message: "URL added. Scraping in background..." }); load(); }
       else setFeedback({ type: "error", message: res.error ?? "Failed." });
     });
@@ -108,7 +110,7 @@ export default function KnowledgebasePage() {
   const handleAddText = () => {
     if (!textName.trim() || !textValue.trim()) return;
     startTransition(async () => {
-      const res = await addTextItem(textName, textValue, currentFolderId);
+      const res = await addTextItem(textName, textValue, currentFolderId, workspaceId);
       if (res.success) { setTextName(""); setTextValue(""); setShowAddText(false); setFeedback({ type: "success", message: "Text snippet saved." }); load(); }
       else setFeedback({ type: "error", message: res.error ?? "Failed." });
     });
@@ -116,12 +118,12 @@ export default function KnowledgebasePage() {
 
   const handleDeleteItem = (id: string, name: string) => {
     if (!confirm(`Delete "${name}"?`)) return;
-    startTransition(async () => { await deleteItem(id); load(); });
+    startTransition(async () => { await deleteItem(id, workspaceId); load(); });
   };
 
   const handleDeleteFolder = (id: string, name: string) => {
     if (!confirm(`Delete folder "${name}" and all contents?`)) return;
-    startTransition(async () => { await deleteFolder(id); load(); });
+    startTransition(async () => { await deleteFolder(id, workspaceId); load(); });
   };
 
   const navigateToFolder = (folderId: string | null) => {

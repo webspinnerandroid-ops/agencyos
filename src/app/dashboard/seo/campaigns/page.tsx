@@ -12,7 +12,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Trash2, Rocket, Loader2, Globe, FolderPlus, FileText, Puzzle, Wrench } from "lucide-react";
+import { Trash2, Rocket, Loader2, Globe, FolderPlus, FileText, Puzzle, Wrench, FileSearch } from "lucide-react";
 import { WEBSITE_PLAN } from "@/lib/website-plan";
 
 // ============================================================================
@@ -1115,22 +1115,42 @@ export default function SeoCampaignsPage() {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
-            <label className="flex items-start gap-3 rounded-md border p-3 cursor-pointer hover:bg-muted/40 transition-colors">
-              <Checkbox
-                checked={startIncludeWebsite}
-                onCheckedChange={(v) => setStartIncludeWebsite(v === true)}
-                className="mt-0.5"
-              />
-              <span>
-                <span className="flex items-center gap-1.5 font-medium text-sm">
-                  <Globe className="size-4 text-primary" /> Include a website build
+            <p className="text-sm font-semibold">First — does the client need or have a website?</p>
+            <div className="grid gap-2">
+              <button
+                type="button"
+                onClick={() => setStartIncludeWebsite(true)}
+                className={`flex items-start gap-3 rounded-md border p-3 text-left transition-colors ${startIncludeWebsite ? "border-primary bg-primary/5" : "hover:bg-muted/40"}`}
+              >
+                <Globe className={`size-5 mt-0.5 shrink-0 ${startIncludeWebsite ? "text-primary" : "text-muted-foreground"}`} />
+                <span>
+                  <span className="flex items-center gap-1.5 font-medium text-sm">
+                    They need a website built
+                  </span>
+                  <span className="text-xs text-muted-foreground block mt-0.5">
+                    The web build is added to the campaign — Ray structures the
+                    pages, design and launch milestones, and the site is built
+                    in the Web Builder as part of the flow.
+                  </span>
                 </span>
-                <span className="text-xs text-muted-foreground block mt-0.5">
-                  Ray adds structure, page-build and launch milestones to the
-                  plan so the site is built in as part of the campaign flow.
+              </button>
+              <button
+                type="button"
+                onClick={() => setStartIncludeWebsite(false)}
+                className={`flex items-start gap-3 rounded-md border p-3 text-left transition-colors ${!startIncludeWebsite ? "border-primary bg-primary/5" : "hover:bg-muted/40"}`}
+              >
+                <FileSearch className={`size-5 mt-0.5 shrink-0 ${!startIncludeWebsite ? "text-primary" : "text-muted-foreground"}`} />
+                <span>
+                  <span className="flex items-center gap-1.5 font-medium text-sm">
+                    They already have a website
+                  </span>
+                  <span className="text-xs text-muted-foreground block mt-0.5">
+                    The SEO audit is done (or run one) and the campaign is
+                    recommended from its findings — no site build in the plan.
+                  </span>
                 </span>
-              </span>
-            </label>
+              </button>
+            </div>
 
             {startIncludeWebsite && (
               <div className="rounded-md border bg-muted/30 p-3 text-xs space-y-3">

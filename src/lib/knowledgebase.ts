@@ -66,23 +66,34 @@ async function resolveWorkspaceId(): Promise<string> {
   return def.data.id;
 }
 
+/**
+ * Resolve the workspace for a knowledgebase operation. Callers inside a
+ * workspace-scoped route MUST pass the route's workspaceId explicitly —
+ * never rely on the cookie here, or items leak across workspaces when the
+ * cookie points elsewhere.
+ */
+async function resolveWorkspace(workspaceId?: string): Promise<string> {
+  return workspaceId ?? resolveWorkspaceId();
+}
+
 // ------------------------------------------------------------------
 // Folders CRUD
 // ------------------------------------------------------------------
 
 export async function getFolders(
-  parentFolderId: string | null = null
+  parentFolderId: string | null = null,
+  workspaceId?: string
 ): Promise<ActionResponse<KbFolder[]>> {
   try {
     const tenantId = await getTenantId();
-    const workspaceId = await resolveWorkspaceId();
+    const wsId = await resolveWorkspace(workspaceId);
     const supabase = getAdminClient();
 
     let query = supabase
       .from("knowledgebase_folders")
       .select("*")
       .eq("tenant_id", tenantId)
-      .eq("workspace_id", workspaceId)
+      .eq("workspace_id", wsId)
       .order("name");
 
     if (parentFolderId === null) {
@@ -101,11 +112,12 @@ export async function getFolders(
 
 export async function createFolder(
   name: string,
-  parentFolderId: string | null = null
+  parentFolderId: string | null = null,
+  workspaceId?: string
 ): Promise<ActionResponse<KbFolder>> {
   try {
     const tenantId = await getTenantId();
-    const workspaceId = await resolveWorkspaceId();
+    const wsId = await resolveWorkspace(workspaceId);
     const supabase = getAdminClient();
     const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
 
@@ -113,7 +125,7 @@ export async function createFolder(
       .from("knowledgebase_folders")
       .insert({
         tenant_id: tenantId,
-        workspace_id: workspaceId,
+        workspace_id: wsId,
         name,
         slug,
         parent_folder_id: parentFolderId || null,
@@ -128,16 +140,21 @@ export async function createFolder(
   }
 }
 
-export async function deleteFolder(folderId: string): Promise<ActionResponse> {
+export async function deleteFolder(
+  folderId: string,
+  workspaceId?: string
+): Promise<ActionResponse> {
   try {
     const tenantId = await getTenantId();
+    const wsId = await resolveWorkspace(workspaceId);
     const supabase = getAdminClient();
 
     const { error } = await supabase
       .from("knowledgebase_folders")
       .delete()
       .eq("id", folderId)
-      .eq("tenant_id", tenantId);
+      .eq("tenant_id", tenantId)
+      .eq("workspace_id", wsId);
 
     if (error) throw new Error(error.message);
     return { success: true };
@@ -151,18 +168,19 @@ export async function deleteFolder(folderId: string): Promise<ActionResponse> {
 // ------------------------------------------------------------------
 
 export async function getItems(
-  folderId: string | null = null
+  folderId: string | null = null,
+  workspaceId?: string
 ): Promise<ActionResponse<KbItem[]>> {
   try {
     const tenantId = await getTenantId();
-    const workspaceId = await resolveWorkspaceId();
+    const wsId = await resolveWorkspace(workspaceId);
     const supabase = getAdminClient();
 
     let query = supabase
       .from("knowledgebase_items")
       .select("*")
       .eq("tenant_id", tenantId)
-      .eq("workspace_id", workspaceId)
+      .eq("workspace_id", wsId)
       .order("created_at", { ascending: false });
 
     if (folderId === null) {
@@ -186,18 +204,19 @@ export async function getItems(
 export async function addUrlItem(
   name: string,
   url: string,
-  folderId: string | null = null
+  folderId: string | null = null,
+  workspaceId?: string
 ): Promise<ActionResponse<KbItem>> {
   try {
     const tenantId = await getTenantId();
-    const workspaceId = await resolveWorkspaceId();
+    const wsId = await resolveWorkspace(workspaceId);
     const supabase = getAdminClient();
 
     const { data, error } = await supabase
       .from("knowledgebase_items")
       .insert({
         tenant_id: tenantId,
-        workspace_id: workspaceId,
+        workspace_id: wsId,
         folder_id: folderId || null,
         name,
         type: "url",
@@ -210,7 +229,7 @@ export async function addUrlItem(
     if (error) throw new Error(error.message);
 
     // Start scraping asynchronously (fire and forget)
-    scrapeUrlItem(data.id, url, tenantId, workspaceId);
+    scrapeUrlItem(data.id, url, tenantId, wsId);
 
     return { success: true, data: data as KbItem };
   } catch (err) {
@@ -225,18 +244,19 @@ export async function addUrlItem(
 export async function addTextItem(
   name: string,
   text: string,
-  folderId: string | null = null
+  folderId: string | null = null,
+  workspaceId?: string
 ): Promise<ActionResponse<KbItem>> {
   try {
     const tenantId = await getTenantId();
-    const workspaceId = await resolveWorkspaceId();
+    const wsId = await resolveWorkspace(workspaceId);
     const supabase = getAdminClient();
 
     const { data, error } = await supabase
       .from("knowledgebase_items")
       .insert({
         tenant_id: tenantId,
-        workspace_id: workspaceId,
+        workspace_id: wsId,
         folder_id: folderId || null,
         name,
         type: "text",
@@ -257,18 +277,23 @@ export async function addTextItem(
 // Delete item
 // ------------------------------------------------------------------
 
-export async function deleteItem(itemId: string): Promise<ActionResponse> {
+export async function deleteItem(
+  itemId: string,
+  workspaceId?: string
+): Promise<ActionResponse> {
   try {
     const tenantId = await getTenantId();
+    const wsId = await resolveWorkspace(workspaceId);
     const supabase = getAdminClient();
 
-    // Get storage_path before deleting — must be scoped to this tenant or
-    // a tenant could delete another tenant's storage object by item id.
+    // Get storage_path before deleting — must be scoped to this tenant + workspace
+    // or a caller could delete another workspace's storage object by item id.
     const { data: item } = await supabase
       .from("knowledgebase_items")
       .select("storage_path")
       .eq("id", itemId)
       .eq("tenant_id", tenantId)
+      .eq("workspace_id", wsId)
       .single();
 
     // Delete from storage if file exists
@@ -280,7 +305,8 @@ export async function deleteItem(itemId: string): Promise<ActionResponse> {
       .from("knowledgebase_items")
       .delete()
       .eq("id", itemId)
-      .eq("tenant_id", tenantId);
+      .eq("tenant_id", tenantId)
+      .eq("workspace_id", wsId);
 
     if (error) throw new Error(error.message);
     return { success: true };

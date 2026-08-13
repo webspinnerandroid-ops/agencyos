@@ -41,20 +41,33 @@ export async function checkStripeBalance(apiKey: string): Promise<AutoCheckResul
 
 /** Resend: emails remaining in the current billing cycle. */
 export async function checkResendUsage(apiKey: string): Promise<AutoCheckResult> {
-  const data = (await getJson("https://api.resend.com/usage", apiKey)) as {
-    usage?: number;
-    limit?: number;
-    resetAt?: string;
-  };
-  const usage = Number(data.usage ?? 0);
-  const limit = Number(data.limit ?? 0);
-  return {
-    creditRemaining: limit > 0 ? Math.max(0, limit - usage) : null,
-    detail:
-      limit > 0
-        ? `Used ${usage.toLocaleString()} of ${limit.toLocaleString()} emails this cycle`
-        : `Used ${usage.toLocaleString()} emails (unlimited plan)`,
-  };
+  try {
+    const data = (await getJson("https://api.resend.com/usage", apiKey)) as {
+      usage?: number;
+      limit?: number;
+      resetAt?: string;
+    };
+    const usage = Number(data.usage ?? 0);
+    const limit = Number(data.limit ?? 0);
+    return {
+      creditRemaining: limit > 0 ? Math.max(0, limit - usage) : null,
+      detail:
+        limit > 0
+          ? `Used ${usage.toLocaleString()} of ${limit.toLocaleString()} emails this cycle`
+          : `Used ${usage.toLocaleString()} emails (unlimited plan)`,
+    };
+  } catch (err) {
+    const msg = (err as Error).message;
+    // A send-only key can't read /usage — surface the fix instead of a bare failure.
+    if (/restricted_api_key|restricted to only send/i.test(msg)) {
+      return {
+        creditRemaining: null,
+        detail:
+          "Key is restricted to sending only — create a full-access Resend API key to auto-check usage",
+      };
+    }
+    throw err;
+  }
 }
 
 /** Map a registry auto_check type to a live check. Throws on unknown types. */

@@ -11,7 +11,7 @@ import {
   Eraser,
   FileText,
 } from "lucide-react";
-import { SIGNING_TERMS } from "@/lib/signing";
+import { SIGNING_TERMS } from "@/lib/signing-terms";
 
 interface ProposalData {
   title: string;

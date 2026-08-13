@@ -148,8 +148,8 @@ export async function getAccessToken(
 // Resource listing
 // ---------------------------------------------------------------------------
 
-async function googleGet<T>(path: string, accessToken: string): Promise<T> {
-  const res = await fetch(`https://www.googleapis.com${path}`, {
+async function googleGet<T>(url: string, accessToken: string): Promise<T> {
+  const res = await fetch(url, {
     headers: { Authorization: `Bearer ${accessToken}` },
     signal: AbortSignal.timeout(20_000),
   });
@@ -185,6 +185,8 @@ export interface GA4PropertyOption {
 /**
  * Flatten GA4 account summaries into a selectable property list.
  * Endpoint: analyticsadmin.googleapis.com/v1beta/accountSummaries
+ * NOTE: the Analytics Admin API is served at its own host — the
+ * www.googleapis.com/... route returns a 404 HTML page even when enabled.
  */
 export async function listGA4Properties(
   accessToken: string
@@ -195,7 +197,7 @@ export async function listGA4Properties(
       displayName?: string;
       propertySummaries?: { property?: string; displayName?: string }[];
     }[];
-  }>("/analyticsadmin/v1beta/accountSummaries", accessToken);
+  }>("https://analyticsadmin.googleapis.com/v1beta/accountSummaries", accessToken);
 
   const out: GA4PropertyOption[] = [];
   for (const account of data.accountSummaries ?? []) {
@@ -214,13 +216,13 @@ export async function listGA4Properties(
   return out;
 }
 
-/** List Search Console verified sites. Endpoint: webmasters/v3/sites */
+/** List Search Console verified sites. Endpoint: www.googleapis.com/webmasters/v3/sites */
 export async function listSearchConsoleSites(
   accessToken: string
 ): Promise<{ siteUrl: string; permissionLevel: string }[]> {
   const data = await googleGet<{
     siteEntry?: { siteUrl?: string; permissionLevel?: string }[];
-  }>("/webmasters/v3/sites", accessToken);
+  }>("https://www.googleapis.com/webmasters/v3/sites", accessToken);
   return (data.siteEntry ?? [])
     .filter((s) => s.siteUrl)
     .map((s) => ({ siteUrl: s.siteUrl!, permissionLevel: s.permissionLevel ?? "" }));

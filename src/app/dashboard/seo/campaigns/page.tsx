@@ -899,7 +899,7 @@ export default function SeoCampaignsPage() {
 
           <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6">
             {campaigns.map((campaign) => {
-              const cj = campaign.campaign_json;
+              const cj = campaign.campaign_json ?? ({} as CampaignJson);
               const contentCount =
                 cj.contentCalendar?.reduce(
                   (sum, m) => sum + (m.contentPieces?.length ?? 0),
@@ -1724,7 +1724,7 @@ function AuditDetails({ audit, competitors }: { audit: AuditJson; competitors: C
 // ============================================================================
 
 function CampaignDetails({ campaign }: { campaign: StoredCampaign }) {
-  const cj = campaign.campaign_json;
+  const cj = campaign.campaign_json ?? ({} as CampaignJson);
 
   return (
     <div className="space-y-6">

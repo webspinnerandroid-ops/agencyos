@@ -608,7 +608,7 @@ Create one campaign per tier that is realistic, actionable, and tailored to the 
         // double-click / retry — see SEO Audit Review finding).
         const { data: existing } = await supabase
           .from("seo_campaigns")
-          .select("id")
+          .select("*")
           .eq("tenant_id", tenantId)
           .eq("client_id", resolvedClientId)
           .eq("url", siteAudit.url)
@@ -617,10 +617,7 @@ Create one campaign per tier that is realistic, actionable, and tailored to the 
           .limit(1);
 
         if (existing && existing.length > 0) {
-          storedCampaigns.push({
-            id: existing[0].id,
-            deduplicated: true,
-          });
+          storedCampaigns.push({ ...existing[0], deduplicated: true });
           continue;
         }
 

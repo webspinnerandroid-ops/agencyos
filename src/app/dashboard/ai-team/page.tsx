@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Bot, ExternalLink, Settings2, X } from "lucide-react";
+import { EmployeeAvatar } from "@/components/EmployeeAvatar";
 
 import type { EmployeeConfig, TenantAiEmployee } from "@/lib/ai-team";
 import {
@@ -269,7 +270,10 @@ function EmployeeCard({
   return (
     <div className="rounded-lg border p-4 flex flex-col gap-2">
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <span className="text-lg font-bold">{emp.name}</span>
+        <div className="flex items-center gap-2.5 min-w-0">
+          <EmployeeAvatar employeeKey={emp.key} name={emp.name} size={40} />
+          <span className="text-lg font-bold truncate">{emp.name}</span>
+        </div>
         <Badge className={badge.className}>{badge.label}</Badge>
       </div>
       <p className="text-sm font-semibold text-primary">{emp.role}</p>

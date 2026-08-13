@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Loader2 } from "lucide-react";
+import type { KeywordRank } from "@/lib/seo/keyword-rankings";
 
 // ============================================================================
 // Types
@@ -111,6 +112,7 @@ export default function PublicSeoProposalPage() {
   const [signing, setSigning] = useState(false);
   const [signError, setSignError] = useState<string | null>(null);
   const [signStatus, setSignStatus] = useState<string | null>(null);
+  const [rankings, setRankings] = useState<Record<string, Record<string, KeywordRank>>>({});
 
   const fetchProposals = useCallback(async () => {
     if (!clientId) {
@@ -134,6 +136,7 @@ export default function PublicSeoProposalPage() {
         (c: StoredCampaign) => c.status === "proposed" || c.status === "approved" || c.status === "active"
       );
       setCampaigns(proposed);
+      setRankings(data.rankings ?? {});
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to load proposals");
     } finally {
@@ -501,7 +504,20 @@ export default function PublicSeoProposalPage() {
                       <td className="py-2">{kw.difficulty}</td>
                       <td className="py-2">{kw.intent}</td>
                       <td className="py-2">
-                        {kw.currentRanking != null ? `#${kw.currentRanking}` : "—"}
+                        {(() => {
+                          const measured = rankings[selectedCampaign.id]?.[kw.keyword];
+                          if (measured) {
+                            return (
+                              <span
+                                className="font-medium text-green-600"
+                                title={`Measured via Search Console (${measured.impressions} impressions, ${measured.clicks} clicks)`}
+                              >
+                                #{measured.position}
+                              </span>
+                            );
+                          }
+                          return kw.currentRanking != null ? `#${kw.currentRanking}` : "—";
+                        })()}
                       </td>
                       <td className="py-2">#{kw.targetRanking}</td>
                     </tr>

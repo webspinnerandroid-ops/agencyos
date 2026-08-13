@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
+import { matchRankings, targetKeywordsOf } from "@/lib/seo/keyword-rankings";
 
 /**
  * GET /api/seo/public-proposal?clientId=<uuid>
@@ -7,6 +8,8 @@ import { createServiceClient } from "@/lib/supabase/server";
  * Public endpoint. Returns SEO campaign proposals for a given client ID.
  * No authentication required — this is the share link endpoint.
  * Only returns campaigns in "proposed", "approved", or "active" status.
+ * Also returns measured Search Console keyword positions per campaign so the
+ * proposal can show the client's real current rank.
  */
 export async function GET(request: NextRequest) {
   try {
@@ -46,7 +49,40 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    return NextResponse.json({ campaigns: campaigns ?? [] });
+    // Enrich each campaign with measured GSC keyword positions.
+    const rankings: Record<string, Record<string, unknown>> = {};
+    const list = campaigns ?? [];
+    if (list.length > 0) {
+      const tenantIds = Array.from(
+        new Set(list.map((c) => c.tenant_id).filter(Boolean))
+      );
+      const keywordRows: {
+        tenant_id: string;
+        query: string;
+        position: number | null;
+        impressions: number | null;
+        clicks: number | null;
+      }[] = [];
+      for (const tid of tenantIds) {
+        const { data: rows } = await supabase
+          .from("keyword_rankings")
+          .select("tenant_id, query, position, impressions, clicks")
+          .eq("tenant_id", tid)
+          .limit(3000);
+        if (rows) keywordRows.push(...rows);
+      }
+      for (const c of list) {
+        const keywords = targetKeywordsOf(c.campaign_json);
+        if (keywords.length === 0) continue;
+        const rows = keywordRows.filter((r) => r.tenant_id === c.tenant_id);
+        rankings[c.id] = matchRankings(keywords, rows);
+      }
+    }
+
+    return NextResponse.json({
+      campaigns: list,
+      rankings,
+    });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Internal server error";

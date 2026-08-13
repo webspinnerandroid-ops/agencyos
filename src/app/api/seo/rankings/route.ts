@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantId } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
+import { matchRankings, targetKeywordsOf } from "@/lib/seo/keyword-rankings";
 
 /**
  * GET /api/seo/rankings?campaignId=<id>
@@ -29,12 +30,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ rankings: {} });
     }
 
-    const targetKeywords: { keyword?: string }[] =
-      campaign.campaign_json.targetKeywords ?? [];
-    const keywords = targetKeywords
-      .map((k) => k.keyword?.trim())
-      .filter((k): k is string => Boolean(k));
-
+    const keywords = targetKeywordsOf(campaign.campaign_json);
     if (keywords.length === 0) {
       return NextResponse.json({ rankings: {} });
     }
@@ -49,39 +45,10 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ rankings: {} });
     }
 
-    // Match each target keyword to the GSC query that exactly equals it, or
-    // that contains it (preferring the row with the most impressions).
-    const rankings: Record<
-      string,
-      { position: number; impressions: number; clicks: number; query: string }
-    > = {};
-
-    for (const kw of keywords) {
-      const k = kw.toLowerCase();
-      let best: (typeof rows)[number] | null = null;
-      for (const r of rows) {
-        const q = (r.query ?? "").toLowerCase();
-        if (!q) continue;
-        if (q === k || q.includes(k) || k.includes(q)) {
-          if (
-            !best ||
-            (r.impressions ?? 0) > (best.impressions ?? 0)
-          ) {
-            best = r;
-          }
-        }
-      }
-      if (best && best.position != null) {
-        rankings[kw] = {
-          position: Math.round(best.position * 10) / 10,
-          impressions: best.impressions ?? 0,
-          clicks: best.clicks ?? 0,
-          query: best.query ?? "",
-        };
-      }
-    }
-
-    return NextResponse.json({ rankings, fetchedAt: new Date().toISOString() });
+    return NextResponse.json({
+      rankings: matchRankings(keywords, rows),
+      fetchedAt: new Date().toISOString(),
+    });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Internal server error";

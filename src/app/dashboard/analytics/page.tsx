@@ -30,6 +30,8 @@ import {
   Eye,
   Download,
   ExternalLink,
+  Lightbulb,
+  Wrench,
 } from "lucide-react";
 import { format, parseISO } from "date-fns";
 import { generateAnalyticsPDFBlob } from "@/components/AnalyticsPDF";
@@ -128,12 +130,26 @@ function formatNumber(n: number): string {
   return n.toString();
 }
 
+const DAY_NAMES = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+];
+
 /**
- * Plain-language, computed insights for a provider's daily traffic rows —
- * what the metrics mean plus facts derived from the actual numbers.
+ * Plain-language, computed insights for a provider's daily traffic rows.
+ * Returns two lists: `what` — what the numbers mean plus visible trends and
+ * patterns the system is watching; `fix` — concrete, actionable items.
  */
-function buildTrafficInsights(rows: TrafficRow[], isGA: boolean): string[] {
-  if (rows.length === 0) return [];
+function buildTrafficInsights(
+  rows: TrafficRow[],
+  isGA: boolean
+): { what: string[]; fix: string[] } {
+  if (rows.length === 0) return { what: [], fix: [] };
   const sorted = [...rows].sort((a, b) =>
     a.metric_date.localeCompare(b.metric_date)
   );
@@ -141,44 +157,140 @@ function buildTrafficInsights(rows: TrafficRow[], isGA: boolean): string[] {
   const sumBy = (fn: (r: TrafficRow) => number) =>
     sorted.reduce((s, r) => s + fn(r), 0);
   const avgBy = (fn: (r: TrafficRow) => number) => sumBy(fn) / sorted.length;
-  const lines: string[] = [];
+  const what: string[] = [];
+  const fix: string[] = [];
+
+  // ---- Data-gap watch: the last row should be close to today (daily sync). ----
+  const lastRow = sorted[sorted.length - 1];
+  const gapDays = Math.max(
+    0,
+    Math.floor(
+      (Date.now() - new Date(lastRow.metric_date + "T00:00:00").getTime()) /
+        (24 * 60 * 60 * 1000)
+    )
+  );
+  if (gapDays >= 5) {
+    fix.push(
+      `No ${isGA ? "analytics" : "Search Console"} data since ${format(parseISO(lastRow.metric_date), "MMM d, yyyy")} (${gapDays} days). Check that the tracking tag / property is still installed and the daily sync is running.`
+    );
+  }
+
+  // ---- Day-of-week pattern watch (needs a full week or two). ----
+  if (sorted.length >= 10) {
+    const byDow = new Map<number, number>();
+    const dowCount = new Map<number, number>();
+    for (const r of sorted) {
+      const dow = new Date(r.metric_date + "T00:00:00").getDay();
+      const v = isGA ? r.sessions ?? 0 : r.clicks ?? 0;
+      byDow.set(dow, (byDow.get(dow) ?? 0) + v);
+      dowCount.set(dow, (dowCount.get(dow) ?? 0) + 1);
+    }
+    const dowAvg = [...byDow.entries()].map(([d, v]) => ({
+      day: d,
+      avg: v / (dowCount.get(d) ?? 1),
+    }));
+    const bestDow = dowAvg.reduce((a, b) => (b.avg > a.avg ? b : a));
+    const worstDow = dowAvg.reduce((a, b) => (b.avg < a.avg ? b : a));
+    if (bestDow.avg > 0 && bestDow.avg > worstDow.avg * 1.4) {
+      what.push(
+        `Pattern: ${DAY_NAMES[bestDow.day]} is your strongest day (avg ${Math.round(bestDow.avg)}), while ${DAY_NAMES[worstDow.day]} is quietest (avg ${Math.round(worstDow.avg)}) — schedule ${isGA ? "promotions or pushes" : "high-value content"} on your peak day.`
+      );
+    }
+  }
+
+  // ---- Momentum watch: last 7 days vs the 7 before them. ----
+  if (sorted.length >= 14) {
+    const metric = (r: TrafficRow) =>
+      isGA ? r.sessions ?? 0 : r.clicks ?? 0;
+    const prev7 = sorted.slice(-14, -7).reduce((s, r) => s + metric(r), 0);
+    const last7 = sorted.slice(-7).reduce((s, r) => s + metric(r), 0);
+    if (prev7 > 0 && last7 !== prev7) {
+      const pct = Math.round(((last7 - prev7) / prev7) * 100);
+      if (Math.abs(pct) >= 10) {
+        what.push(
+          `Trend: ${isGA ? "traffic" : "clicks"} over the last 7 days are ${pct > 0 ? "up" : "down"} ${Math.abs(pct)}% vs the 7 days before — ${pct > 0 ? "momentum is building" : "a drop worth investigating"}.`
+        );
+        if (pct < 0) {
+          fix.push(
+            `${isGA ? "Sessions" : "Clicks"} fell ${Math.abs(pct)}% week over week — review what changed (content cadence, seasonality, algorithm shifts, a broken page).`
+          );
+        }
+      }
+    }
+  }
 
   if (isGA) {
     const sessions = sumBy((r) => r.sessions ?? 0);
     const users = sumBy((r) => r.users ?? 0);
-    lines.push(
-      `Sessions are visits; users are unique visitors. ${sessions.toLocaleString()} sessions from ${users.toLocaleString()} users over the period — sessions exceed users when people come back.`
+    const pageviews = sumBy((r) => r.pageviews ?? 0);
+    what.push(
+      `Sessions are visits; users are unique visitors. ${sessions.toLocaleString()} sessions from ${users.toLocaleString()} users (${pageviews.toLocaleString()} pageviews) over the period — sessions exceed users when people come back.`
     );
     const best = sorted.reduce((a, b) =>
       (b.sessions ?? 0) > (a.sessions ?? 0) ? b : a
     );
-    lines.push(
+    what.push(
       `Busiest day: ${format(parseISO(best.metric_date), "MMM d, yyyy")} with ${best.sessions ?? 0} sessions.`
     );
-    lines.push(
-      `Average engagement rate ${(avgBy((r) => r.engagement_rate ?? 0) * 100).toFixed(1)}% — the share of sessions that were engaged (roughly 10+ seconds or a conversion).`
+    const engagement = avgBy((r) => r.engagement_rate ?? 0);
+    what.push(
+      `Average engagement rate ${(engagement * 100).toFixed(1)}% — the share of sessions that were engaged (roughly 10+ seconds or a conversion).`
     );
+    if (engagement < 0.5) {
+      fix.push(
+        `Engagement rate is ${(engagement * 100).toFixed(1)}% — under half of sessions stick around. Tighten intros, add internal links, and cut slow-loading pages.`
+      );
+    }
+    if (sessions > 0 && users > 0) {
+      const ratio = sessions / users;
+      if (ratio < 1.05) {
+        fix.push(
+          `Almost every session is a new visitor (${ratio.toFixed(2)} sessions per user) — there is no repeat traffic. Add email capture, a newsletter, or returning-visitor content.`
+        );
+      }
+    }
   } else {
     const clicks = sumBy((r) => r.clicks ?? 0);
     const impressions = sumBy((r) => r.impressions ?? 0);
     const position = avgBy((r) => r.position ?? 0);
-    lines.push(
+    what.push(
       `Clicks are visits from Google Search; impressions are how often your pages appeared; CTR = clicks ÷ impressions.`
     );
-    lines.push(
+    what.push(
       `Average position ${position.toFixed(1)} — lower is better (1 = top result, ≈10 is the bottom of page one).`
     );
+    const ctr = impressions > 0 ? (clicks / impressions) * 100 : 0;
     if (impressions > 0) {
-      lines.push(
-        `${clicks.toLocaleString()} clicks from ${impressions.toLocaleString()} impressions (${((clicks / impressions) * 100).toFixed(2)}% CTR).`
+      what.push(
+        `${clicks.toLocaleString()} clicks from ${impressions.toLocaleString()} impressions (${ctr.toFixed(2)}% CTR).`
+      );
+    }
+    if (impressions > 100 && ctr < 2) {
+      fix.push(
+        `CTR is ${ctr.toFixed(2)}% (below the ~2% healthy range for this volume). Rewrite titles and meta descriptions with the query intent and add the keyword up front.`
+      );
+    }
+    if (position > 10) {
+      fix.push(
+        `Average position ${position.toFixed(1)} is beyond page one. Target lower-competition long-tail keywords and build internal links to the pages that matter.`
+      );
+    } else if (position > 5 && position <= 10) {
+      what.push(
+        `You average position ${position.toFixed(1)} — solidly on page one, but a jump to the top 5 typically doubles click share.`
       );
     }
     const best = sorted.reduce((a, b) =>
       (b.clicks ?? 0) > (a.clicks ?? 0) ? b : a
     );
     if ((best.clicks ?? 0) > 0) {
-      lines.push(
+      what.push(
         `Best day for clicks: ${format(parseISO(best.metric_date), "MMM d, yyyy")} with ${best.clicks} clicks.`
+      );
+    }
+    const zeroClickDays = sorted.filter((r) => (r.clicks ?? 0) === 0 && (r.impressions ?? 0) > 0).length;
+    if (zeroClickDays > 0) {
+      fix.push(
+        `${zeroClickDays} day(s) had impressions but zero clicks — pages are appearing in results without earning visits. Refresh those titles/snippets.`
       );
     }
   }
@@ -192,12 +304,152 @@ function buildTrafficInsights(rows: TrafficRow[], isGA: boolean): string[] {
     const s2 = second.reduce((s, r) => s + metric(r), 0);
     if (s1 > 0 && s2 !== s1) {
       const pct = Math.round(((s2 - s1) / s1) * 100);
-      lines.push(
-        `${isGA ? "Sessions" : "Clicks"} in the second half of the period are ${pct > 0 ? "up" : "down"} ${Math.abs(pct)}% vs the first half.`
+      if (Math.abs(pct) >= 10) {
+        what.push(
+          `${isGA ? "Sessions" : "Clicks"} in the second half of the period are ${pct > 0 ? "up" : "down"} ${Math.abs(pct)}% vs the first half.`
+        );
+      }
+    }
+  }
+  return { what, fix };
+}
+
+/**
+ * Plain-language insights for the Social tab — computed from the enriched
+ * post list: platform mix, top content, zero-engagement posts to fix.
+ */
+function buildSocialInsights(
+  posts: AnalyticsPost[]
+): { what: string[]; fix: string[] } {
+  if (posts.length === 0) return { what: [], fix: [] };
+  const what: string[] = [];
+  const fix: string[] = [];
+
+  // Platform mix by engagement.
+  const byPlatform = new Map<string, number>();
+  const platformPosts = new Map<string, number>();
+  for (const p of posts) {
+    const engaged = p.totalLikes + p.totalComments + p.totalShares;
+    const platforms = p.platforms.length > 0 ? p.platforms : ["unknown"];
+    for (const pl of platforms) {
+      byPlatform.set(pl, (byPlatform.get(pl) ?? 0) + engaged);
+      platformPosts.set(pl, (platformPosts.get(pl) ?? 0) + 1);
+    }
+  }
+  const ranked = [...byPlatform.entries()]
+    .map(([pl, eng]) => ({
+      platform: pl,
+      engagement: eng,
+      posts: platformPosts.get(pl) ?? 0,
+    }))
+    .sort((a, b) => b.engagement - a.engagement);
+  if (ranked.length >= 2) {
+    const top = ranked[0];
+    const topShare = Math.round(
+      (top.engagement / ranked.reduce((s, r) => s + r.engagement, 0)) * 100
+    );
+    what.push(
+      `${top.platform} drives ${topShare}% of total engagement across ${top.posts} post(s) — your strongest channel right now.`
+    );
+    if (topShare >= 60) {
+      fix.push(
+        `Engagement is concentrated on ${top.platform} (${topShare}%). Spread the winning formats there to other channels rather than publishing one-size-fits-all.`
       );
     }
   }
-  return lines;
+
+  // Zero-engagement posts — the things-to-fix list.
+  const zeroEngagement = posts.filter(
+    (p) => p.totalLikes + p.totalComments + p.totalShares === 0
+  );
+  if (zeroEngagement.length > 0) {
+    const share = Math.round((zeroEngagement.length / posts.length) * 100);
+    const platforms = new Set(zeroEngagement.flatMap((p) => p.platforms));
+    fix.push(
+      `${zeroEngagement.length} of ${posts.length} post(s) (${share}%) got zero engagement${platforms.size > 0 ? ` on ${[...platforms].join(", ")}` : ""}. Review their hooks — posts that flatline are usually too promotional or miss the platform's native format.`
+    );
+  }
+
+  // Top post by engagement.
+  const topPost = posts.reduce((a, b) =>
+    a.totalLikes + a.totalComments + a.totalShares >
+    b.totalLikes + b.totalComments + b.totalShares
+      ? a
+      : b
+  );
+  if ((topPost.totalLikes + topPost.totalComments + topPost.totalShares) > 0) {
+    what.push(
+      `Best performer: "${(topPost.content ?? "Untitled").slice(0, 60)}…" with ${topPost.totalLikes + topPost.totalComments + topPost.totalShares} engagements. Study what it did differently and repeat it.`
+    );
+  }
+
+  // Comments-vs-likes balance: comments mean conversation, not just a tap.
+  const totalEng = posts.reduce(
+    (s, p) => s + p.totalLikes + p.totalComments + p.totalShares,
+    0
+  );
+  const totalComments = posts.reduce((s, p) => s + p.totalComments, 0);
+  if (totalEng > 0 && totalComments / totalEng < 0.05) {
+    fix.push(
+      `Comments are under 5% of total engagement — the audience is tapping like but not talking. Ask a direct question in your next post to start a thread.`
+    );
+  }
+
+  return { what, fix };
+}
+
+/**
+ * Plain-language insights for the SEO tab — score health, publish pipeline,
+ * and the concrete fixes that would move scores into green.
+ */
+function buildSeoInsights(seoData: any): { what: string[]; fix: string[] } {
+  const summary = seoData?.summary;
+  if (!summary) return { what: [], fix: [] };
+  const what: string[] = [];
+  const fix: string[] = [];
+  const { bands, avgSeoScore, avgAeoGeoScore, byStatus, publishedOnSite, totalPosts } =
+    summary;
+
+  if (totalPosts > 0) {
+    what.push(
+      `${totalPosts} content piece(s) total; ${publishedOnSite} published to the site. Average SEO score ${avgSeoScore ?? "—"}/100 and AEO/GEO readiness ${avgAeoGeoScore ?? "—"}/100 across scored pieces.`
+    );
+    const bandTotal = (bands.green ?? 0) + (bands.yellow ?? 0) + (bands.red ?? 0);
+    if (bandTotal > 0) {
+      what.push(
+        `Score spread: ${bands.green ?? 0} green (81+), ${bands.yellow ?? 0} yellow (50–80), ${bands.red ?? 0} red (below 50).`
+      );
+    }
+  }
+
+  if ((bands.red ?? 0) > 0) {
+    fix.push(
+      `${bands.red} post(s) score below 50 — rewrite them: put the focus keyword in the title, meta, slug and first 10%, expand to 2500+ words, add internal + outbound links and keyword-bearing image alt text.`
+    );
+  }
+  if ((bands.yellow ?? 0) > 0) {
+    fix.push(
+      `${bands.yellow} post(s) sit in the yellow band — usually small wins close the gap: keyword in the meta/slug, at least one image alt containing the keyword, or breaking up a 120+ word paragraph.`
+    );
+  }
+  if (typeof avgSeoScore === "number" && avgSeoScore < 80 && totalPosts > 0) {
+    fix.push(
+      `Average SEO score ${avgSeoScore} is below the 80-point publish gate — new content won't auto-publish until it clears the gate. Keep Cheryl's blogs at 2500+ words with full keyword coverage.`
+    );
+  }
+  const drafts = byStatus?.draft ?? 0;
+  if (drafts > 3) {
+    fix.push(
+      `${drafts} drafts are sitting unpublished — approve, schedule, or cull them so the pipeline stays current.`
+    );
+  }
+  if ((summary.auditsCount ?? 0) > 0 && totalPosts === 0) {
+    fix.push(
+      `You've run ${summary.auditsCount} audit(s) but generated no content yet — start a campaign from an audit to turn the findings into a content plan.`
+    );
+  }
+
+  return { what, fix };
 }
 
 // ------------------------------------------------------------------
@@ -568,6 +820,43 @@ export default function AnalyticsPage() {
                   </CardContent>
                 </Card>
               </div>
+
+              {/* SEO insights: what it means + things to fix */}
+              {(() => {
+                const seoInsights = buildSeoInsights(seoData);
+                if (seoInsights.what.length === 0 && seoInsights.fix.length === 0)
+                  return null;
+                return (
+                  <div className="grid gap-4 md:grid-cols-2">
+                    {seoInsights.what.length > 0 && (
+                      <div className="rounded-md bg-muted/50 border border-border p-4 space-y-1">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1">
+                          <Lightbulb className="size-3.5" />
+                          What this means
+                        </p>
+                        {seoInsights.what.map((line, i) => (
+                          <p key={i} className="text-xs text-muted-foreground">
+                            {line}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+                    {seoInsights.fix.length > 0 && (
+                      <div className="rounded-md bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 p-4 space-y-1">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400 flex items-center gap-1">
+                          <Wrench className="size-3.5" />
+                          Things to fix
+                        </p>
+                        {seoInsights.fix.map((line, i) => (
+                          <p key={i} className="text-xs text-amber-800 dark:text-amber-300">
+                            {line}
+                          </p>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
 
               {/* Score bands + status breakdown */}
               <div className="grid gap-4 md:grid-cols-2">
@@ -965,17 +1254,35 @@ export default function AnalyticsPage() {
                       </table>
                     </div>
 
-                    {/* Plain-language insights for this report */}
-                    {insights.length > 0 && (
-                      <div className="rounded-md bg-muted/50 border border-border p-3 space-y-1">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                          What this means
-                        </p>
-                        {insights.map((line, i) => (
-                          <p key={i} className="text-xs text-muted-foreground">
-                            {line}
-                          </p>
-                        ))}
+                    {/* Plain-language insights + things to fix for this report */}
+                    {(insights.what.length > 0 || insights.fix.length > 0) && (
+                      <div className="space-y-2">
+                        {insights.what.length > 0 && (
+                          <div className="rounded-md bg-muted/50 border border-border p-3 space-y-1">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                              <Lightbulb className="inline size-3.5 mr-1 -mt-0.5" />
+                              What this means
+                            </p>
+                            {insights.what.map((line, i) => (
+                              <p key={i} className="text-xs text-muted-foreground">
+                                {line}
+                              </p>
+                            ))}
+                          </div>
+                        )}
+                        {insights.fix.length > 0 && (
+                          <div className="rounded-md bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 p-3 space-y-1">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
+                              <Wrench className="inline size-3.5 mr-1 -mt-0.5" />
+                              Things to fix
+                            </p>
+                            {insights.fix.map((line, i) => (
+                              <p key={i} className="text-xs text-amber-800 dark:text-amber-300">
+                                {line}
+                              </p>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     )}
                     </>
@@ -1087,6 +1394,43 @@ export default function AnalyticsPage() {
               </CardContent>
             </Card>
           </div>
+
+          {/* Insights: what the numbers mean + things to fix */}
+          {(() => {
+            const socialInsights = buildSocialInsights(data.posts);
+            if (socialInsights.what.length === 0 && socialInsights.fix.length === 0)
+              return null;
+            return (
+              <div className="grid gap-4 md:grid-cols-2">
+                {socialInsights.what.length > 0 && (
+                  <div className="rounded-md bg-muted/50 border border-border p-4 space-y-1">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1">
+                      <Lightbulb className="size-3.5" />
+                      What this means
+                    </p>
+                    {socialInsights.what.map((line, i) => (
+                      <p key={i} className="text-xs text-muted-foreground">
+                        {line}
+                      </p>
+                    ))}
+                  </div>
+                )}
+                {socialInsights.fix.length > 0 && (
+                  <div className="rounded-md bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 p-4 space-y-1">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400 flex items-center gap-1">
+                      <Wrench className="size-3.5" />
+                      Things to fix
+                    </p>
+                    {socialInsights.fix.map((line, i) => (
+                      <p key={i} className="text-xs text-amber-800 dark:text-amber-300">
+                        {line}
+                      </p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* Line Chart: Likes/Comments over time */}
           <Card>

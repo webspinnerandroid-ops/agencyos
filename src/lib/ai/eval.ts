@@ -14,6 +14,8 @@
  */
 
 import { EMPLOYEE_PERSONAS } from "@/lib/ai/employee-personas";
+import { scoreContent } from "@/lib/rankmath";
+import { scoreAeoGeo } from "@/lib/aeo-geo";
 
 export interface EvalCriterion {
   name: string;
@@ -21,6 +23,8 @@ export interface EvalCriterion {
   what: string;
   /** Passes when this returns true. */
   check: (output: string, opts: Record<string, unknown>) => boolean;
+  /** Hard criteria force verdict "fail" when they fail, regardless of the ratio. */
+  hard?: boolean;
 }
 
 export interface EvalResult {
@@ -30,7 +34,7 @@ export interface EvalResult {
   passed: number;
   total: number;
   verdict: "pass" | "review" | "fail";
-  criteria: { name: string; what: string; passed: boolean }[];
+  criteria: { name: string; what: string; passed: boolean; hard: boolean }[];
 }
 
 /** Strip markdown/HTML so plain-text checks don't trip on formatting. */
@@ -68,14 +72,46 @@ const CRITERIA: Record<string, EvalCriterion[]> = {
     {
       name: "No JSON leak",
       what: "The body must never be a raw JSON blob or placeholder object.",
+      hard: true,
       check: (o) =>
         !/\{\s*"(body|title|type)"/.test(o) &&
         !/^\s*\{[\s\S]*"body"\s*:\s*""/.test(o),
     },
     {
       name: "Substantial body",
-      what: "A publishable post is at least ~600 words.",
-      check: (o) => countWords(o) >= 600,
+      what: "A publishable post is at least ~600 words (chat) — the scoring floor.",
+      check: (o, ctx) => {
+        const minWords = Number(ctx.minWords ?? 600);
+        return countWords(o) >= minWords;
+      },
+    },
+    {
+      name: "Max-scoring blog (real engine)",
+      what: "Full blog deliverables run through the real SEO + AEO/GEO engines: the content-length test only awards 100% at 2500+ words (0% under 600, 70% at 2000-2500), so a max-scoring blog is never under 2000 words and scores green in both engines. Skipped for chat replies (no title/slug/meta supplied).",
+      hard: true,
+      check: (o, ctx) => {
+        if (!ctx.title || !ctx.metaDescription || !ctx.slug || !ctx.keyword || !ctx.body) {
+          return true; // chat reply, not a blog deliverable — nothing to score
+        }
+        const keyword = String(ctx.keyword);
+        const internalUrls = (ctx.internalUrls ?? []) as string[];
+        const seo = scoreContent({
+          title: String(ctx.title),
+          metaDescription: String(ctx.metaDescription),
+          slug: String(ctx.slug),
+          body: String(ctx.body),
+          keyword,
+          internalUrls,
+        });
+        const aeo = scoreAeoGeo({
+          title: String(ctx.title),
+          metaDescription: String(ctx.metaDescription),
+          body: String(ctx.body),
+          keyword,
+          entities: (ctx.entities ?? []) as string[],
+        });
+        return seo.total >= 85 && seo.wordCount >= 2000 && aeo.total >= 70;
+      },
     },
     {
       name: "Keyword in first 10%",
@@ -336,18 +372,26 @@ export function scoreEmployeeOutput(
     } catch {
       passed = false;
     }
-    return { name: c.name, what: c.what, passed };
+    return { name: c.name, what: c.what, passed, hard: c.hard ?? false };
   });
   const passed = results.filter((r) => r.passed).length;
   const total = results.length;
   const score = total > 0 ? passed / total : 0;
+  const hardFailed = results.some((r) => r.hard && !r.passed);
+  const verdict = hardFailed
+    ? "fail"
+    : score >= 0.8
+      ? "pass"
+      : score >= 0.5
+        ? "review"
+        : "fail";
   return {
     employeeKey,
     employeeName: persona?.name ?? employeeKey,
     score,
     passed,
     total,
-    verdict: score >= 0.8 ? "pass" : score >= 0.5 ? "review" : "fail",
+    verdict,
     criteria: results,
   };
 }

@@ -466,6 +466,18 @@ async function cherylGenerateBlog(
     internalUrls: linkablePages.map((p) => p.url),
   });
 
+  // Eval loop: run the finished blog through Cheryl's full criteria including
+  // the real-engine parity check (SEO + AEO/GEO, 2000+ word floor) so "did
+  // Cheryl maximize the scores" is measurable on every generated post.
+  const evalResult = scoreEmployeeOutput("penny", body, {
+    title: blogPost.title,
+    metaDescription: blogPost.metaDescription,
+    slug: blogPost.slug,
+    keyword: primaryKeyword,
+    body,
+    internalUrls: linkablePages.map((p) => p.url),
+  });
+
   const { data: post, error: postError } = await supabase
     .from("posts")
     .insert({
@@ -493,6 +505,15 @@ async function cherylGenerateBlog(
           keyword: seo.keyword,
           wordCount: seo.wordCount,
           checks: seo.checks,
+        },
+        eval: {
+          verdict: evalResult.verdict,
+          score: evalResult.score,
+          passed: evalResult.passed,
+          total: evalResult.total,
+          failed: evalResult.criteria
+            .filter((c) => !c.passed)
+            .map((c) => c.name),
         },
       },
       status: "draft",

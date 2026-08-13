@@ -63,6 +63,10 @@ const authCache = new Map<string, { value: AuthContext | null; expiresAt: number
 const THEME_TTL_MS = 5 * 60_000
 const themeCache = new Map<string, { value: string; expiresAt: number }>()
 
+const SITE_DOMAIN_TTL_MS = 5 * 60_000
+/** null value = host is not a mapped custom domain */
+const siteDomainCache = new Map<string, { value: string | null; expiresAt: number }>()
+
 const WORKSPACE_TTL_MS = 5 * 60_000
 /** null value = tenant has no default workspace yet */
 const workspaceCache = new Map<string, { value: string | null; expiresAt: number }>()
@@ -266,6 +270,38 @@ function setSupabaseAuthCookie(
 
 export default async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
+
+  // Custom domains mapped to CMS sites (site_domains): rewrite the request to
+  // /site/<slug> so client.com serves the tenant's page. Must run before the
+  // public-route check because a custom domain's request comes in at /.
+  const host = (request.headers.get("host") ?? "").toLowerCase()
+  const platformHost = (process.env.NEXT_PUBLIC_SITE_URL ?? "")
+    .replace(/^https?:\/\//, "")
+    .replace(/\/$/, "")
+    .toLowerCase()
+  if (host && platformHost && host !== platformHost) {
+    let slug = cacheGet(siteDomainCache, host)
+    if (slug === undefined) {
+      const adminClient = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.SUPABASE_SERVICE_ROLE_KEY!,
+        { auth: { autoRefreshToken: false, persistSession: false } }
+      )
+      const { data: mapped } = await adminClient
+        .from("site_domains")
+        .select("site_slug")
+        .eq("domain", host)
+        .maybeSingle()
+      slug = mapped?.site_slug ?? null
+      cacheSet(siteDomainCache, host, slug, SITE_DOMAIN_TTL_MS)
+    }
+    if (slug) {
+      const url = request.nextUrl.clone()
+      url.pathname = `/site/${slug}${pathname === "/" ? "" : pathname}`
+      url.search = request.nextUrl.search
+      return NextResponse.rewrite(url)
+    }
+  }
 
   if (isPublicRoute(pathname)) {
     return NextResponse.next()

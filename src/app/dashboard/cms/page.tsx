@@ -22,6 +22,8 @@ import {
   Layers,
   LayoutGrid,
   Palette,
+  Eye,
+  Link2,
 } from "lucide-react";
 import {
   newBlockId,
@@ -67,6 +69,12 @@ export default function CmsPage() {
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiBuilding, setAiBuilding] = useState(false);
   const [submissions, setSubmissions] = useState<any[]>([]);
+  // Custom domains mapped to site pages
+  const [domains, setDomains] = useState<{ id: string; domain: string; site_slug: string }[]>([]);
+  const [newDomain, setNewDomain] = useState("");
+  const [newDomainSlug, setNewDomainSlug] = useState("");
+  const [domainMsg, setDomainMsg] = useState<{ type: "success" | "error"; message: string } | null>(null);
+  const [domainBusy, setDomainBusy] = useState(false);
   // Drag-and-drop state
   const [dragId, setDragId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
@@ -118,6 +126,68 @@ export default function CmsPage() {
   useEffect(() => {
     loadPages();
   }, [loadPages]);
+
+  // ------------------------------------------------------------------
+  // Custom domains
+  // ------------------------------------------------------------------
+  const loadDomains = useCallback(async () => {
+    try {
+      const res = await fetch("/api/cms/domains", { credentials: "include" });
+      if (res.ok) {
+        const json = await res.json();
+        setDomains(json.domains ?? []);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  useEffect(() => {
+    loadDomains();
+  }, [loadDomains]);
+
+  const addDomain = async () => {
+    const domain = newDomain.trim();
+    const slug = newDomainSlug.trim();
+    if (!domain || !slug) {
+      setDomainMsg({ type: "error", message: "Enter a domain and choose a page." });
+      return;
+    }
+    setDomainBusy(true);
+    setDomainMsg(null);
+    try {
+      const res = await fetch("/api/cms/domains", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domain, siteSlug: slug }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setDomainMsg({ type: "error", message: json.error ?? "Failed to add domain" });
+        return;
+      }
+      setDomainMsg({ type: "success", message: `Mapped ${json.domain.domain} → /site/${json.domain.site_slug}` });
+      setNewDomain("");
+      loadDomains();
+    } catch (err: any) {
+      setDomainMsg({ type: "error", message: err.message ?? "Failed to add domain" });
+    } finally {
+      setDomainBusy(false);
+    }
+  };
+
+  const removeDomain = async (id: string, domain: string) => {
+    if (!confirm(`Unmap ${domain}?`)) return;
+    const res = await fetch(`/api/cms/domains?id=${id}`, { method: "DELETE", credentials: "include" });
+    if (res.ok) {
+      setDomains((prev) => prev.filter((d) => d.id !== id));
+      setDomainMsg({ type: "success", message: `Unmapped ${domain}.` });
+    } else {
+      const json = await res.json().catch(() => ({}));
+      setDomainMsg({ type: "error", message: json.error ?? "Failed to remove domain" });
+    }
+  };
 
   const createPage = async () => {
     if (!newTitle.trim()) return;
@@ -918,12 +988,18 @@ export default function CmsPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    {p.is_published && (
+                    {p.is_published ? (
                       <a href={`/site/${p.slug}`} target="_blank" rel="noopener" onClick={(e) => e.stopPropagation()}
                         className="text-primary hover:underline text-xs inline-flex items-center gap-1">
                         <ExternalLink className="size-3" /> View
                       </a>
-                    )}
+                    ) : p.preview_token ? (
+                      <a href={`/site/${p.slug}?preview=${p.preview_token}`} target="_blank" rel="noopener" onClick={(e) => e.stopPropagation()}
+                        className="text-muted-foreground hover:text-primary hover:underline text-xs inline-flex items-center gap-1"
+                        title="Secret draft-preview link — share with the client to review before publishing">
+                        <Eye className="size-3" /> Preview
+                      </a>
+                    ) : null}
                   </div>
                 </div>
               ))}
@@ -1229,6 +1305,59 @@ export default function CmsPage() {
                 placeholder={"© 2026 My Site — [Privacy](/site/privacy) · [Terms](/site/terms)"}
                 className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono"
               />
+            </div>
+
+            <div>
+              <Label>Custom Domains</Label>
+              <p className="text-xs text-muted-foreground mb-2">
+                Map a domain (client.com or client.yourdomain.com) to a page. Point the domain&apos;s
+                DNS A record at the server, then it serves this site directly. Requires the nginx
+                vhost to be applied (scripts/sync-site-domains.cjs).
+              </p>
+              <div className="flex items-center gap-2 flex-wrap">
+                <Input
+                  placeholder="client.com"
+                  value={newDomain}
+                  onChange={(e) => setNewDomain(e.target.value)}
+                  className="w-48"
+                />
+                <select
+                  value={newDomainSlug}
+                  onChange={(e) => setNewDomainSlug(e.target.value)}
+                  className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+                >
+                  <option value="">Site page…</option>
+                  {pages.map((p) => (
+                    <option key={p.id} value={p.slug}>/{p.slug} — {p.title}</option>
+                  ))}
+                </select>
+                <Button variant="outline" size="sm" onClick={addDomain} disabled={domainBusy}>
+                  {domainBusy ? <Loader2 className="size-3.5 animate-spin mr-1" /> : <Link2 className="size-3.5 mr-1" />}
+                  Map domain
+                </Button>
+              </div>
+              {domainMsg && (
+                <p className={`text-xs mt-2 ${domainMsg.type === "success" ? "text-green-600" : "text-red-600"}`}>
+                  {domainMsg.message}
+                </p>
+              )}
+              {domains.length > 0 && (
+                <div className="mt-3 space-y-1.5">
+                  {domains.map((d) => (
+                    <div key={d.id} className="flex items-center justify-between text-sm border rounded-md px-3 py-2">
+                      <span className="font-medium">{d.domain}</span>
+                      <span className="text-muted-foreground text-xs">→ /site/{d.site_slug}</span>
+                      <button
+                        onClick={() => removeDomain(d.id, d.domain)}
+                        className="p-1 rounded hover:bg-red-100 dark:hover:bg-red-900 text-red-500"
+                        title="Unmap"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div>

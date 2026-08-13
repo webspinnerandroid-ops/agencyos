@@ -216,6 +216,7 @@ export async function POST(request: NextRequest) {
         blocks,
         kind: "blog_post",
         is_published: true,
+        preview_token: crypto.randomUUID(),
         published_at: new Date().toISOString(),
         updated_at: new Date().toISOString(),
       };

@@ -82,8 +82,8 @@ export default function GbpPage() {
           <h1 className="text-3xl font-bold tracking-tight">Google Business Profile</h1>
           <p className="text-muted-foreground mt-1">Connect and manage Google Business Profile listings for your clients.</p>
         </div>
-        <Button onClick={handleGoogleConnect} disabled={isPending || hasConnected} style={{ backgroundColor: "#4285F4" }}>
-          {isPending ? <><Loader2 className="size-4 animate-spin mr-2" /> Connecting...</> : hasConnected ? "✓ Connected" : "Connect Google Account"}
+        <Button onClick={handleGoogleConnect} disabled={isPending} style={{ backgroundColor: "#4285F4" }}>
+          {isPending ? <><Loader2 className="size-4 animate-spin mr-2" /> Connecting...</> : hasConnected ? "Reconnect (replaces existing)" : "Connect Google Account"}
         </Button>
       </div>
 

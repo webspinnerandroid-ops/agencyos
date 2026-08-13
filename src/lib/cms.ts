@@ -62,6 +62,7 @@ export interface CmsPage {
   slug: string;
   blocks: CmsBlock[];
   is_published: boolean;
+  preview_token?: string | null;
   published_at: string | null;
   created_at: string;
   updated_at: string;

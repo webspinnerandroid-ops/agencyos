@@ -31,11 +31,17 @@ export async function GET(request: NextRequest) {
   try {
     const tokens = await exchangeGoogleCode(code);
 
-    // Get user info
-    const meRes = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
-      headers: { Authorization: `Bearer ${tokens.access_token}` },
-    });
-    const meData = await meRes.json();
+    // Get user info (best-effort — degrades to the fallback name when the
+    // call fails so a connection is never blocked on it).
+    let meData: { name?: string; email?: string } = {};
+    try {
+      const meRes = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+        headers: { Authorization: `Bearer ${tokens.access_token}` },
+      });
+      if (meRes.ok) meData = (await meRes.json()) as { name?: string; email?: string };
+    } catch {
+      // ignore — fall back to the generic name
+    }
     const accountName = meData.name ?? meData.email ?? "Google Account";
 
     const encrypted = encodeTokenBundle(tokens);
@@ -58,6 +64,13 @@ export async function GET(request: NextRequest) {
         { onConflict: "tenant_id,provider" }
       );
     } else if (stateRow.platform === "google_business") {
+      // Reconnect replaces the tenant's existing profile rows so repeated
+      // connects can't stack up duplicates (previously showed several
+      // identical "Google Account" entries).
+      await supabase
+        .from("google_business_profiles")
+        .delete()
+        .eq("tenant_id", stateRow.tenant_id);
       await supabase.from("google_business_profiles").insert({
         tenant_id: stateRow.tenant_id,
         account_name: accountName,

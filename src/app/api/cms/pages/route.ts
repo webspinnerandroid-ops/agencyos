@@ -12,7 +12,7 @@ export async function GET() {
 
     let query = supabase
       .from("site_pages")
-      .select("id, tenant_id, workspace_id, client_id, title, slug, is_published, published_at, created_at, updated_at")
+      .select("id, tenant_id, workspace_id, client_id, title, slug, is_published, preview_token, published_at, created_at, updated_at")
       .eq("tenant_id", tenantId)
       .order("updated_at", { ascending: false });
 
@@ -60,6 +60,7 @@ export async function POST(request: NextRequest) {
         slug,
         blocks: [],
         is_published: false,
+        preview_token: crypto.randomUUID(),
       })
       .select("*")
       .single();

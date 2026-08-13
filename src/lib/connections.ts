@@ -153,12 +153,25 @@ async function googleGet<T>(path: string, accessToken: string): Promise<T> {
     headers: { Authorization: `Bearer ${accessToken}` },
     signal: AbortSignal.timeout(20_000),
   });
-  const data = await res.json().catch(() => ({}));
+  const text = await res.text().catch(() => "");
+  let data: unknown = {};
+  if (text.trim().startsWith("{") || text.trim().startsWith("[")) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = {};
+    }
+  }
   if (!res.ok) {
-    throw new Error(
-      (data as { error?: { message?: string } }).error?.message ??
-        `Google API error (${res.status})`
-    );
+    const apiMsg = (data as { error?: { message?: string } })?.error?.message;
+    if (!apiMsg && res.status === 404) {
+      // Google serves a bare HTML 404 when the requested API is not enabled
+      // for the project that owns the OAuth client.
+      throw new Error(
+        "The Google API for this connection isn't enabled on your Google Cloud project. Enable it (APIs & Services → Library), then try again."
+      );
+    }
+    throw new Error(apiMsg ?? `Google API error (${res.status})`);
   }
   return data as T;
 }

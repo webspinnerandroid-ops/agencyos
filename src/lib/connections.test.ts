@@ -82,23 +82,31 @@ describe("exchangeGoogleCode", () => {
 });
 
 describe("resource listing", () => {
+  const jsonRes = (body: unknown, ok = true) => ({
+    ok,
+    headers: new Headers({ "content-type": "application/json" }),
+    text: async () => JSON.stringify(body),
+  });
+
   it("flattens GA4 account summaries into properties", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        accountSummaries: [
-          {
-            name: "accounts/123",
-            displayName: "Acme Agency",
-            propertySummaries: [
-              { property: "properties/111", displayName: "Client A Site" },
-              { property: "properties/222", displayName: "Client B Blog" },
-            ],
-          },
-          { name: "accounts/999", displayName: "Other" },
-        ],
-      }),
-    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonRes({
+          accountSummaries: [
+            {
+              name: "accounts/123",
+              displayName: "Acme Agency",
+              propertySummaries: [
+                { property: "properties/111", displayName: "Client A Site" },
+                { property: "properties/222", displayName: "Client B Blog" },
+              ],
+            },
+            { name: "accounts/999", displayName: "Other" },
+          ],
+        })
+      )
+    );
     const props = await listGA4Properties("token");
     expect(props).toEqual([
       { propertyId: "111", displayName: "Client A Site", accountName: "Acme Agency" },
@@ -107,25 +115,44 @@ describe("resource listing", () => {
   });
 
   it("lists Search Console sites", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        siteEntry: [
-          { siteUrl: "sc-domain:acme.com", permissionLevel: "siteFullUser" },
-          { siteUrl: "https://blog.acme.com/", permissionLevel: "siteRestrictedUser" },
-        ],
-      }),
-    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonRes({
+          siteEntry: [
+            { siteUrl: "sc-domain:acme.com", permissionLevel: "siteFullUser" },
+            { siteUrl: "https://blog.acme.com/", permissionLevel: "siteRestrictedUser" },
+          ],
+        })
+      )
+    );
     const sites = await listSearchConsoleSites("token");
     expect(sites).toHaveLength(2);
     expect(sites[0].siteUrl).toBe("sc-domain:acme.com");
   });
 
   it("surfaces Google API errors with the message", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
-      ok: false,
-      json: async () => ({ error: { message: "Request had insufficient authentication scopes." } }),
-    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonRes({ error: { message: "Request had insufficient authentication scopes." } }, false)
+      )
+    );
     await expect(listGA4Properties("token")).rejects.toThrow("insufficient authentication scopes");
+  });
+
+  it("turns a bare HTML 404 into an actionable API-not-enabled message", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        headers: new Headers({ "content-type": "text/html; charset=UTF-8" }),
+        text: async () => "<!DOCTYPE html><title>Error 404 (Not Found)!!1</title>",
+      })
+    );
+    await expect(listGA4Properties("token")).rejects.toThrow(
+      "isn't enabled on your Google Cloud project"
+    );
   });
 });

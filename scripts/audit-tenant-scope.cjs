@@ -172,6 +172,11 @@ const IGNORE = new Set([
   // same seo_campaigns row it read (keyed by the row's own id, never a
   // tenant-supplied value) and is never reachable from a user session.
   "src/lib/seo/competitor-backfill.ts",
+  // refreshCompetitorBenchmarks.ts: monthly maintenance job, same class as
+  // competitor-backfill.ts — re-scores every tenant's stored competitors with
+  // the service role and writes competitors_json back only to the row it read
+  // (keyed by the row's own id). Never reachable from a user session.
+  "src/lib/inngest/functions/refreshCompetitorBenchmarks.ts",
 ]);
 
 const CHAIN_WINDOW = 900; // chars after .from(...) — enough for chained filters

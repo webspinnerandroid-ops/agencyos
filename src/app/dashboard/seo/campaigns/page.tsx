@@ -65,6 +65,7 @@ interface CompetitorData {
   geoScore?: number | null;
   competitorWordCount?: number | null;
   crawled?: boolean;
+  scoredAt?: string | null;
 }
 
 interface StoredCampaign {
@@ -770,6 +771,11 @@ export default function SeoCampaignsPage() {
             </div>
           )}
 
+          {/* Competitor benchmark — always visible, no expansion needed */}
+          {campaigns.length > 0 && (
+            <CompetitorBenchmarkTable competitors={campaigns[0].competitors_json ?? []} />
+          )}
+
           {/* Expanded audit details from the first campaign's audit_json */}
           {expandedAudit && campaigns.length > 0 && campaigns[0].audit_json && (
             <AuditDetails audit={campaigns[0].audit_json} competitors={campaigns[0].competitors_json} />
@@ -1356,6 +1362,92 @@ export default function SeoCampaignsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+// ============================================================================
+// Competitor Benchmark Table — a compact scoreboard for the Site Audit
+// Summary, so the benchmark is visible right after generation without
+// expanding anything. Renders an honest empty state when the audit had no
+// competitors (or they haven't been crawled yet).
+// ============================================================================
+
+function CompetitorBenchmarkTable({ competitors }: { competitors: CompetitorData[] }) {
+  const lastScored = competitors.reduce<string | null>((latest, c) => {
+    return c.scoredAt && (!latest || c.scoredAt > latest) ? c.scoredAt : latest;
+  }, null);
+
+  return (
+    <div className="mt-4 border-t pt-4">
+      <div className="flex items-center justify-between gap-2 flex-wrap mb-3">
+        <h3 className="text-sm font-semibold">Competitor Benchmark</h3>
+        {lastScored && (
+          <span className="text-[11px] text-muted-foreground">
+            Last benchmarked {new Date(lastScored).toLocaleDateString("en-US", {
+              month: "short",
+              day: "numeric",
+              year: "numeric",
+            })}
+          </span>
+        )}
+      </div>
+      {competitors.length === 0 ? (
+        <p className="text-xs text-muted-foreground">
+          No competitors were benchmarked for this audit. Add up to three
+          competitors when you run an audit to see how this site stacks up
+          against them (SEO / AEO / GEO scores).
+        </p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b text-left text-xs text-muted-foreground">
+                <th className="py-2 pr-4 font-medium">Competitor</th>
+                <th className="py-2 pr-4 font-medium">SEO</th>
+                <th className="py-2 pr-4 font-medium">AEO</th>
+                <th className="py-2 pr-4 font-medium">GEO</th>
+                <th className="py-2 font-medium">Words</th>
+              </tr>
+            </thead>
+            <tbody>
+              {competitors.map((c, i) => (
+                <tr key={i} className="border-b last:border-0">
+                  <td className="py-2 pr-4 font-medium">
+                    {c.competitorUrl?.replace(/^https?:\/\//, "").replace(/\/$/, "")}
+                  </td>
+                  {["seoScore", "aeoScore", "geoScore"].map((k) => {
+                    const v = c[k as keyof CompetitorData] as number | null | undefined;
+                    return (
+                      <td key={k} className="py-2 pr-4">
+                        {c.crawled === false ? (
+                          <span className="text-muted-foreground">—</span>
+                        ) : v == null ? (
+                          <span className="text-muted-foreground">—</span>
+                        ) : (
+                          <span className={`font-bold ${v >= 81 ? "text-green-600" : v >= 50 ? "text-yellow-600" : "text-red-600"}`}>
+                            {v}
+                          </span>
+                        )}
+                      </td>
+                    );
+                  })}
+                  <td className="py-2 text-muted-foreground">
+                    {c.competitorWordCount != null ? c.competitorWordCount.toLocaleString() : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {competitors.length > 0 && (
+        <p className="text-[11px] text-muted-foreground mt-2 italic">
+          Competitor scores come from the same SEO / AEO / GEO engines used for
+          this audit, refreshed automatically every month (or with “Re-run audit”
+          in the expanded view).
+        </p>
+      )}
     </div>
   );
 }

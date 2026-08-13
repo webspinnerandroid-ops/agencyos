@@ -29,6 +29,7 @@ interface CompetitorEntry {
   geoScore?: number | null;
   competitorWordCount?: number | null;
   crawled?: boolean;
+  scoredAt?: string | null;
   [key: string]: unknown;
 }
 
@@ -75,6 +76,7 @@ export async function rescoreCompetitorEntries(
 
   let scored = 0;
   let unreachable = 0;
+  const now = new Date().toISOString();
   for (const c of entries) {
     if (!c || typeof c !== "object") continue;
     const rawUrl = c.competitorUrl;
@@ -88,6 +90,7 @@ export async function rescoreCompetitorEntries(
       c.geoScore = null;
       c.competitorWordCount = null;
       c.crawled = false;
+      c.scoredAt = now;
       continue;
     }
     const s = scoreCompetitorHtml(html, url);
@@ -96,10 +99,25 @@ export async function rescoreCompetitorEntries(
     c.geoScore = s.geoScore;
     c.competitorWordCount = s.wordCount;
     c.crawled = s.crawled;
+    c.scoredAt = now;
     scored++;
     await sleep(POLITE_DELAY_MS);
   }
   return { entries, scored, unreachable };
+}
+
+/**
+ * Newest `scoredAt` across a campaign's competitor entries (or null when no
+ * entry has been scored yet). Used for the "last benchmarked" label.
+ */
+export function latestScoredAt(entries: CompetitorEntry[] | null | undefined): string | null {
+  let latest: string | null = null;
+  for (const c of entries ?? []) {
+    if (c && typeof c.scoredAt === "string" && (!latest || c.scoredAt > latest)) {
+      latest = c.scoredAt;
+    }
+  }
+  return latest;
 }
 
 function makeClient() {
@@ -170,6 +188,7 @@ export async function backfillCompetitorScores(
         c.geoScore = null;
         c.competitorWordCount = null;
         c.crawled = false;
+        c.scoredAt = new Date().toISOString();
         dirty = true;
         continue;
       }
@@ -179,6 +198,7 @@ export async function backfillCompetitorScores(
       c.geoScore = s.geoScore;
       c.competitorWordCount = s.wordCount;
       c.crawled = s.crawled;
+      c.scoredAt = new Date().toISOString();
       stats.scored++;
       dirty = true;
       await sleep(POLITE_DELAY_MS);

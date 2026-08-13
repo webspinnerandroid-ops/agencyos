@@ -92,6 +92,7 @@ interface CompetitorData {
   geoScore?: number | null;
   competitorWordCount?: number | null;
   crawled?: boolean;
+  scoredAt?: string | null;
 }
 
 // ============================================================================
@@ -258,6 +259,10 @@ export default function PublicSeoProposalPage() {
             </p>
           </div>
 
+          {/* Competitor benchmark — always visible on the proposal, with an
+              honest empty state when the audit had no competitors. */}
+          <CompetitorBenchmark competitors={campaigns[0]?.competitors_json ?? []} />
+
           {/* Audit Summary */}
           {campaigns[0]?.audit_json && (
             <Card className="p-6">
@@ -344,6 +349,11 @@ export default function PublicSeoProposalPage() {
                   <div className="text-xs text-muted-foreground mb-4 space-y-1">
                     <div>{contentCount} content pieces scheduled</div>
                     <div>{cj.targetKeywords?.length ?? 0} target keywords</div>
+                    {(campaign.competitors_json?.length ?? 0) > 0 ? (
+                      <div>vs {campaign.competitors_json!.length} competitors benchmarked</div>
+                    ) : (
+                      <div className="text-muted-foreground italic">No competitor benchmark</div>
+                    )}
                     {cj.estimatedROI && <div className="text-muted-foreground">Projected ROI (est.): {cj.estimatedROI}</div>}
                   </div>
 
@@ -655,5 +665,88 @@ export default function PublicSeoProposalPage() {
         </p>
       </div>
     </div>
+  );
+}
+
+// ============================================================================
+// Competitor Benchmark — the same-engine SEO / AEO / GEO scores the agency's
+// audit ran on each competitor, shown on the proposal so the client sees how
+// they stack up. Always renders (with an honest empty state) so it can never
+// silently disappear.
+// ============================================================================
+
+function CompetitorBenchmark({ competitors }: { competitors: CompetitorData[] }) {
+  const lastScored = competitors.reduce<string | null>((latest, c) => {
+    return c.scoredAt && (!latest || c.scoredAt > latest) ? c.scoredAt : latest;
+  }, null);
+
+  return (
+    <Card className="p-6">
+      <div className="flex items-center justify-between gap-2 flex-wrap mb-4">
+        <h2 className="text-lg font-semibold">Competitor Benchmark</h2>
+        {lastScored && (
+          <span className="text-xs text-muted-foreground">
+            Last benchmarked {new Date(lastScored).toLocaleDateString("en-US", {
+              month: "short",
+              day: "numeric",
+              year: "numeric",
+            })}
+          </span>
+        )}
+      </div>
+      {competitors.length === 0 ? (
+        <p className="text-sm text-muted-foreground">
+          No competitors were benchmarked for this audit yet. Your agency can add
+          up to three competitors and re-run the audit to include a head-to-head
+          SEO / AEO / GEO comparison in this proposal.
+        </p>
+      ) : (
+        <>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-left text-xs text-muted-foreground">
+                  <th className="py-2 pr-4 font-medium">Competitor</th>
+                  <th className="py-2 pr-4 font-medium">SEO</th>
+                  <th className="py-2 pr-4 font-medium">AEO</th>
+                  <th className="py-2 pr-4 font-medium">GEO</th>
+                  <th className="py-2 font-medium">Words</th>
+                </tr>
+              </thead>
+              <tbody>
+                {competitors.map((c, i) => (
+                  <tr key={i} className="border-b last:border-0">
+                    <td className="py-2 pr-4 font-medium">
+                      {c.competitorUrl?.replace(/^https?:\/\//, "").replace(/\/$/, "")}
+                    </td>
+                    {["seoScore", "aeoScore", "geoScore"].map((k) => {
+                      const v = c[k as keyof CompetitorData] as number | null | undefined;
+                      return (
+                        <td key={k} className="py-2 pr-4">
+                          {c.crawled === false || v == null ? (
+                            <span className="text-muted-foreground">—</span>
+                          ) : (
+                            <span className={`font-bold ${v >= 81 ? "text-green-600" : v >= 50 ? "text-yellow-600" : "text-red-600"}`}>
+                              {v}
+                            </span>
+                          )}
+                        </td>
+                      );
+                    })}
+                    <td className="py-2 text-muted-foreground">
+                      {c.competitorWordCount != null ? c.competitorWordCount.toLocaleString() : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-xs text-muted-foreground italic mt-3">
+            Competitor scores use the same scoring engine as your website audit
+            (SEO, AEO, GEO) and refresh automatically each month.
+          </p>
+        </>
+      )}
+    </Card>
   );
 }

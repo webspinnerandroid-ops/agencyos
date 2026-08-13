@@ -23,7 +23,7 @@ import {
 } from "@/lib/ai-team";
 
 const STATUS_BADGE: Record<string, { label: string; className: string }> = {
-  built: { label: "Built", className: "bg-green-100 text-green-700" },
+  built: { label: "Available", className: "bg-green-100 text-green-700" },
   partial: { label: "Partial", className: "bg-amber-100 text-amber-700" },
   planned: { label: "Planned", className: "bg-gray-100 text-gray-600" },
 };

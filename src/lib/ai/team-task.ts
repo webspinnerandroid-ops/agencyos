@@ -25,6 +25,7 @@ import {
   buildEmployeeSystemPrompt,
   EMPLOYEE_PERSONAS,
 } from "@/lib/ai/employee-personas";
+import { scoreEmployeeOutput } from "@/lib/ai/eval";
 import { EMPLOYEE_KEYS } from "@/lib/ai/employee-keys";
 import {
   routeRequestDeterministically,
@@ -1296,7 +1297,22 @@ export async function processTeamTask(payload: TeamTaskPayload): Promise<void> {
           tenantId,
           { systemPrompt: personaPrompt, temperature: 0.7, maxTokens: 2048 }
         );
-        replyMeta = { action: "chat" };
+        // Eval loop: score the reply against the role's quality criteria so
+        // "better" is measurable — the score rides along in the message
+        // metadata (pure string checks, no extra LLM cost).
+        const evalResult = scoreEmployeeOutput(targetKey, replyContent);
+        replyMeta = {
+          action: "chat",
+          eval: {
+            score: evalResult.score,
+            passed: evalResult.passed,
+            total: evalResult.total,
+            verdict: evalResult.verdict,
+            failed: evalResult.criteria
+              .filter((c) => !c.passed)
+              .map((c) => c.name),
+          },
+        };
       } catch (err) {
         replyContent =
           `I couldn't reach my models right now: ${

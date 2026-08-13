@@ -27,6 +27,8 @@ interface Subscription {
   renewal_date: string | null;
   amount_owing: number | null;
   credit_remaining: number | null;
+  low_balance_threshold: number | null;
+  low_balance_alerted_at: string | null;
   portal_url: string | null;
   account_email: string | null;
   notes: string | null;
@@ -44,6 +46,7 @@ const EMPTY_FORM = {
   renewal_date: "",
   amount_owing: "",
   credit_remaining: "",
+  low_balance_threshold: "",
   portal_url: "",
   account_email: "",
   notes: "",
@@ -95,6 +98,7 @@ export default function SubscriptionsPage() {
     renewal_date: s.renewal_date ?? "",
     amount_owing: s.amount_owing != null ? String(s.amount_owing) : "",
     credit_remaining: s.credit_remaining != null ? String(s.credit_remaining) : "",
+    low_balance_threshold: s.low_balance_threshold != null ? String(s.low_balance_threshold) : "",
     portal_url: s.portal_url ?? "",
     account_email: s.account_email ?? "",
     notes: s.notes ?? "",
@@ -126,6 +130,7 @@ export default function SubscriptionsPage() {
       cycle_day: form.cycle_day ? Number(form.cycle_day) : null,
       amount_owing: form.amount_owing ? Number(form.amount_owing) : null,
       credit_remaining: form.credit_remaining ? Number(form.credit_remaining) : null,
+      low_balance_threshold: form.low_balance_threshold ? Number(form.low_balance_threshold) : null,
       renewal_date: form.renewal_date || null,
     };
     try {
@@ -304,6 +309,11 @@ export default function SubscriptionsPage() {
             <Input type="number" step="0.01" value={form.credit_remaining} onChange={(e) => setForm({ ...form, credit_remaining: e.target.value })} placeholder="0.00" />
           </div>
           <div className="space-y-1">
+            <Label>Low-balance alert threshold</Label>
+            <Input type="number" step="0.01" value={form.low_balance_threshold} onChange={(e) => setForm({ ...form, low_balance_threshold: e.target.value })} placeholder="e.g. 20" title="Email the super admin when an auto-check finds credit at or below this. Leave empty for no alert." />
+            <p className="text-[11px] text-muted-foreground">Auto-check emails the super admin when credit drops to this level.</p>
+          </div>
+          <div className="space-y-1">
             <Label>Auto-check</Label>
             <select
               value={form.auto_check}
@@ -401,6 +411,9 @@ export default function SubscriptionsPage() {
                         <span className="text-green-600 font-medium">{fmtMoney(s.credit_remaining)}</span>
                       ) : (
                         <span className="text-muted-foreground">—</span>
+                      )}
+                      {s.low_balance_threshold != null && (
+                        <div className="text-[10px] text-muted-foreground">alert ≤ {fmtMoney(s.low_balance_threshold)}</div>
                       )}
                     </td>
                     <td className="py-3 px-3 text-xs text-muted-foreground whitespace-nowrap">

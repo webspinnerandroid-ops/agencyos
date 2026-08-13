@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getTenantId, requireRole } from "@/lib/auth";
+import { getTenantId, requireRole, getUserEmail } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
-import { autoCheck } from "@/lib/subscription-check";
+import { checkAndAlertRow } from "@/lib/subscription-check";
 
 // ------------------------------------------------------------------
 // Shape / validation
@@ -18,6 +18,7 @@ export interface SubscriptionRecord {
   renewal_date?: string | null;
   amount_owing?: number | null;
   credit_remaining?: number | null;
+  low_balance_threshold?: number | null;
   portal_url?: string | null;
   account_email?: string | null;
   notes?: string | null;
@@ -70,6 +71,7 @@ function cleanBody(body: unknown): SubscriptionRecord | null {
         : null,
     amount_owing: num(b.amount_owing),
     credit_remaining: num(b.credit_remaining),
+    low_balance_threshold: num(b.low_balance_threshold),
     portal_url:
       typeof b.portal_url === "string"
         ? b.portal_url.slice(0, 500) || null
@@ -85,14 +87,6 @@ function cleanBody(body: unknown): SubscriptionRecord | null {
       : undefined,
   };
 }
-
-const ENV_KEY_FOR_CHECK: Record<string, string> = {
-  stripe: "STRIPE_SECRET_KEY",
-  resend: "RESEND_API_KEY",
-  fal: "FAL_AI_API_KEY",
-  openai: "OPENAI_API_KEY",
-  google: "GOOGLE_API_KEY",
-};
 
 // ------------------------------------------------------------------
 // Handlers
@@ -130,30 +124,19 @@ export async function POST(request: NextRequest) {
         const { data: rows } = await supabase
           .from("subscription_registry")
           .select("*");
-        const results: { provider: string; ok: boolean; detail?: string; error?: string }[] = [];
+        const results: { provider: string; ok: boolean; detail?: string; error?: string; alertSent?: boolean }[] = [];
+        const email = await getUserEmail();
         for (const row of rows ?? []) {
           const checkType = row.auto_check;
           if (!checkType || checkType === "manual") continue;
-          const envKey = ENV_KEY_FOR_CHECK[checkType];
-          const apiKey = envKey ? process.env[envKey] : undefined;
-          if (!apiKey) {
-            results.push({ provider: row.provider, ok: false, error: `${envKey} not set` });
-            continue;
-          }
-          try {
-            const result = await autoCheck(checkType, apiKey);
-            await supabase
-              .from("subscription_registry")
-              .update({
-                credit_remaining: result.creditRemaining,
-                last_checked_at: new Date().toISOString(),
-                updated_at: new Date().toISOString(),
-              })
-              .eq("id", row.id);
-            results.push({ provider: row.provider, ok: true, detail: result.detail });
-          } catch (err: any) {
-            results.push({ provider: row.provider, ok: false, error: err?.message ?? "check failed" });
-          }
+          const r = await checkAndAlertRow(supabase, row, email);
+          results.push({
+            provider: row.provider,
+            ok: r.ok,
+            detail: r.detail,
+            error: r.error,
+            alertSent: r.alertSent,
+          });
         }
         return NextResponse.json({ ok: true, results });
       }
@@ -167,25 +150,16 @@ export async function POST(request: NextRequest) {
           .eq("id", id)
           .maybeSingle();
         if (!row) return NextResponse.json({ error: "Subscription not found" }, { status: 404 });
-        const checkType = row.auto_check;
-        if (!checkType || checkType === "manual") {
-          return NextResponse.json({ error: "This provider has no auto-check (track manually)" }, { status: 400 });
+        const result = await checkAndAlertRow(supabase, row, await getUserEmail());
+        if (!result.ok) {
+          return NextResponse.json({ error: result.error }, { status: 400 });
         }
-        const envKey = ENV_KEY_FOR_CHECK[checkType];
-        const apiKey = envKey ? process.env[envKey] : undefined;
-        if (!apiKey) {
-          return NextResponse.json({ error: `${envKey} is not configured on the server` }, { status: 400 });
-        }
-        const result = await autoCheck(checkType, apiKey);
-        await supabase
-          .from("subscription_registry")
-          .update({
-            credit_remaining: result.creditRemaining,
-            last_checked_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", id);
-        return NextResponse.json({ ok: true, creditRemaining: result.creditRemaining, detail: result.detail });
+        return NextResponse.json({
+          ok: true,
+          creditRemaining: result.credit,
+          detail: result.detail,
+          alertSent: result.alertSent,
+        });
       }
 
       return NextResponse.json({ error: "Unknown action" }, { status: 400 });

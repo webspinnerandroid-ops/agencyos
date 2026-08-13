@@ -59,6 +59,7 @@ const IGNORE = new Set([
   "src/lib/inngest/functions/syncSocialInbox.ts",
   "src/lib/inngest/functions/processSequences.ts",
   "src/lib/inngest/functions/publishScheduledPosts.ts",
+  "src/lib/inngest/functions/checkProviderBalances.ts",
   // Auth plumbing
   "src/proxy.ts",
   "src/app/api/register/route.ts",

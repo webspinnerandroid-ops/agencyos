@@ -190,10 +190,24 @@ export default function KnowledgebasePage() {
           <h3 className="text-sm font-medium text-muted-foreground mb-2">Folders</h3>
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
             {folders.map((f) => (
-              <button key={f.id} onClick={() => navigateToFolder(f.id)} className="flex items-center justify-between p-3 rounded-lg border hover:bg-muted/50 transition-colors text-left">
+              // Outer row is a div (not a button) so the inner delete button
+              // stays valid HTML — nested <button> causes hydration errors.
+              <div
+                key={f.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => navigateToFolder(f.id)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    navigateToFolder(f.id);
+                  }
+                }}
+                className="flex items-center justify-between p-3 rounded-lg border hover:bg-muted/50 transition-colors text-left cursor-pointer"
+              >
                 <span className="flex items-center gap-2 truncate"><Folder className="size-4 text-yellow-500 shrink-0" />{f.name}</span>
                 <button onClick={(e) => { e.stopPropagation(); handleDeleteFolder(f.id, f.name); }} className="shrink-0 text-muted-foreground hover:text-destructive"><Trash2 className="size-3" /></button>
-              </button>
+              </div>
             ))}
           </div>
         </div>

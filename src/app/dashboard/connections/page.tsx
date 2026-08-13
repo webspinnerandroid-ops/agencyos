@@ -323,9 +323,8 @@ export default function ConnectionsPage() {
       )}
 
       <p className="text-xs text-muted-foreground">
-        Connections are per-workspace and stored encrypted (AES) in the database. Access tokens are
-        refreshed automatically when they expire. Periodic metric collection into Analytics is the
-        next layer on top of these connections.
+        Connections are per-tenant and stored encrypted (AES) in the database. Access tokens are
+        refreshed automatically when they expire. Site traffic syncs daily into Analytics.
       </p>
     </div>
   );

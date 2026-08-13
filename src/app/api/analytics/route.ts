@@ -204,6 +204,30 @@ export async function GET(request: NextRequest) {
       };
     });
 
+    // Site traffic (GA4 + Search Console) from the connected sources — the
+    // daily rows are written by the syncSiteMetrics Inngest job. Tenant-level
+    // (site traffic isn't workspace-scoped). Degrades gracefully to an empty
+    // series before the traffic_snapshots migration has been applied.
+    let trafficRows: unknown[] = [];
+    try {
+      const { data, error } = await supabase
+        .from("traffic_snapshots")
+        .select("provider, resource, metric_date, sessions, users, pageviews, engagement_rate, clicks, impressions, ctr, position, fetched_at")
+        .eq("tenant_id", tenantId)
+        .gte("metric_date", startDate ?? "1970-01-01")
+        .lte("metric_date", (endDate ?? new Date().toISOString().slice(0, 10)))
+        .order("metric_date", { ascending: true });
+      if (error) {
+        if (!/does not exist|schema cache/i.test(error.message)) {
+          console.error("[analytics] traffic query:", error.message);
+        }
+      } else {
+        trafficRows = data ?? [];
+      }
+    } catch (err) {
+      console.error("[analytics] traffic query:", (err as Error).message);
+    }
+
     // Compute summary
     const totalPosts = enriched.length;
     const totalLikes = enriched.reduce((s, p) => s + p.totalLikes, 0);
@@ -230,6 +254,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       posts: enriched,
       workspaceId: workspaceId ?? null,
+      traffic: trafficRows ?? [],
       summary: {
         totalPosts,
         totalLikes,

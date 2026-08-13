@@ -87,9 +87,24 @@ interface Client {
   name: string;
 }
 
+interface TrafficRow {
+  provider: "google_analytics" | "search_console";
+  resource: string;
+  metric_date: string;
+  sessions: number | null;
+  users: number | null;
+  pageviews: number | null;
+  engagement_rate: number | null;
+  clicks: number | null;
+  impressions: number | null;
+  ctr: number | null;
+  position: number | null;
+}
+
 interface AnalyticsResponse {
   posts: AnalyticsPost[];
   workspaceId: string | null;
+  traffic: TrafficRow[];
   summary: AnalyticsSummary;
 }
 
@@ -122,8 +137,8 @@ export default function AnalyticsPage() {
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<AnalyticsResponse | null>(null);
-  // View mode: social engagement vs per-workspace SEO monitoring.
-  const [tab, setTab] = useState<"social" | "seo">("social");
+  // View mode: social engagement vs SEO monitoring vs site traffic.
+  const [tab, setTab] = useState<"social" | "seo" | "traffic">("social");
   const [seoData, setSeoData] = useState<any>(null);
 
   // ---- Fetch clients ----
@@ -267,7 +282,9 @@ export default function AnalyticsPage() {
           <p className="text-muted-foreground mt-1">
             {tab === "seo"
               ? "SEO monitoring for client websites — audits, content scores, and publish health."
-              : `Track post performance across all platforms${data?.workspaceId ? " for the current workspace." : " across the whole tenant."}`}
+              : tab === "traffic"
+                ? "Real site traffic from your connected Google Analytics 4 and Search Console sources."
+                : `Track post performance across all platforms${data?.workspaceId ? " for the current workspace." : " across the whole tenant."}`}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -283,6 +300,12 @@ export default function AnalyticsPage() {
               className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${tab === "seo" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
             >
               SEO
+            </button>
+            <button
+              onClick={() => setTab("traffic")}
+              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${tab === "traffic" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              Traffic
             </button>
           </div>
           {tab === "social" && (
@@ -574,6 +597,172 @@ export default function AnalyticsPage() {
                 </CardContent>
               </Card>
             </>
+          )}
+        </>
+      )}
+
+      {/* Traffic view: GA4 + Search Console site metrics */}
+      {tab === "traffic" && (
+        <>
+          {!data ? (
+            <div className="flex items-center justify-center py-24 text-muted-foreground">
+              <Loader2 className="size-8 animate-spin mr-3" />
+              Loading traffic…
+            </div>
+          ) : (data.traffic ?? []).length === 0 ? (
+            <Card>
+              <CardContent className="py-16 text-center">
+                <p className="text-lg font-semibold">No site traffic yet</p>
+                <p className="text-sm text-muted-foreground mt-1 max-w-md mx-auto">
+                  Connect Google Analytics 4 and Search Console under{" "}
+                  <span className="font-medium">Manage → Connections</span> and pick
+                  the property / site to track. The daily sync (Inngest) then fills
+                  this view with real numbers.
+                </p>
+                <a
+                  href="/dashboard/connections"
+                  className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline mt-4"
+                >
+                  <BarChart3 className="size-4" /> Open Connections
+                </a>
+              </CardContent>
+            </Card>
+          ) : (
+            (["google_analytics", "search_console"] as const).map((provider) => {
+              const rows = (data.traffic ?? []).filter((r) => r.provider === provider);
+              if (rows.length === 0) return null;
+              const resource = rows[0].resource;
+              const isGA = provider === "google_analytics";
+              const totals = rows.reduce(
+                (acc, r) => ({
+                  sessions: acc.sessions + (r.sessions ?? 0),
+                  users: acc.users + (r.users ?? 0),
+                  pageviews: acc.pageviews + (r.pageviews ?? 0),
+                  clicks: acc.clicks + (r.clicks ?? 0),
+                  impressions: acc.impressions + (r.impressions ?? 0),
+                }),
+                { sessions: 0, users: 0, pageviews: 0, clicks: 0, impressions: 0 }
+              );
+              const avgEngagement =
+                rows.length > 0
+                  ? (rows.reduce((s, r) => s + (r.engagement_rate ?? 0), 0) / rows.length) * 100
+                  : 0;
+              const avgCtr =
+                rows.length > 0
+                  ? (rows.reduce((s, r) => s + (r.ctr ?? 0), 0) / rows.length) * 100
+                  : 0;
+              const avgPosition =
+                rows.length > 0
+                  ? rows.reduce((s, r) => s + (r.position ?? 0), 0) / rows.length
+                  : 0;
+              const last14 = rows.slice(-14).reverse();
+
+              return (
+                <Card key={provider}>
+                  <CardHeader>
+                    <CardTitle className="flex items-center gap-2">
+                      {isGA ? <BarChart3 className="size-5 text-primary" /> : <TrendingUp className="size-5 text-primary" />}
+                      {isGA ? "Google Analytics 4" : "Search Console"}
+                    </CardTitle>
+                    <CardDescription className="truncate">{resource}</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {/* Summary cards */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                      {isGA ? (
+                        <>
+                          <div>
+                            <p className="text-xs text-muted-foreground">Sessions</p>
+                            <p className="text-xl font-bold">{formatNumber(totals.sessions)}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-muted-foreground">Users</p>
+                            <p className="text-xl font-bold">{formatNumber(totals.users)}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-muted-foreground">Pageviews</p>
+                            <p className="text-xl font-bold">{formatNumber(totals.pageviews)}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-muted-foreground">Avg engagement</p>
+                            <p className="text-xl font-bold">{avgEngagement.toFixed(1)}%</p>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div>
+                            <p className="text-xs text-muted-foreground">Clicks</p>
+                            <p className="text-xl font-bold">{formatNumber(totals.clicks)}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-muted-foreground">Impressions</p>
+                            <p className="text-xl font-bold">{formatNumber(totals.impressions)}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-muted-foreground">Avg CTR</p>
+                            <p className="text-xl font-bold">{avgCtr.toFixed(2)}%</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-muted-foreground">Avg position</p>
+                            <p className="text-xl font-bold">{avgPosition.toFixed(1)}</p>
+                          </div>
+                        </>
+                      )}
+                    </div>
+
+                    {/* Daily table (last 14 days) */}
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b text-left text-xs text-muted-foreground">
+                            <th className="pb-2 font-medium">Date</th>
+                            {isGA ? (
+                              <>
+                                <th className="pb-2 font-medium text-right">Sessions</th>
+                                <th className="pb-2 font-medium text-right">Users</th>
+                                <th className="pb-2 font-medium text-right">Pageviews</th>
+                                <th className="pb-2 font-medium text-right">Engagement</th>
+                              </>
+                            ) : (
+                              <>
+                                <th className="pb-2 font-medium text-right">Clicks</th>
+                                <th className="pb-2 font-medium text-right">Impressions</th>
+                                <th className="pb-2 font-medium text-right">CTR</th>
+                                <th className="pb-2 font-medium text-right">Position</th>
+                              </>
+                            )}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {last14.map((r) => (
+                            <tr key={r.metric_date} className="border-b last:border-0">
+                              <td className="py-2 pr-4 whitespace-nowrap text-muted-foreground">
+                                {format(parseISO(r.metric_date), "MMM d, yyyy")}
+                              </td>
+                              {isGA ? (
+                                <>
+                                  <td className="py-2 pr-4 text-right">{formatNumber(r.sessions ?? 0)}</td>
+                                  <td className="py-2 pr-4 text-right">{formatNumber(r.users ?? 0)}</td>
+                                  <td className="py-2 pr-4 text-right">{formatNumber(r.pageviews ?? 0)}</td>
+                                  <td className="py-2 text-right">{((r.engagement_rate ?? 0) * 100).toFixed(1)}%</td>
+                                </>
+                              ) : (
+                                <>
+                                  <td className="py-2 pr-4 text-right">{formatNumber(r.clicks ?? 0)}</td>
+                                  <td className="py-2 pr-4 text-right">{formatNumber(r.impressions ?? 0)}</td>
+                                  <td className="py-2 pr-4 text-right">{((r.ctr ?? 0) * 100).toFixed(2)}%</td>
+                                  <td className="py-2 text-right">{(r.position ?? 0).toFixed(1)}</td>
+                                </>
+                              )}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })
           )}
         </>
       )}

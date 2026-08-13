@@ -8,6 +8,7 @@ import { processSequences } from "@/lib/inngest/functions/processSequences";
 import { teamChatTask } from "@/lib/inngest/functions/teamChatTask";
 import { weeklyOpportunityScan } from "@/lib/inngest/functions/weeklyOpportunityScan";
 import { autoRewritePost } from "@/lib/inngest/functions/autoRewritePost";
+import { syncSiteMetrics } from "@/lib/inngest/functions/syncSiteMetrics";
 
 /**
  * Inngest API handler — serves all registered functions.
@@ -19,5 +20,5 @@ import { autoRewritePost } from "@/lib/inngest/functions/autoRewritePost";
  */
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [publishScheduledPosts, monthlyBillingReset, syncInboxes, syncSocialInbox, processSequences, teamChatTask, weeklyOpportunityScan, autoRewritePost],
+  functions: [publishScheduledPosts, monthlyBillingReset, syncInboxes, syncSocialInbox, processSequences, teamChatTask, weeklyOpportunityScan, autoRewritePost, syncSiteMetrics],
 });

@@ -209,7 +209,18 @@ export async function GET(request: NextRequest) {
     // (site traffic isn't workspace-scoped). Degrades gracefully to an empty
     // series before the traffic_snapshots migration has been applied.
     let trafficRows: unknown[] = [];
+    let hasTrafficData = false;
     try {
+      // Any snapshots for this tenant at all (ignoring the date range) so the
+      // UI can say "no data in this range" instead of "connect a source" when
+      // the connection + rows exist but fall outside the selected dates.
+      const { data: anyRows } = await supabase
+        .from("traffic_snapshots")
+        .select("id")
+        .eq("tenant_id", tenantId)
+        .limit(1);
+      if (anyRows && anyRows.length > 0) hasTrafficData = true;
+
       const { data, error } = await supabase
         .from("traffic_snapshots")
         .select("provider, resource, metric_date, sessions, users, pageviews, engagement_rate, clicks, impressions, ctr, position, fetched_at")
@@ -255,6 +266,7 @@ export async function GET(request: NextRequest) {
       posts: enriched,
       workspaceId: workspaceId ?? null,
       traffic: trafficRows ?? [],
+      hasTrafficData,
       summary: {
         totalPosts,
         totalLikes,

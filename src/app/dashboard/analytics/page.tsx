@@ -105,6 +105,7 @@ interface AnalyticsResponse {
   posts: AnalyticsPost[];
   workspaceId: string | null;
   traffic: TrafficRow[];
+  hasTrafficData: boolean;
   summary: AnalyticsSummary;
 }
 
@@ -612,19 +613,46 @@ export default function AnalyticsPage() {
           ) : (data.traffic ?? []).length === 0 ? (
             <Card>
               <CardContent className="py-16 text-center">
-                <p className="text-lg font-semibold">No site traffic yet</p>
-                <p className="text-sm text-muted-foreground mt-1 max-w-md mx-auto">
-                  Connect Google Analytics 4 and Search Console under{" "}
-                  <span className="font-medium">Manage → Connections</span> and pick
-                  the property / site to track. The daily sync (Inngest) then fills
-                  this view with real numbers.
-                </p>
-                <a
-                  href="/dashboard/connections"
-                  className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline mt-4"
-                >
-                  <BarChart3 className="size-4" /> Open Connections
-                </a>
+                {data.hasTrafficData ? (
+                  <>
+                    <p className="text-lg font-semibold">
+                      No traffic data in this date range
+                    </p>
+                    <p className="text-sm text-muted-foreground mt-1 max-w-md mx-auto">
+                      Your connected sources have synced traffic data, but none falls
+                      between the selected dates. Try a wider range.
+                    </p>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="mt-4"
+                      onClick={() => {
+                        const d = new Date();
+                        d.setDate(d.getDate() - 90);
+                        setStartDate(d.toISOString().slice(0, 10));
+                        setEndDate(new Date().toISOString().slice(0, 10));
+                      }}
+                    >
+                      Use last 90 days
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-lg font-semibold">No site traffic yet</p>
+                    <p className="text-sm text-muted-foreground mt-1 max-w-md mx-auto">
+                      Connect Google Analytics 4 and Search Console under{" "}
+                      <span className="font-medium">Manage → Connections</span> and pick
+                      the property / site to track. The daily sync (Inngest) then fills
+                      this view with real numbers.
+                    </p>
+                    <a
+                      href="/dashboard/connections"
+                      className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline mt-4"
+                    >
+                      <BarChart3 className="size-4" /> Open Connections
+                    </a>
+                  </>
+                )}
               </CardContent>
             </Card>
           ) : (

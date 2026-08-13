@@ -51,7 +51,7 @@ async function getAccessToken(conn) {
   return { accessToken: fresh.access_token, fresh };
 }
 
-async function gaDaily(accessToken, propertyId, days = 30) {
+async function gaDaily(accessToken, propertyId, days = 90) {
   const res = await fetch(
     `https://analyticsdata.googleapis.com/v1beta/properties/${encodeURIComponent(propertyId)}:runReport`,
     { method: "POST", headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
@@ -72,7 +72,7 @@ async function gaDaily(accessToken, propertyId, days = 30) {
   });
 }
 
-async function scDaily(accessToken, siteUrl, days = 30) {
+async function scDaily(accessToken, siteUrl, days = 90) {
   const res = await fetch(
     `https://www.googleapis.com/webmasters/v3/sites/${encodeURIComponent(siteUrl)}/searchAnalytics/query`,
     { method: "POST", headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },

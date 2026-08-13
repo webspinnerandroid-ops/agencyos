@@ -33,7 +33,7 @@ function dateNDaysAgo(days: number): string {
 export async function fetchGADailyMetrics(
   accessToken: string,
   propertyId: string,
-  days = 30
+  days = 90
 ): Promise<GADailyMetrics[]> {
   const res = await fetch(
     `https://analyticsdata.googleapis.com/v1beta/properties/${encodeURIComponent(propertyId)}:runReport`,
@@ -92,7 +92,7 @@ export async function fetchGADailyMetrics(
 export async function fetchSCDailyMetrics(
   accessToken: string,
   siteUrl: string,
-  days = 30
+  days = 90
 ): Promise<SCDailyMetrics[]> {
   const encodedSite = encodeURIComponent(siteUrl);
   const res = await fetch(

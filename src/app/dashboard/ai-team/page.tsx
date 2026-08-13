@@ -106,9 +106,8 @@ export default function AiTeamPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col md:flex-row md:items-center gap-8 justify-between rounded-lg border bg-card p-6">
-        {/* Left column: title, text, button */}
-        <div className="md:w-2/5 space-y-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <Bot className="size-6 text-primary" /> AI Team
           </h1>
@@ -116,23 +115,14 @@ export default function AiTeamPage() {
             Your team of AI employees. Each one automates a function of your agency — hire
             the ones you need and open their tools from the card.
           </p>
-          <a
-            href="/dashboard/ai-team/chat"
-            className="inline-flex items-center gap-1.5 rounded-md bg-primary text-primary-foreground px-3 py-2 text-sm font-medium hover:bg-primary/90 transition-colors"
-          >
-            <MessagesSquare className="size-4" />
-            Team Chat
-          </a>
         </div>
-
-        {/* Right column: team photo */}
-        <div className="md:w-2/5 shrink-0">
-          <img
-            src="/team/team.png"
-            alt="Your AI team"
-            className="w-full h-auto rounded-lg border"
-          />
-        </div>
+        <a
+          href="/dashboard/ai-team/chat"
+          className="inline-flex items-center gap-1.5 rounded-md bg-primary text-primary-foreground px-3 py-2 text-sm font-medium hover:bg-primary/90 transition-colors"
+        >
+          <MessagesSquare className="size-4" />
+          Team Chat
+        </a>
       </div>
 
       {feedback && (

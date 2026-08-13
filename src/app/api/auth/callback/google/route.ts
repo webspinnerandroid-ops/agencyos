@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
-import { exchangeGoogleCode, encodeTokenBundle } from "@/lib/connections";
+import { exchangeGoogleCode, encodeTokenBundle, siteUrl } from "@/lib/connections";
 
 export async function GET(request: NextRequest) {
   const url = new URL(request.url);
@@ -9,7 +9,7 @@ export async function GET(request: NextRequest) {
   const error = url.searchParams.get("error");
 
   if (error || !code || !state) {
-    return NextResponse.redirect(new URL("/dashboard/connections?error=oauth_denied", request.url));
+    return NextResponse.redirect(`${siteUrl()}/dashboard/connections?error=oauth_denied`);
   }
 
   const supabase = createClient(
@@ -25,7 +25,7 @@ export async function GET(request: NextRequest) {
     .single();
 
   if (stateErr || !stateRow) {
-    return NextResponse.redirect(new URL("/dashboard/connections?error=invalid_state", request.url));
+    return NextResponse.redirect(`${siteUrl()}/dashboard/connections?error=invalid_state`);
   }
 
   try {
@@ -95,7 +95,10 @@ export async function GET(request: NextRequest) {
           : isConnectionsPlatform
             ? `/dashboard/connections?success=${stateRow.platform}_connected`
             : "/dashboard/settings/social?success=connected";
-    return NextResponse.redirect(new URL(redirectTarget, request.url));
+    // Absolute redirect so the browser lands on the canonical site even if
+    // this callback was served by a dev/local instance (which used to strand
+    // the user on localhost after a successful connection).
+    return NextResponse.redirect(`${siteUrl()}${redirectTarget}`);
   } catch (err) {
     console.error("[google-callback] Error:", err);
     const fallback =
@@ -105,6 +108,6 @@ export async function GET(request: NextRequest) {
         : stateRow.platform === "google_business"
           ? "/dashboard/settings/gbp?error=server_error"
           : "/dashboard/settings/social?error=server_error";
-    return NextResponse.redirect(new URL(fallback, request.url));
+    return NextResponse.redirect(`${siteUrl()}${fallback}`);
   }
 }

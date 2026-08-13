@@ -38,7 +38,7 @@ export default async function DashboardPage({ searchParams }: { searchParams?: P
   // detail modal is opened (see recent-content).
   let postsQuery = db
     .from("posts")
-    .select("id, status, ai_generated, scheduled_at, title, type, platform, seo_score, cms_published_at, cms_slug")
+    .select("id, status, ai_generated, scheduled_at, title, type, platform, seo_score, aeo_geo_score, cms_published_at, cms_slug")
     .eq("tenant_id", tenantId ?? "")
     .order("created_at", { ascending: false })
     .limit(6);

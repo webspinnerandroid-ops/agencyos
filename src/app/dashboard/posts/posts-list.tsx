@@ -15,6 +15,7 @@ import ScoreBadge from "@/components/ScoreBadge";
 import {
   getPostPreview,
   getSeoScore,
+  getAeoGeoScore,
   statusBadgeClass,
   formatShortDate,
   type PostRow,
@@ -209,7 +210,10 @@ export default function PostsList({ posts }: { posts: PostRow[] }) {
                         </span>
                       )}
                       {preview.type === "blog" && (
-                        <ScoreBadge score={getSeoScore(post)} />
+                        <>
+                          <ScoreBadge score={getSeoScore(post)} />
+                          <ScoreBadge score={getAeoGeoScore(post)} label="AEO/GEO" />
+                        </>
                       )}
                       {post.cms_published_at && (
                         <a

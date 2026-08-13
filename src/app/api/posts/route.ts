@@ -30,6 +30,7 @@ export async function GET(request: NextRequest) {
         revision_reason,
         seo_score,
         seo_checks,
+        aeo_geo_score,
         post_platforms (
           id,
           social_account_id,

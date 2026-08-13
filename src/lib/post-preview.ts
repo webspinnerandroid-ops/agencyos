@@ -16,6 +16,8 @@ export interface PostRow {
   /** Denormalized Rank Math-style on-page SEO score (migration 025). */
   seo_score?: number | null;
   seo_checks?: unknown;
+  /** Denormalized AEO/GEO readiness score (migration 039/060). */
+  aeo_geo_score?: number | null;
   /** Set when the post was published to the tenant's own CMS website. */
   cms_published_at?: string | null;
   cms_slug?: string | null;
@@ -56,6 +58,17 @@ export function getSeoScore(post: PostRow): number | null {
   const c = parseContent(post.content) ?? {};
   const seo = c.seo as { score?: number } | undefined;
   return typeof seo?.score === "number" ? seo.score : null;
+}
+
+/**
+ * Resolves a post's AEO/GEO readiness score from either the denormalized
+ * column or the nested content.aeoGeo payload (whichever the row carries).
+ */
+export function getAeoGeoScore(post: PostRow): number | null {
+  if (typeof post.aeo_geo_score === "number") return post.aeo_geo_score;
+  const c = parseContent(post.content) ?? {};
+  const aeo = c.aeoGeo as { score?: number } | undefined;
+  return typeof aeo?.score === "number" ? aeo.score : null;
 }
 
 export function getPostPreview(post: PostRow): PostPreview {

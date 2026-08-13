@@ -201,10 +201,23 @@ export default function SubscriptionsPage() {
         return;
       }
       const ok = (data.results ?? []).filter((r: any) => r.ok).length;
-      const bad = (data.results ?? []).filter((r: any) => !r.ok);
+      const bad = (data.results ?? []).filter((r: any) => !r.ok && !r.skipped);
+      const skipped = (data.results ?? []).filter((r: any) => r.skipped);
       setFeedback({
         type: bad.length ? "error" : "success",
-        message: `Checked ${ok} provider(s)${bad.length ? `; ${bad.length} failed: ${bad.map((r: any) => `${r.provider} (${r.error ?? "error"})`).join(", ")}` : ""}.`,
+        message:
+          `Checked ${ok} configured provider(s)` +
+          (skipped.length
+            ? `; skipped ${skipped.length} (no API key configured: ${skipped
+                .map((r: any) => r.provider)
+                .join(", ")})`
+            : "") +
+          (bad.length
+            ? `; ${bad.length} failed: ${bad
+                .map((r: any) => `${r.provider} (${r.error ?? "error"})`)
+                .join(", ")}`
+            : "") +
+          ".",
       });
       load();
     } catch (err: any) {
@@ -238,7 +251,8 @@ export default function SubscriptionsPage() {
           </h1>
           <p className="text-muted-foreground mt-1">
             Every external service this system depends on — what it costs, when it renews,
-            what&apos;s owing, and how much credit is left. Stripe and Resend auto-check;
+            what&apos;s owing, and how much credit is left. Only providers with an API key
+            configured are queried — the rest show &ldquo;no key&rdquo; and are skipped.
             the rest update from their portals.
           </p>
         </div>

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantId, requireRole, getUserEmail } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
-import { checkAndAlertRow } from "@/lib/subscription-check";
+import { checkAndAlertRow, ENV_KEY_FOR_CHECK } from "@/lib/subscription-check";
 
 // ------------------------------------------------------------------
 // Shape / validation
@@ -124,11 +124,30 @@ export async function POST(request: NextRequest) {
         const { data: rows } = await supabase
           .from("subscription_registry")
           .select("*");
-        const results: { provider: string; ok: boolean; detail?: string; error?: string; alertSent?: boolean }[] = [];
+        const results: {
+          provider: string;
+          ok: boolean;
+          skipped?: boolean;
+          detail?: string;
+          error?: string;
+          alertSent?: boolean;
+        }[] = [];
         const email = await getUserEmail();
         for (const row of rows ?? []) {
           const checkType = row.auto_check;
           if (!checkType || checkType === "manual") continue;
+          // Only query providers whose API key is actually configured on the
+          // server — never report an unconfigured provider as a failure.
+          const envKey = ENV_KEY_FOR_CHECK[checkType];
+          if (!envKey || !process.env[envKey]) {
+            results.push({
+              provider: row.provider,
+              ok: false,
+              skipped: true,
+              detail: `No ${envKey ?? "API key"} configured — not queried`,
+            });
+            continue;
+          }
           const r = await checkAndAlertRow(supabase, row, email);
           results.push({
             provider: row.provider,

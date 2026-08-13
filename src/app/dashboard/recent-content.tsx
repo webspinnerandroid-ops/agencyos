@@ -5,7 +5,13 @@ import { FileText, MessageCircle, Clock, Trash2 } from "lucide-react";
 import PublishButton from "@/components/PublishButton";
 import PostDetailModal from "@/components/PostDetailModal";
 import ScoreBadge from "@/components/ScoreBadge";
-import { getPostPreview, getSeoScore, statusBadgeClass, type PostRow } from "@/lib/post-preview";
+import {
+  getPostPreview,
+  getSeoScore,
+  getAeoGeoScore,
+  statusBadgeClass,
+  type PostRow,
+} from "@/lib/post-preview";
 
 export function RecentContentList({ posts: initialPosts }: { posts: PostRow[] }) {
   const [posts, setPosts] = useState<PostRow[]>(initialPosts);
@@ -89,7 +95,10 @@ export function RecentContentList({ posts: initialPosts }: { posts: PostRow[] })
                       </span>
                     )}
                     {preview.type === "blog" && (
-                      <ScoreBadge score={getSeoScore(post)} />
+                      <>
+                        <ScoreBadge score={getSeoScore(post)} />
+                        <ScoreBadge score={getAeoGeoScore(post)} label="AEO/GEO" />
+                      </>
                     )}
                     {post.cms_published_at && (
                       <a

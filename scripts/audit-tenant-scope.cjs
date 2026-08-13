@@ -137,6 +137,20 @@ const IGNORE = new Set([
   // static regex) plus assertTenantOwner on the by-id lookup. Same verified
   // pattern as the approve route above.
   "src/app/api/seo/campaigns/[id]/docusign/route.ts",
+  // campaign sign-request route: same verified pattern as the docusign
+  // route — fetch + update go through tenantScopedClient (runtime tenant
+  // filter invisible to the static regex) plus assertTenantOwner on the
+  // by-id lookup.
+  "src/app/api/seo/campaigns/[id]/sign-request/route.ts",
+  // signing.ts (in-house e-signature): the campaign lookups by id here are
+  // scoped upstream by callers — the agency route fetches through
+  // tenantScopedClient + assertTenantOwner before calling createSignRequest,
+  // and the public sign page/routes are gated by the unguessable sign token
+  // (same trust model as the docusign Connect webhook: the token is the
+  // secret, and every write is keyed to the row's own id, never an
+  // attacker-supplied tenant_id). The finalize write mirrors exactly what the
+  // allowlisted docusign webhook did.
+  "src/lib/signing.ts",
   // campaign re-run-audit route: same verified pattern — fetch + update go
   // through tenantScopedClient (runtime tenant filter invisible to the static
   // regex) plus assertTenantOwner on the by-id lookup. The rescore helper it

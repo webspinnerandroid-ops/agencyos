@@ -1,20 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
-import {
-  isDocuSignConfigured,
-  createProposalEnvelope,
-  getEnvelopeStatus,
-  buildProposalHtml,
-} from "@/lib/docusign";
+import { createSignRequest } from "@/lib/signing";
 
 /**
  * POST /api/seo/public-proposal/[campaignId]/sign?clientId=<uuid>
  *
  * Client-facing. Lets the client, who opened the proposal share link
  * (gated by the clientId UUID — the same trust model as the public proposal
- * page), approve the tier and sign it with DocuSign right away. Once DocuSign
- * reports completion, the Connect webhook marks it signed and auto-starts the
- * campaign.
+ * page), approve the tier and sign it right away on the in-house signing page
+ * (/sign/[token]). Once signed, the agreement is archived to the workspace
+ * storage and the campaign auto-starts.
  *
  * GET returns the current signing status so the page can show
  * Sent / Signed states.
@@ -25,7 +20,7 @@ async function loadCampaign(campaignId: string, clientId: string) {
   const { data: campaign, error } = await supabase
     .from("seo_campaigns")
     .select(
-      "id, tenant_id, client_id, url, tier_name, tier_price, location, campaign_json, status, docusign_envelope_id, docusign_status, docusign_signed_at, signer_name, signer_email"
+      "id, tenant_id, workspace_id, client_id, url, tier_name, tier_price, location, campaign_json, status, docusign_status, docusign_signed_at, signer_name, signer_email, signed_document_url"
     )
     .eq("id", campaignId)
     .single();
@@ -57,16 +52,6 @@ export async function POST(
       );
     }
 
-    if (!isDocuSignConfigured()) {
-      return NextResponse.json(
-        {
-          error:
-            "E-signature is not enabled for this agency yet. Contact your agency to approve the proposal directly.",
-        },
-        { status: 501 }
-      );
-    }
-
     const { campaign, error } = await loadCampaign(campaignId, clientId);
     if (error || !campaign) {
       return NextResponse.json({ error }, { status: 404 });
@@ -75,111 +60,62 @@ export async function POST(
       return NextResponse.json({
         success: true,
         status: "completed",
-        signingUrl: null,
+        signUrl: null,
         signedAt: campaign.docusign_signed_at,
+        signedDocumentUrl: campaign.signed_document_url,
       });
     }
-    if (campaign.docusign_envelope_id && campaign.docusign_status !== "declined" && campaign.docusign_status !== "voided") {
-      const live = await getEnvelopeStatus(campaign.docusign_envelope_id);
+    // A live sign request already exists — return its link instead of
+    // creating a duplicate.
+    const supabase = await createServiceClient();
+    const { data: existing } = await supabase
+      .from("sign_requests")
+      .select("token, status, signed_at, signed_document_url")
+      .eq("campaign_id", campaignId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (existing && existing.status !== "signed") {
+      const { signUrlForToken } = await import("@/lib/signing");
       return NextResponse.json({
         success: true,
-        status: live.status,
-        signingUrl: null,
+        status: existing.status,
+        signUrl: signUrlForToken(existing.token),
+        signedAt: existing.signed_at,
+        signedDocumentUrl: existing.signed_document_url,
       });
     }
 
-    const body = (await request.json().catch(() => ({}))) as {
-      signerName?: string;
-      signerEmail?: string;
-    };
-    const supabase = await createServiceClient();
     const { data: client } = await supabase
       .from("clients")
       .select("name, email")
       .eq("id", clientId)
       .single();
-    const signerName = body.signerName?.trim() || client?.name || "Client";
-    const signerEmail = body.signerEmail?.trim() || client?.email || "";
+    const signerName = client?.name || "Client";
+    const signerEmail = client?.email || "";
 
-    const json = (campaign.campaign_json ?? {}) as {
-      tierName?: string;
-      tierPrice?: number;
-      executiveSummary?: string;
-      targetKeywords?: {
-        keyword: string;
-        searchVolume: number;
-        difficulty: string;
-        intent: string;
-      }[];
-      deliverables?: string[];
-      contentCalendar?: {
-        month: number;
-        focusArea: string;
-        contentPieces?: { type: string; title: string }[];
-      }[];
-    };
-
-    const origin =
-      process.env.DOCUSIGN_APP_URL ??
-      request.nextUrl.origin ??
-      "http://localhost:3000";
-
-    const html = buildProposalHtml({
-      title: `SEO Proposal — ${json.tierName ?? campaign.tier_name ?? "SEO"}`,
-      tierName: json.tierName ?? campaign.tier_name ?? "SEO Plan",
-      price: json.tierPrice ?? campaign.tier_price ?? null,
-      url: campaign.url ?? "",
-      location: campaign.location ?? null,
-      executiveSummary: json.executiveSummary ?? "",
-      keywords: Array.isArray(json.targetKeywords)
-        ? json.targetKeywords.map((k) => ({
-            keyword: k.keyword ?? "",
-            searchVolume: k.searchVolume ?? 0,
-            difficulty: k.difficulty ?? "medium",
-            intent: k.intent ?? "informational",
-          }))
-        : [],
-      deliverables: Array.isArray(json.deliverables) ? json.deliverables : [],
-      calendar: Array.isArray(json.contentCalendar)
-        ? json.contentCalendar.map((m) => ({
-            month: m.month,
-            focusArea: m.focusArea ?? "",
-            pieces: Array.isArray(m.contentPieces) ? m.contentPieces : [],
-          }))
-        : [],
+    const { signUrl } = await createSignRequest({
+      tenantId: campaign.tenant_id,
+      campaignId: campaign.id,
+      workspaceId: campaign.workspace_id ?? null,
+      clientId: campaign.client_id ?? null,
       signerName,
-      signerEmail: signerEmail || "",
-      preparedBy: "Agency OS",
+      signerEmail,
+      createdBy: null,
+      sendEmail: false, // the client is already on the page
     });
-
-    const created = await createProposalEnvelope({
-      signerName,
-      signerEmail: signerEmail || "client@example.invalid",
-      title: `SEO Proposal — ${json.tierName ?? campaign.tier_name ?? "SEO"}`,
-      html,
-      returnUrl: `${origin}/seo/proposal?clientId=${clientId}&signed=1`,
-    });
-
-    await supabase
-      .from("seo_campaigns")
-      .update({
-        docusign_envelope_id: created.envelopeId,
-        docusign_status: created.status,
-        signer_name: signerName,
-        signer_email: signerEmail || null,
-      })
-      .eq("id", campaignId);
 
     return NextResponse.json({
       success: true,
-      status: created.status,
-      signingUrl: created.signingUrl,
-      envelopeId: created.envelopeId,
+      status: "sent",
+      signUrl,
+      signerName,
+      signerEmail,
     });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Internal server error";
-    console.error("[docusign] Public sign failed:", message);
+    console.error("[public-proposal] Sign failed:", message);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
@@ -202,6 +138,7 @@ export async function GET(
       status: campaign.docusign_status ?? "unsigned",
       signedAt: campaign.docusign_signed_at,
       signerName: campaign.signer_name,
+      signedDocumentUrl: campaign.signed_document_url,
     });
   } catch (error) {
     const message =

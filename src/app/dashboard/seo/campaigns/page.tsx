@@ -225,6 +225,10 @@ export default function SeoCampaignsPage() {
   const [loadingPast, setLoadingPast] = useState(true);
   const [startingCampaignId, setStartingCampaignId] = useState<string | null>(null);
   const [sendingSigId, setSendingSigId] = useState<string | null>(null);
+  const [sentSignLink, setSentSignLink] = useState<{
+    campaignId: string;
+    url: string;
+  } | null>(null);
   const [startDialogCampaign, setStartDialogCampaign] = useState<string | null>(null);
   const [startIncludeWebsite, setStartIncludeWebsite] = useState(false);
   const [startCreateWorkspace, setStartCreateWorkspace] = useState(true);
@@ -470,14 +474,14 @@ export default function SeoCampaignsPage() {
   }, []);
 
   // ------------------------------------------------------------------
-  // Send a proposal for DocuSign signature. If the client has no email on
-  // file, ask for it once so the envelope can be created.
+  // Send a proposal for signature (in-house signing link). If the client has
+  // no email on file, ask for it once so the link can be emailed.
   const handleSendForSignature = useCallback(async (campaign: StoredCampaign) => {
     setSendingSigId(campaign.id);
     setError(null);
     try {
       let body: Record<string, string> = {};
-      let res = await fetch(`/api/seo/campaigns/${campaign.id}/docusign`, {
+      let res = await fetch(`/api/seo/campaigns/${campaign.id}/sign-request`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -488,7 +492,7 @@ export default function SeoCampaignsPage() {
       // No signer identity on file → prompt once and retry with the details.
       if (!res.ok && (data.error ?? "").includes("No signer identity")) {
         const signerEmail = window.prompt(
-          "DocuSign needs the client's email to send the proposal for signature:",
+          "Enter the client's email to send the signing link:",
           campaign.signer_email ?? ""
         );
         if (!signerEmail || !signerEmail.includes("@")) {
@@ -496,7 +500,7 @@ export default function SeoCampaignsPage() {
           return;
         }
         body = { signerEmail, signerName: campaign.signer_name ?? "" };
-        res = await fetch(`/api/seo/campaigns/${campaign.id}/docusign`, {
+        res = await fetch(`/api/seo/campaigns/${campaign.id}/sign-request`, {
           method: "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
@@ -510,10 +514,10 @@ export default function SeoCampaignsPage() {
         return;
       }
 
-      // Open the one-time embedded signing URL in a new tab; the Connect
-      // webhook flips the status to signed when the client completes.
-      if (data.signingUrl) {
-        window.open(data.signingUrl, "_blank");
+      // Store the link so the agency can copy/share it manually if the
+      // client's email didn't receive it.
+      if (data.signUrl) {
+        setSentSignLink({ campaignId: campaign.id, url: data.signUrl });
       }
       setCampaigns((prev) =>
         prev.map((c) =>
@@ -974,8 +978,8 @@ export default function SeoCampaignsPage() {
                               : campaign.docusign_status === "declined"
                               ? "Signature declined"
                               : campaign.docusign_status === "voided"
-                              ? "Envelope voided"
-                              : "DocuSign: sent — awaiting signature"}
+                              ? "Signature voided"
+                              : "Signing link sent — awaiting signature"}
                           </span>
                           {campaign.docusign_status !== "completed" && (
                             <button
@@ -985,6 +989,24 @@ export default function SeoCampaignsPage() {
                               Refresh status
                             </button>
                           )}
+                        </div>
+                      )}
+
+                      {/* Copiable signing link after sending */}
+                      {sentSignLink && sentSignLink.campaignId === campaign.id && (
+                        <div className="mb-3 flex items-center gap-2 text-xs">
+                          <span className="text-muted-foreground">Signing link:</span>
+                          <button
+                            onClick={() => {
+                              navigator.clipboard
+                                ?.writeText(sentSignLink.url)
+                                .catch(() => {});
+                            }}
+                            className="text-primary hover:underline truncate max-w-[260px]"
+                            title="Click to copy"
+                          >
+                            {sentSignLink.url}
+                          </button>
                         </div>
                       )}
 
@@ -1024,7 +1046,7 @@ export default function SeoCampaignsPage() {
                           title={
                             campaign.docusign_status === "completed"
                               ? "This proposal is already signed."
-                              : "Send this proposal to the client for DocuSign e-signature — the campaign auto-starts once signed."
+                              : "Send this proposal to the client for e-signature — the campaign auto-starts once signed."
                           }
                         >
                           {sendingSigId === campaign.id ? (

@@ -16,6 +16,7 @@ interface ProviderRow {
   tenant_key_count: number;
   balance_usd: number | null;
   currency: string;
+  balance_note?: string;
   low_threshold_usd: number;
   checked_at: string | null;
   low: boolean;
@@ -94,8 +95,16 @@ export default function AdminApisPage() {
       }
       setMessage(
         data.results?.length
-          ? `Checked: ${data.results.map((r: any) => `${r.provider}=${r.balance != null ? `$${r.balance} ${r.currency ?? ""}` : "n/a"}`).join(" · ")}`
-          : "No balance-checkable providers configured (DeepSeek/OpenAI)."
+          ? `Checked ${data.results.length} configured provider(s): ${data.results
+              .map((r: any) =>
+                r.balance != null
+                  ? `${r.provider}=$${r.balance} ${r.currency ?? ""}`
+                  : r.note
+                  ? `${r.provider} — ${r.note}`
+                  : `${r.provider}=n/a`
+              )
+              .join(" · ")}`
+          : "No providers are configured yet — add API keys (platform env or Settings → AI) first."
       );
       load();
     } finally {
@@ -191,7 +200,8 @@ export default function AdminApisPage() {
               Check balances
             </Button>
             <span className="text-xs text-muted-foreground">
-              Live balance only for DeepSeek &amp; OpenAI (keys must allow billing access). Others show last-known.
+              Only providers with an API configured are listed and queried. Providers without a balance
+              endpoint say so next to their name — no invented numbers.
             </span>
           </div>
 
@@ -218,6 +228,11 @@ export default function AdminApisPage() {
                         <span>{p.tenant_key_count > 0 ? `${p.tenant_key_count} tenant key${p.tenant_key_count === 1 ? "" : "s"}` : "No tenant keys"}</span>
                         {p.checked_at && <span>Checked {new Date(p.checked_at).toLocaleString()}</span>}
                       </div>
+                      {p.balance_note && p.balance_usd == null && (
+                        <p className="text-xs mt-1.5 text-amber-600 dark:text-amber-400">
+                          {p.balance_note}
+                        </p>
+                      )}
                     </div>
                     <div className="flex items-center gap-3 shrink-0 flex-wrap">
                       {p.balance_usd != null ? (
@@ -225,7 +240,7 @@ export default function AdminApisPage() {
                           ${Number(p.balance_usd).toFixed(2)} <span className="text-xs font-normal text-muted-foreground">{p.currency}</span>
                         </span>
                       ) : (
-                        <span className="text-sm text-muted-foreground">balance n/a</span>
+                        <span className="text-sm text-muted-foreground">No balance available</span>
                       )}
                       <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
                         Low alert &lt;

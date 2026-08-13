@@ -172,9 +172,9 @@ export default function PublicSeoProposalPage() {
     };
   }, [selectedCampaign, clientId]);
 
-  // Approve & sign this tier with DocuSign. Opens the embedded signing URL;
-  // once the client completes, the Connect webhook marks the proposal signed
-  // and the agency's campaign auto-starts.
+  // Approve & sign this tier. The signing page (/sign/[token]) lets the
+  // client review the terms and sign (typed or drawn); once signed, the
+  // agreement is archived and the campaign auto-starts.
   const handleSign = async () => {
     if (!selectedCampaign || !clientId) return;
     setSigning(true);
@@ -190,15 +190,17 @@ export default function PublicSeoProposalPage() {
       );
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setSignError(data.error ?? "Could not start e-signature.");
+        setSignError(data.error ?? "Could not start signing.");
         return;
       }
       setSignStatus(data.status ?? "sent");
-      if (data.signingUrl) {
-        window.open(data.signingUrl, "_blank");
+      if (data.signUrl) {
+        // Full signing flow in the same tab; the proposal page refreshes its
+        // status when the client comes back.
+        window.location.href = data.signUrl;
       }
     } catch {
-      setSignError("Network error while starting e-signature.");
+      setSignError("Network error while starting signing.");
     } finally {
       setSigning(false);
     }
@@ -395,7 +397,7 @@ export default function PublicSeoProposalPage() {
           </div>
         </div>
 
-        {/* Approve & Sign (DocuSign) */}
+        {/* Approve & Sign */}
         <Card className="p-6 border-primary/40">
           <h2 className="text-lg font-semibold mb-2">Approve & Start</h2>
           <p className="text-sm text-muted-foreground mb-4">
@@ -410,7 +412,7 @@ export default function PublicSeoProposalPage() {
                     : ""
                 }. Your campaign is now being set up.`
               : signStatus && signStatus !== "unsigned"
-              ? "This proposal has been sent for your signature. Complete the DocuSign document to approve it — your campaign starts automatically once signed."
+              ? "This proposal has been sent for your signature. Complete the signing page to approve it — your campaign starts automatically once signed."
               : "Approve this plan and sign it electronically. Once you sign, your agency is authorized to start the campaign right away."}
           </p>
           {signStatus === "completed" ? (
@@ -434,12 +436,12 @@ export default function PublicSeoProposalPage() {
                 {signing ? (
                   <>
                     <Loader2 className="size-4 animate-spin mr-2" />
-                    Opening secure signing…
+                    Preparing signing page…
                   </>
                 ) : signStatus && signStatus !== "unsigned" ? (
                   "Complete your signature"
                 ) : (
-                  "Approve & Sign with DocuSign"
+                  "Approve & Sign"
                 )}
               </Button>
               {signStatus && signStatus !== "unsigned" && signStatus !== "completed" && (

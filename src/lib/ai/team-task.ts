@@ -51,6 +51,7 @@ import {
   appendRelatedReading,
 } from "@/lib/content-links";
 import { scoreContent } from "@/lib/rankmath";
+import { scoreAeoGeo } from "@/lib/aeo-geo";
 import { incrementUsage } from "@/lib/usage";
 import { checkTrialContentLimit } from "@/lib/trial-limits";
 import { checkUsageLimit } from "@/lib/plan-limits";
@@ -466,6 +467,16 @@ async function cherylGenerateBlog(
     internalUrls: linkablePages.map((p) => p.url),
   });
 
+  // AEO/GEO readiness (free heuristic) — persisted with the post so the SEO
+  // analytics tab and post list show it without recomputing.
+  const aeoGeo = scoreAeoGeo({
+    title: blogPost.title,
+    metaDescription: blogPost.metaDescription,
+    body,
+    keyword: primaryKeyword,
+    entities: [],
+  });
+
   // Eval loop: run the finished blog through Cheryl's full criteria including
   // the real-engine parity check (SEO + AEO/GEO, 2000+ word floor) so "did
   // Cheryl maximize the scores" is measurable on every generated post.
@@ -506,6 +517,14 @@ async function cherylGenerateBlog(
           wordCount: seo.wordCount,
           checks: seo.checks,
         },
+        aeoGeo: {
+          score: aeoGeo.total,
+          aeoScore: aeoGeo.aeoScore,
+          geoScore: aeoGeo.geoSscore,
+          grade: aeoGeo.grade,
+          checks: aeoGeo.checks,
+          qaPairs: aeoGeo.qaPairs,
+        },
         eval: {
           verdict: evalResult.verdict,
           score: evalResult.score,
@@ -519,6 +538,7 @@ async function cherylGenerateBlog(
       status: "draft",
       created_by: null,
       ai_generated: true,
+      aeo_geo_score: aeoGeo.total,
     })
     .select("id")
     .single();

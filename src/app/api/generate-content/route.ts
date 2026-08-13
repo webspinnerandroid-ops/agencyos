@@ -32,6 +32,7 @@ import {
   type GeneratedBlogImage,
 } from "@/lib/blog-images";
 import { scoreContent, type RankMathResult } from "@/lib/rankmath";
+import { scoreAeoGeo } from "@/lib/aeo-geo";
 import { researchTopic, type TopicResearch } from "@/lib/ai/research";
 
 // Known social platforms
@@ -545,6 +546,25 @@ export async function POST(request: NextRequest) {
       checks: seoScore.checks,
     };
 
+    // AEO/GEO readiness (free heuristic engine — no LLM cost on the
+    // high-volume path). Persisted with the post so the SEO analytics tab and
+    // post list can show it without recomputing.
+    const aeoGeo = scoreAeoGeo({
+      title: blogPost.title,
+      metaDescription: blogPost.metaDescription,
+      body: bodyWithImages,
+      keyword: primaryKeyword,
+      entities: [],
+    });
+    const aeoGeoPayload = {
+      score: aeoGeo.total,
+      aeoScore: aeoGeo.aeoScore,
+      geoScore: aeoGeo.geoSscore,
+      grade: aeoGeo.grade,
+      checks: aeoGeo.checks,
+      qaPairs: aeoGeo.qaPairs,
+    };
+
     // Safety net: if the body still mentions IMAGE_URL tokens the image
     // pipeline didn't produce enough images — flag it loudly so it's never
     // silently shipped to a published post.
@@ -698,10 +718,12 @@ Use the above context to craft a compelling, platform-optimized caption that dri
               ? { questions: research.questions, trends: research.trends, source: research.source }
               : null,
             seo: seoPayload,
+            aeoGeo: aeoGeoPayload,
           },
           status: "draft",
           created_by: userId,
           ai_generated: true,
+          aeo_geo_score: aeoGeo.total,
         })
         .select("id")
         .single();

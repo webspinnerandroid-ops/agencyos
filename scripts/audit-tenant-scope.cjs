@@ -94,6 +94,13 @@ const IGNORE = new Set([
   // Client-scoped by design (client boundary, not tenant)
   "src/app/api/seo/client-proposals/route.ts",
   "src/app/api/seo/public-proposal/route.ts",
+  // public-audit route: public by design — the share-link UUID is the
+  // secret (same trust model as public-proposal). Single-row lookup by
+  // unguessable id; the response returns only that row's audit data (url,
+  // tier, audit_json) — never a list, never tenant_id/client_id. The audit
+  // data itself may contain the tenant's site content by design since the
+  // link is only handed to that agency's client.
+  "src/app/api/seo/public-audit/[id]/route.ts",
   // approve route: client-path fetch checks client_id immediately after;
   // agency-path fetch goes through tenantScopedClient (runtime-enforced
   // filter the static regex can't see through the proxy). Both verified.

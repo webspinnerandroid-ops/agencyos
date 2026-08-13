@@ -213,6 +213,7 @@ export default function SeoCampaignsPage() {
   const [editingTier, setEditingTier] = useState<StoredCampaign | null>(null);
   const [editForm, setEditForm] = useState<string>("");
   const [presented, setPresented] = useState(false);
+  const [showAuditLink, setShowAuditLink] = useState(false);
   const [expandedCampaign, setExpandedCampaign] = useState<string | null>(null);
   const [expandedAudit, setExpandedAudit] = useState(false);
   const [pastCampaigns, setPastCampaigns] = useState<StoredCampaign[]>([]);
@@ -738,14 +739,46 @@ export default function SeoCampaignsPage() {
             <h2 className="text-lg font-semibold">
               Generated Campaign Tiers
             </h2>
-            <Button
-              variant="outline"
-              onClick={handlePresentToClient}
-              disabled={presented}
-            >
-              {presented ? "Ready to Share ✓" : "Share with Client"}
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                onClick={() => setShowAuditLink((v) => !v)}
+              >
+                {showAuditLink ? "Hide Report Link" : "Share Audit Report"}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={handlePresentToClient}
+                disabled={presented}
+              >
+                {presented ? "Ready to Share ✓" : "Share with Client"}
+              </Button>
+            </div>
           </div>
+
+          {showAuditLink && campaigns[0] && (
+            <div className="mb-4 p-4 rounded-md bg-muted/50 border border-border space-y-3">
+              <p className="text-sm font-medium">
+                📊 Audit report link — share with anyone (no login needed):
+              </p>
+              <div className="space-y-2">
+                <code className="block p-2 bg-muted rounded text-xs break-all font-mono text-muted-foreground">
+                  {window.location.origin}/audit/{campaigns[0].id}
+                </code>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    navigator.clipboard
+                      .writeText(`${window.location.origin}/audit/${campaigns[0].id}`)
+                      .then(() => alert("Audit report link copied!"));
+                  }}
+                >
+                  📋 Copy Report Link
+                </Button>
+              </div>
+            </div>
+          )}
 
           {presented && (
             <div className="mb-4 p-4 rounded-md bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 space-y-3">

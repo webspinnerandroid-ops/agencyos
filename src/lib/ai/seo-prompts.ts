@@ -50,6 +50,12 @@ export interface CompetitorData {
   weaknesses: string[];
   topKeywords: string[];
   contentStrategy: string;
+  /** Same-engine scores as the client's audit — benchmark on equal terms. */
+  seoScore?: number | null;
+  aeoScore?: number | null;
+  geoScore?: number | null;
+  competitorWordCount?: number | null;
+  crawled?: boolean;
 }
 
 export interface CampaignTier {
@@ -85,10 +91,12 @@ export function getBlogPrompt(brandVoice?: string, seoContext?: SeoContext): str
   const secondaryKws = seoContext?.secondaryKeywords?.join(", ") ?? "";
   const audience = seoContext?.targetAudience ?? "a general audience";
   const industry = seoContext?.industry ?? "";
-  // The content-length test awards 100% of its points at 2500+ words (see
-  // src/lib/rankmath.ts contentLengthMultiplier), so every post targets that
-  // band unless a caller explicitly overrides.
-  const wordCount = seoContext?.targetWordCount ?? 2500;
+  // The content-length test awards 60% of its points at 1500-2000 words and
+  // 70% at 2000-2500 (see src/lib/rankmath.ts contentLengthMultiplier). 2500+
+  // would pay 100% but empirically times out generation; 1500-2000 is the
+  // sweet spot for depth, scoring, and reliable generation — so every post
+  // targets ~1750 unless a caller explicitly overrides.
+  const wordCount = seoContext?.targetWordCount ?? 1750;
   const readability = seoContext?.readabilityTarget ?? "grade-8";
   const ctaText = seoContext?.ctaText ?? "Contact us today to learn more";
   const ctaUrl = seoContext?.ctaUrl ?? "#";
@@ -148,7 +156,7 @@ export function getBlogPrompt(brandVoice?: string, seoContext?: SeoContext): str
    - Include a brief "About the Author" or credibility statement angle
    - Avoid making unsubstantiated medical, financial, or legal claims
 
-8. **Word Count — non-negotiable**: The final body text (excluding title, meta, and headings) MUST be approximately ${wordCount} words, and never under 2000. The site's content scorer awards 100% of its content-length points only at 2500+ words (0% below 600, 70% at 2000-2500). A post under 2000 words cannot score green. Write enough genuinely useful sections to hit the target — never pad with fluff, but cover the topic deeply.
+8. **Word Count — non-negotiable**: The final body text (excluding title, meta, and headings) MUST be between 1500 and 2000 words, targeting approximately ${wordCount}, and never under 1500. The site's content scorer awards 60% of its content-length points at 1500-2000 words (0% below 600, 70% at 2000-2500, 100% only at 2500+). Staying in the 1500-2000 band keeps the score strong AND generation reliable — longer posts time out. Write enough genuinely useful sections to hit the target — never pad with fluff, but cover the topic deeply.
 
 9. **Call to Action**: End with a natural, contextual call to action: "${ctaText}" linking to ${ctaUrl}.
 
@@ -156,7 +164,7 @@ export function getBlogPrompt(brandVoice?: string, seoContext?: SeoContext): str
 
 11. **Paragraph readability (scored test)**: No paragraph may exceed 120 words — the scorer fails the readability test otherwise. Keep paragraphs to 2-4 sentences and under ~80 words.
 
-12. **Images**: Plan the post's images. Every post gets exactly ONE featured image (placement "featured") that captures the overall topic, plus AT MOST TWO inline images (placement "inline") — never more than 3 images total. A 2500-word post therefore has 1 featured + 2 inline. SPACE THE IMAGES OUT: each image must be separated from every other image by at least one full paragraph of body text — never place two images adjacent to each other, never place an image directly under a heading, and never place an image directly before the next heading. Each image must have a distinct, detailed prompt that is RELEVANT to the specific section it accompanies (its topic, examples, and data — never generic filler). Never repeat the same prompt twice. In the body markdown, place each inline image on its own line, surrounded by blank lines, AFTER at least one paragraph of its section's text, as ![description](IMAGE_URL_N) — keep the URL as a placeholder like ![description](IMAGE_URL_2) since the actual image URLs are generated separately; the sectionTitle field tells the system where each image belongs. IMAGE ALT TEXT IS AN SEO SIGNAL AND A SCORED TEST: every image description (the alt text) must be a unique, descriptive sentence that contains the primary keyword "${primaryKw}" naturally where it fits (e.g. "${primaryKw} pour-over station") — never the same alt twice, never a generic "image of coffee". The scorer requires ALL images to have alt text AND at least one alt to contain the primary keyword.
+12. **Images**: Plan the post's images. Every post gets exactly ONE featured image (placement "featured") that captures the overall topic, plus AT MOST TWO inline images (placement "inline") — never more than 3 images total. A 1500-2000-word post therefore has 1 featured + 1-2 inline. SPACE THE IMAGES OUT: each image must be separated from every other image by at least one full paragraph of body text — never place two images adjacent to each other, never place an image directly under a heading, and never place an image directly before the next heading. Each image must have a distinct, detailed prompt that is RELEVANT to the specific section it accompanies (its topic, examples, and data — never generic filler). Never repeat the same prompt twice. In the body markdown, place each inline image on its own line, surrounded by blank lines, AFTER at least one paragraph of its section's text, as ![description](IMAGE_URL_N) — keep the URL as a placeholder like ![description](IMAGE_URL_2) since the actual image URLs are generated separately; the sectionTitle field tells the system where each image belongs. IMAGE ALT TEXT IS AN SEO SIGNAL AND A SCORED TEST: every image description (the alt text) must be a unique, descriptive sentence that contains the primary keyword "${primaryKw}" naturally where it fits (e.g. "${primaryKw} pour-over station") — never the same alt twice, never a generic "image of coffee". The scorer requires ALL images to have alt text AND at least one alt to contain the primary keyword.
 
 13. **AEO / GEO — answer engines and generative engines (scored separately)**: This post is also scored for how well AI answer engines (ChatGPT, Gemini, Claude, Perplexity, AI Overviews) can extract a direct answer and how likely they are to cite it. To maximize that score:
     - Open with a crisp definitional sentence ("${primaryKw} refers to …" / "${primaryKw} is …") inside the first ~150 words.

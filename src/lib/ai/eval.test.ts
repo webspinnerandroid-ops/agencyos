@@ -80,11 +80,12 @@ describe("ai team eval loop", () => {
   });
 
   it("penny's blogs must maximize the real SEO + AEO/GEO engines", () => {
-    // A max-scoring blog: 2500+ words (100% of the length test), keyword in
-    // title/meta/slug/first-10%, internal + outbound links, keyword-bearing
-    // image alts, H2/H3 structure, no 120+ word paragraphs, Q&A + data for AEO/GEO.
+    // A max-scoring blog at the 1500-2000 word sweet spot (2500+ times out
+    // generation), keyword in title/meta/slug/first-10%, internal + outbound
+    // links, keyword-bearing image alts, H2/H3 structure, no 120+ word
+    // paragraphs, Q&A + data for AEO/GEO.
     const keyword = "specialty coffee roasting";
-    const body = buildMaxScoreBlog(keyword);
+    const body = buildMaxScoreBlog(keyword, 7); // ~1750 words
     const blogCtx = {
       title: "Specialty Coffee Roasting: The Complete Guide",
       metaDescription:
@@ -107,7 +108,8 @@ describe("ai team eval loop", () => {
     });
     const aeo = scoreAeoGeo({ ...blogCtx } as Parameters<typeof scoreAeoGeo>[0]);
     expect(seo.total).toBeGreaterThanOrEqual(85);
-    expect(seo.wordCount).toBeGreaterThanOrEqual(2500);
+    expect(seo.wordCount).toBeGreaterThanOrEqual(1500);
+    expect(seo.wordCount).toBeLessThanOrEqual(2600);
     expect(aeo.total).toBeGreaterThanOrEqual(70);
 
     // And Cheryl's eval must pass it — including the engine-parity criterion.
@@ -134,7 +136,7 @@ describe("ai team eval loop", () => {
   });
 });
 
-/** Build a realistic 2500+ word markdown blog that passes every scorer check. */
+/** Build a realistic 1500-2000 word markdown blog that passes every scorer check. */
 function buildMaxScoreBlog(keyword: string, sections = 28): string {
   const kw = keyword; // "specialty coffee roasting"
   const head =

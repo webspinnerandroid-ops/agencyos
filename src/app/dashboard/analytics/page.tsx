@@ -434,7 +434,7 @@ function buildSeoInsights(seoData: any): { what: string[]; fix: string[] } {
   }
   if (typeof avgSeoScore === "number" && avgSeoScore < 80 && totalPosts > 0) {
     fix.push(
-      `Average SEO score ${avgSeoScore} is below the 80-point publish gate — new content won't auto-publish until it clears the gate. Keep Cheryl's blogs at 2500+ words with full keyword coverage.`
+      `Average SEO score ${avgSeoScore} is below the 80-point publish gate — new content won't auto-publish until it clears the gate. Keep Cheryl's blogs at 1500-2000 words with full keyword coverage (title, meta, slug, first 10%, internal + outbound links, keyword-bearing alt text).`
     );
   }
   const drafts = byStatus?.draft ?? 0;

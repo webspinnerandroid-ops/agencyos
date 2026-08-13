@@ -87,6 +87,11 @@ interface CompetitorData {
   weaknesses: string[];
   topKeywords: string[];
   contentStrategy: string;
+  seoScore?: number | null;
+  aeoScore?: number | null;
+  geoScore?: number | null;
+  competitorWordCount?: number | null;
+  crawled?: boolean;
 }
 
 // ============================================================================
@@ -523,34 +528,60 @@ export default function PublicSeoProposalPage() {
           <Card className="p-6">
             <h2 className="text-lg font-semibold mb-4">Competitor Analysis</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {competitors.map((comp, i) => (
-                <div key={i} className="p-4 rounded-lg border">
-                  <h4 className="font-medium text-sm mb-2 text-primary">
-                    {comp.competitorUrl?.replace(/^https?:\/\//, "")}
-                  </h4>
-                  {comp.strengths?.length > 0 && (
-                    <div className="mb-2">
-                      <span className="text-xs font-medium text-green-600">Strengths:</span>
-                      <ul className="text-xs text-muted-foreground mt-1 space-y-0.5">
-                        {comp.strengths.slice(0, 3).map((s, j) => (
-                          <li key={j}>✓ {s}</li>
+              {competitors.map((comp, i) => {
+                const compScores = [
+                  { label: "SEO", v: comp.seoScore },
+                  { label: "AEO", v: comp.aeoScore },
+                  { label: "GEO", v: comp.geoScore },
+                ];
+                return (
+                  <div key={i} className="p-4 rounded-lg border">
+                    <h4 className="font-medium text-sm mb-2 text-primary">
+                      {comp.competitorUrl?.replace(/^https?:\/\//, "")}
+                    </h4>
+                    {comp.crawled !== false && compScores.some((s) => s.v != null) && (
+                      <div className="mb-2 flex items-center gap-3 text-xs">
+                        {compScores.map((s) => (
+                          <span key={s.label} className="flex items-baseline gap-1">
+                            <span className="text-muted-foreground uppercase tracking-wide">{s.label}</span>
+                            <span className={`font-bold ${s.v == null ? "text-muted-foreground" : s.v >= 81 ? "text-green-600" : s.v >= 50 ? "text-yellow-600" : "text-red-600"}`}>
+                              {s.v ?? "—"}
+                            </span>
+                          </span>
                         ))}
-                      </ul>
-                    </div>
-                  )}
-                  {comp.weaknesses?.length > 0 && (
-                    <div className="mb-2">
-                      <span className="text-xs font-medium text-red-600">Weaknesses:</span>
-                      <ul className="text-xs text-muted-foreground mt-1 space-y-0.5">
-                        {comp.weaknesses.slice(0, 3).map((w, j) => (
-                          <li key={j}>✗ {w}</li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  <p className="text-xs text-muted-foreground italic">{comp.contentStrategy}</p>
-                </div>
-              ))}
+                        {comp.competitorWordCount != null && (
+                          <span className="text-muted-foreground">· {comp.competitorWordCount.toLocaleString()} words</span>
+                        )}
+                      </div>
+                    )}
+                    {comp.strengths?.length > 0 && (
+                      <div className="mb-2">
+                        <span className="text-xs font-medium text-green-600">Strengths:</span>
+                        <ul className="text-xs text-muted-foreground mt-1 space-y-0.5">
+                          {comp.strengths.slice(0, 3).map((s, j) => (
+                            <li key={j}>✓ {s}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {comp.weaknesses?.length > 0 && (
+                      <div className="mb-2">
+                        <span className="text-xs font-medium text-red-600">Weaknesses:</span>
+                        <ul className="text-xs text-muted-foreground mt-1 space-y-0.5">
+                          {comp.weaknesses.slice(0, 3).map((w, j) => (
+                            <li key={j}>✗ {w}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    <p className="text-xs text-muted-foreground italic">{comp.contentStrategy}</p>
+                  </div>
+                );
+              })}
+              <p className="text-xs text-muted-foreground italic">
+                Competitor SEO / AEO / GEO scores are computed from each site's homepage by the same
+                scoring engine used for this audit — equal-terms benchmarking.
+              </p>
             </div>
           </Card>
         )}

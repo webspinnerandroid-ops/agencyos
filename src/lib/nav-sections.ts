@@ -27,6 +27,7 @@ export function buildNavSections(isSuperAdmin: boolean): NavSection[] {
       items: [
         { href: "/dashboard/seo", label: "SEO Audits" },
         { href: "/dashboard/seo/campaigns", label: "Campaigns" },
+        { href: "/dashboard/seo/audit-links", label: "Audit Share Links" },
         { href: "/dashboard/cms", label: "Website" },
         { href: "/dashboard/seo/outreach", label: "Outreach" },
         { href: "/dashboard/seo/opportunities", label: "Opportunities" },

@@ -20,6 +20,20 @@ import { brandKeyword, homepageMarkdown, type PageAuditShape } from "@/lib/seo/a
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+interface CampaignRow {
+  id: string;
+  url: string;
+  tier_name: string | null;
+  tier_price: number | null;
+  status: string | null;
+  audit_json: unknown;
+  competitors_json: unknown;
+  location: string | null;
+  created_at: string | null;
+  share_enabled?: boolean | null;
+  share_token?: string | null;
+}
+
 interface AuditShape {
   url?: string;
   scannedAt?: string;
@@ -39,7 +53,10 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
-    if (!UUID_RE.test(id)) {
+    // The public link is either the campaign UUID (legacy / default) or a
+    // regenerated share token. Share tokens are 32-char hex, not UUIDs.
+    const isUuid = UUID_RE.test(id);
+    if (!isUuid && !/^[a-f0-9]{32}$/i.test(id)) {
       return NextResponse.json(
         { error: "Invalid audit link." },
         { status: 400 }
@@ -47,13 +64,42 @@ export async function GET(
     }
 
     const supabase = await createServiceClient();
-    const { data, error } = await supabase
+    // share_enabled / share_token exist after migration 056. Query with them,
+    // and fall back to the pre-056 shape if the columns aren't applied yet so
+    // the public report never breaks while a migration is pending.
+    let data: CampaignRow | null = null;
+    const cols =
+      "id, url, tier_name, tier_price, status, audit_json, competitors_json, location, created_at, share_enabled, share_token";
+    let query = supabase
       .from("seo_campaigns")
-      .select("id, url, tier_name, tier_price, status, audit_json, location, created_at")
-      .eq("id", id)
-      .maybeSingle();
+      .select(cols);
+    if (isUuid) {
+      query = query.eq("id", id);
+    } else {
+      query = query.eq("share_token", id);
+    }
+    const { data: full, error: err } = await query.maybeSingle();
+    if (!err && full) {
+      data = full as unknown as CampaignRow;
+    } else if (isUuid) {
+      // Migration 056 not applied yet — retry with the legacy column set.
+      const legacy = await supabase
+        .from("seo_campaigns")
+        .select("id, url, tier_name, tier_price, status, audit_json, competitors_json, location, created_at")
+        .eq("id", id)
+        .maybeSingle();
+      if (!legacy.error && legacy.data) data = legacy.data as unknown as CampaignRow;
+    }
 
-    if (error || !data) {
+    if (!data) {
+      return NextResponse.json(
+        { error: "Audit not found. Check the link with your agency." },
+        { status: 404 }
+      );
+    }
+
+    // Revoked links return 404 — indistinguishable from a wrong URL.
+    if (data.share_enabled === false) {
       return NextResponse.json(
         { error: "Audit not found. Check the link with your agency." },
         { status: 404 }
@@ -104,6 +150,19 @@ export async function GET(
         (severityOrder[a.severity] ?? 3) - (severityOrder[b.severity] ?? 3)
     );
 
+    // Competitor benchmarks — the same-engine scores stored at generation
+    // time (competitors.ts enriches each crawl with SEO/AEO/GEO scores).
+    const competitors = (Array.isArray(data.competitors_json)
+      ? data.competitors_json
+      : []) as {
+      competitorUrl: string;
+      seoScore?: number | null;
+      aeoScore?: number | null;
+      geoScore?: number | null;
+      competitorWordCount?: number | null;
+      crawled?: boolean;
+    }[];
+
     return NextResponse.json({
       url: audit.url ?? data.url,
       location: audit.location ?? data.location ?? null,
@@ -124,6 +183,7 @@ export async function GET(
       aeoGeo: aeo,
       brandKeyword: keyword,
       hasContentScores: seo !== null,
+      competitors,
     });
   } catch (err) {
     console.error("[public-audit]", err instanceof Error ? err.message : err);

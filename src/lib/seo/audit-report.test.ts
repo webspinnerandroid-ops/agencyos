@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { brandKeyword, homepageMarkdown } from "./audit-report";
+import { brandKeyword, homepageMarkdown, scoreCompetitorHtml } from "./audit-report";
 import { scoreContent } from "@/lib/rankmath";
 import { scoreAeoGeo } from "@/lib/aeo-geo";
 
@@ -75,5 +75,39 @@ describe("homepageMarkdown", () => {
     expect(seo.checks.some((c) => c.id === "internal" && c.passed)).toBe(true);
     expect(seo.checks.some((c) => c.id === "outbound" && c.passed)).toBe(true);
     expect(seo.checks.some((c) => c.id === "subheadings" && c.passed)).toBe(true);
+  });
+
+  it("scores competitor homepage HTML with the same engines", () => {
+    const html = `
+      <!DOCTYPE html><html><head>
+        <title>GiantByte Software — Custom Web Apps</title>
+        <meta name="description" content="GiantByte Software builds custom web applications and digital products for growing companies." />
+      </head><body>
+        <h1>GiantByte Software</h1>
+        <p>GiantByte Software is a development studio that builds custom web applications.</p>
+        <p>How do we work? We pair a senior developer with your team from day one, and ship in two-week sprints.</p>
+        <h2>Services</h2>
+        <p>Custom web apps, APIs, and automation for growing companies since 2016.</p>
+        <h3>Why clients choose us</h3>
+        <p>According to our 2025 client survey, 9 in 10 clients renew.</p>
+        <a href="https://giantbyte.com/portfolio">Portfolio</a>
+        <a href="https://github.com">GitHub</a>
+        <img src="https://giantbyte.com/img/team.jpg" alt="GiantByte Software team" />
+      </body></html>
+    `;
+    const scores = scoreCompetitorHtml(html, "https://giantbyte.com/");
+    expect(scores.crawled).toBe(true);
+    expect(scores.title).toContain("GiantByte");
+    expect(scores.seoScore).toBeGreaterThanOrEqual(0);
+    expect(scores.seoScore).toBeLessThanOrEqual(100);
+    expect(scores.aeoScore).toBeGreaterThanOrEqual(0);
+    expect(scores.geoScore).toBeGreaterThanOrEqual(0);
+    expect(scores.wordCount).toBeGreaterThan(20);
+  });
+
+  it("reports not-crawled for unusable HTML", () => {
+    const scores = scoreCompetitorHtml("<html><body></body></html>", "https://empty.example.com/");
+    expect(scores.crawled).toBe(false);
+    expect(scores.seoScore).toBeNull();
   });
 });

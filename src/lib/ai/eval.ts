@@ -87,7 +87,7 @@ const CRITERIA: Record<string, EvalCriterion[]> = {
     },
     {
       name: "Max-scoring blog (real engine)",
-      what: "Full blog deliverables run through the real SEO + AEO/GEO engines: the content-length test only awards 100% at 2500+ words (0% under 600, 70% at 2000-2500), so a max-scoring blog is never under 2000 words and scores green in both engines. Skipped for chat replies (no title/slug/meta supplied).",
+      what: "Full blog deliverables run through the real SEO + AEO/GEO engines: the content-length test pays 60% at 1500-2000 words and 100% only at 2500+, but 2500+ times out generation — so the sweet spot is 1500-2000 words (never under 1500) while scoring green in both engines. Skipped for chat replies (no title/slug/meta supplied).",
       hard: true,
       check: (o, ctx) => {
         if (!ctx.title || !ctx.metaDescription || !ctx.slug || !ctx.keyword || !ctx.body) {
@@ -110,7 +110,7 @@ const CRITERIA: Record<string, EvalCriterion[]> = {
           keyword,
           entities: (ctx.entities ?? []) as string[],
         });
-        return seo.total >= 85 && seo.wordCount >= 2000 && aeo.total >= 70;
+        return seo.total >= 85 && seo.wordCount >= 1500 && seo.wordCount <= 2600 && aeo.total >= 70;
       },
     },
     {

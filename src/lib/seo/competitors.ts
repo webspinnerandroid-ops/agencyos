@@ -12,6 +12,7 @@
 
 import { createServiceClient } from "@/lib/supabase/server";
 import type { CompetitorData } from "@/lib/ai/seo-prompts";
+import { scoreCompetitorHtml } from "@/lib/seo/audit-report";
 
 // ============================================================================
 // Types
@@ -399,6 +400,11 @@ export async function toCompetitorData(
           strengths.push("Local business signals present (address + phone)");
         }
 
+        // Same-engine benchmark scores (SEO + AEO/GEO) — computed from this
+        // same crawl, so the proposal can compare the client against each
+        // competitor on equal terms.
+        const scores = scoreCompetitorHtml(page.html, url);
+
         // Industry context from key phrases
         const industryPhrases = meta.keyPhrases.length > 0
           ? meta.keyPhrases.slice(0, 5)
@@ -421,6 +427,11 @@ export async function toCompetitorData(
           weaknesses: weaknesses.length > 0 ? weaknesses : ["Potential gaps in on-page optimization"],
           topKeywords: industryPhrases,
           contentStrategy,
+          seoScore: scores.seoScore,
+          aeoScore: scores.aeoScore,
+          geoScore: scores.geoScore,
+          competitorWordCount: scores.wordCount,
+          crawled: scores.crawled,
         });
         continue;
       }

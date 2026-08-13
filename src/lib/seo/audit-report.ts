@@ -72,3 +72,147 @@ export function homepageMarkdown(page: PageAuditShape | undefined): string {
   }
   return parts.join("\n\n");
 }
+
+// ---------------------------------------------------------------------------
+// Competitor scoring — benchmark the client against real competitor sites
+// ---------------------------------------------------------------------------
+
+import * as cheerio from "cheerio";
+import { scoreContent, type RankMathResult } from "@/lib/rankmath";
+import { scoreAeoGeo, type AeoGeoResult } from "@/lib/aeo-geo";
+
+export interface CompetitorScores {
+  competitorUrl: string;
+  title: string;
+  seoScore: number | null;
+  aeoScore: number | null;
+  geoScore: number | null;
+  wordCount: number | null;
+  crawled: boolean;
+}
+
+/**
+ * Score a competitor's homepage HTML with the same SEO + AEO/GEO engines
+ * used for the client's audit, so proposals can benchmark client vs
+ * competitors on equal terms. Pure and dependency-light: cheerio only.
+ * Returns crawled:false when the HTML is unusable (no title/text).
+ */
+export function scoreCompetitorHtml(
+  html: string,
+  url: string
+): CompetitorScores {
+  const empty: CompetitorScores = {
+    competitorUrl: url,
+    title: "",
+    seoScore: null,
+    aeoScore: null,
+    geoScore: null,
+    wordCount: null,
+    crawled: false,
+  };
+  try {
+    const $ = cheerio.load(html);
+    const title = $("title").first().text().trim() || "";
+    const metaDescription =
+      $('meta[name="description"]').first().attr("content")?.trim() ?? "";
+    const h1 = $("h1")
+      .map((_, el) => $(el).text().trim())
+      .get()
+      .filter(Boolean);
+    const h2 = $("h2")
+      .map((_, el) => $(el).text().trim())
+      .get()
+      .filter(Boolean);
+    const h3 = $("h3")
+      .map((_, el) => $(el).text().trim())
+      .get()
+      .filter(Boolean);
+    $("script,style,noscript,svg,iframe,form,nav,footer,header").remove();
+    const textPreview = $("body").text().replace(/\s+/g, " ").trim();
+    const images = $("img")
+      .map((_, el) => ({
+        src: $(el).attr("src") ?? "",
+        alt: $(el).attr("alt") ?? "",
+        hasAlt: !!$(el).attr("alt"),
+      }))
+      .get()
+      .filter((i) => i.src && !/^data:/i.test(i.src))
+      .slice(0, 12);
+    let host = "";
+    try {
+      host = new URL(url).hostname.replace(/^www\./, "").toLowerCase();
+    } catch {
+      host = url.toLowerCase();
+    }
+    const internalLinks: { href: string; text: string }[] = [];
+    const externalLinks: { href: string; text: string }[] = [];
+    $("a[href]").each((_, el) => {
+      const href = $(el).attr("href") ?? "";
+      if (!/^https?:\/\//i.test(href)) return;
+      const text = $(el).text().trim().slice(0, 80);
+      let linkHost = "";
+      try {
+        linkHost = new URL(href).hostname.replace(/^www\./, "").toLowerCase();
+      } catch {
+        return;
+      }
+      if (linkHost === host) internalLinks.push({ href, text });
+      else externalLinks.push({ href, text });
+    });
+
+    if (!title && !textPreview) return empty;
+
+    const body = homepageMarkdown({
+      url,
+      title,
+      metaDescription,
+      h1,
+      h2,
+      h3,
+      textPreview,
+      images,
+      internalLinks: internalLinks.slice(0, 8),
+      externalLinks: externalLinks.slice(0, 8),
+    });
+    const keyword = brandKeyword(url);
+    const internalUrls = internalLinks.map((l) => l.href);
+
+    let seo: RankMathResult | null = null;
+    let aeo: AeoGeoResult | null = null;
+    if (body.trim().length > 0 && title) {
+      seo = scoreContent({
+        title,
+        metaDescription,
+        slug: (() => {
+          try {
+            return new URL(url).pathname.replace(/\/$/, "") || "/home";
+          } catch {
+            return "/home";
+          }
+        })(),
+        body,
+        keyword,
+        internalUrls,
+      });
+      aeo = scoreAeoGeo({
+        title,
+        metaDescription,
+        body,
+        keyword,
+        entities: [keyword, title],
+      });
+    }
+
+    return {
+      competitorUrl: url,
+      title,
+      seoScore: seo?.total ?? null,
+      aeoScore: aeo?.aeoScore ?? null,
+      geoScore: aeo?.geoSscore ?? null,
+      wordCount: seo?.wordCount ?? null,
+      crawled: true,
+    };
+  } catch {
+    return empty;
+  }
+}

@@ -776,6 +776,11 @@ export default function SeoCampaignsPage() {
                 >
                   📋 Copy Report Link
                 </Button>
+                <a href="/dashboard/seo/audit-links">
+                  <Button size="sm" variant="outline">
+                    Manage all links
+                  </Button>
+                </a>
               </div>
             </div>
           )}

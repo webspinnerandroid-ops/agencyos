@@ -58,6 +58,14 @@ interface AuditReport {
     checks: EngineCheck[];
     wordCount: number;
   } | null;
+  competitors: {
+    competitorUrl: string;
+    seoScore?: number | null;
+    aeoScore?: number | null;
+    geoScore?: number | null;
+    competitorWordCount?: number | null;
+    crawled?: boolean;
+  }[];
 }
 
 // ============================================================================
@@ -228,10 +236,10 @@ export default function PublicAuditReportPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background p-4 md:p-8">
-      <div className="max-w-5xl mx-auto space-y-8">
+    <div className="min-h-screen bg-background p-4 md:p-8 print:bg-white print:p-0">
+      <div className="max-w-5xl mx-auto space-y-8 print:max-w-none print:space-y-6">
         {/* Header */}
-        <div className="text-center space-y-2">
+        <div className="text-center space-y-2 print:mt-0">
           <p className="text-xs font-semibold uppercase tracking-widest text-primary">
             SEO Website Audit Report
           </p>
@@ -243,10 +251,16 @@ export default function PublicAuditReportPage() {
             {report.location ? ` · Location: ${report.location}` : ""}
             {report.pagesCrawled != null ? ` · ${report.pagesCrawled} page(s) crawled` : ""}
           </p>
+          <button
+            onClick={() => window.print()}
+            className="print:hidden mt-4 inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+          >
+            🖨 Print / Save as PDF
+          </button>
         </div>
 
         {/* Score dials */}
-        <Card className="p-6">
+        <Card className="p-6 print:break-inside-avoid">
           <h2 className="text-lg font-semibold mb-4 text-center">Site Scores</h2>
           <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
             <ScoreDial
@@ -287,7 +301,7 @@ export default function PublicAuditReportPage() {
 
         {/* What to fix */}
         {fixes.length > 0 && (
-          <Card className="p-6 border-amber-300 dark:border-amber-800">
+          <Card className="p-6 border-amber-300 dark:border-amber-800 print:break-inside-avoid">
             <h2 className="text-lg font-semibold mb-1 flex items-center gap-2">
               <span className="text-amber-500">⚙</span> What to fix first
             </h2>
@@ -306,7 +320,7 @@ export default function PublicAuditReportPage() {
         )}
 
         {/* Issue checklist */}
-        <Card className="p-6">
+        <Card className="p-6 print:break-inside-avoid">
           <h2 className="text-lg font-semibold mb-4">Issue Checklist</h2>
           {report.issues.length === 0 && failedChecks.length === 0 ? (
             <p className="text-sm text-green-600">
@@ -351,9 +365,59 @@ export default function PublicAuditReportPage() {
           )}
         </Card>
 
+        {/* Competitor benchmark */}
+        {report.competitors.length > 0 && (
+          <Card className="p-6 print:break-inside-avoid">
+            <h2 className="text-lg font-semibold mb-4">Competitor Benchmark</h2>
+            <p className="text-xs text-muted-foreground mb-4">
+              Same scoring engine as this audit, run on each competitor's homepage —
+              compare on equal terms.
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
+                    <th className="py-2 pr-4">Competitor</th>
+                    <th className="py-2 pr-4 text-right">SEO</th>
+                    <th className="py-2 pr-4 text-right">AEO</th>
+                    <th className="py-2 pr-4 text-right">GEO</th>
+                    <th className="py-2 text-right">Words</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {report.competitors.map((c, i) => (
+                    <tr key={i} className="border-b last:border-0">
+                      <td className="py-2 pr-4 font-medium break-all">
+                        {c.competitorUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")}
+                      </td>
+                      <td className={`py-2 pr-4 text-right font-bold ${gradeColor(c.seoScore)}`}>{c.seoScore ?? "—"}</td>
+                      <td className={`py-2 pr-4 text-right font-bold ${gradeColor(c.aeoScore)}`}>{c.aeoScore ?? "—"}</td>
+                      <td className={`py-2 pr-4 text-right font-bold ${gradeColor(c.geoScore)}`}>{c.geoScore ?? "—"}</td>
+                      <td className="py-2 text-right text-muted-foreground">
+                        {c.competitorWordCount != null ? c.competitorWordCount.toLocaleString() : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {report.competitors.every((c) => c.crawled === false) && (
+              <p className="text-xs text-muted-foreground mt-3 italic">
+                Competitor pages couldn't be crawled — scores are blank.
+              </p>
+            )}
+            {report.competitors.some((c) => c.seoScore == null && c.crawled !== false) && (
+              <p className="text-xs text-muted-foreground mt-2 italic">
+                Audits run before competitor scoring was added show blank scores — re-run the
+                audit to benchmark.
+              </p>
+            )}
+          </Card>
+        )}
+
         {/* Content gaps */}
         {report.contentGaps.length > 0 && (
-          <Card className="p-6">
+          <Card className="p-6 print:break-inside-avoid">
             <h2 className="text-lg font-semibold mb-4">Content Opportunities</h2>
             <ul className="space-y-1.5">
               {report.contentGaps.map((gap, i) => (

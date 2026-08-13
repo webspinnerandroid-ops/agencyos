@@ -68,6 +68,13 @@ interface CompetitorData {
   scoredAt?: string | null;
 }
 
+interface KeywordRank {
+  position: number;
+  impressions: number;
+  clicks: number;
+  query: string;
+}
+
 interface StoredCampaign {
   id: string;
   tenant_id: string;
@@ -240,6 +247,10 @@ export default function SeoCampaignsPage() {
   const [startBusy, setStartBusy] = useState(false);
   const [rerunningAuditId, setRerunningAuditId] = useState<string | null>(null);
   const [auditNotice, setAuditNotice] = useState<string | null>(null);
+  // Measured GSC positions per campaign, keyed by target keyword.
+  const [rankings, setRankings] = useState<
+    Record<string, Record<string, KeywordRank>>
+  >({});
 
   // Fetch clients on mount
   useEffect(() => {
@@ -259,6 +270,30 @@ export default function SeoCampaignsPage() {
     loadClients();
   }, []);
 
+  const fetchRankings = useCallback(async (campaignIds: string[]) => {
+    const ids = Array.from(new Set(campaignIds.filter(Boolean)));
+    if (ids.length === 0) return;
+    const entries = await Promise.all(
+      ids.map(async (id) => {
+        try {
+          const res = await fetch(`/api/seo/rankings?campaignId=${id}`, {
+            credentials: "include",
+          });
+          if (!res.ok) return [id, {}] as const;
+          const data = await res.json();
+          return [id, data.rankings ?? {}] as const;
+        } catch {
+          return [id, {}] as const;
+        }
+      })
+    );
+    setRankings((prev) => {
+      const next = { ...prev };
+      for (const [id, r] of entries) next[id] = r;
+      return next;
+    });
+  }, []);
+
   // Fetch past campaigns
   useEffect(() => {
     async function loadPast() {
@@ -267,6 +302,7 @@ export default function SeoCampaignsPage() {
         if (res.ok) {
           const data = await res.json();
           setPastCampaigns(data.campaigns ?? []);
+          fetchRankings((data.campaigns ?? []).map((c: StoredCampaign) => c.id));
 
           // Deep link from the dashboard's Recent SEO Audits (?open=<id>):
           // load the audit into the tier grid and expand it so the agency can
@@ -366,7 +402,10 @@ export default function SeoCampaignsPage() {
 
       if (data.audit) setAudit(data.audit);
       if (data.competitors) setCompetitors(data.competitors);
-      if (data.campaigns) setCampaigns(data.campaigns);
+      if (data.campaigns) {
+        setCampaigns(data.campaigns);
+        fetchRankings(data.campaigns.map((c: StoredCampaign) => c.id));
+      }
     } catch (err: unknown) {
       setError(
         err instanceof Error ? err.message : "An unexpected error occurred"
@@ -1218,7 +1257,10 @@ export default function SeoCampaignsPage() {
                           />
                         </div>
                       )}
-                      <CampaignDetails campaign={campaign} />
+                      <CampaignDetails
+                        campaign={campaign}
+                        rankings={rankings[campaign.id]}
+                      />
                     </div>
                   )}
                 </Card>
@@ -1723,7 +1765,13 @@ function AuditDetails({ audit, competitors }: { audit: AuditJson; competitors: C
 // Campaign Details Component (expanded view)
 // ============================================================================
 
-function CampaignDetails({ campaign }: { campaign: StoredCampaign }) {
+function CampaignDetails({
+  campaign,
+  rankings,
+}: {
+  campaign: StoredCampaign;
+  rankings?: Record<string, KeywordRank>;
+}) {
   const cj = campaign.campaign_json ?? ({} as CampaignJson);
 
   return (
@@ -1838,16 +1886,32 @@ function CampaignDetails({ campaign }: { campaign: StoredCampaign }) {
                       </span>
                     </td>
                     <td className="py-2">
-                      {kw.currentRanking != null ? (
-                        <span className="font-medium">#{kw.currentRanking}</span>
-                      ) : (
-                        <span
-                          className="text-muted-foreground"
-                          title="Not measured — the audit does not capture live rankings. Connect a rankings source to populate this."
-                        >
-                          —
-                        </span>
-                      )}
+                      {(() => {
+                        const measured = rankings?.[kw.keyword];
+                        if (measured) {
+                          return (
+                            <span
+                              className="font-medium text-green-600 dark:text-green-400"
+                              title={`Measured via Search Console (${measured.impressions} impressions, ${measured.clicks} clicks)`}
+                            >
+                              #{measured.position}
+                            </span>
+                          );
+                        }
+                        if (kw.currentRanking != null) {
+                          return (
+                            <span className="font-medium">#{kw.currentRanking}</span>
+                          );
+                        }
+                        return (
+                          <span
+                            className="text-muted-foreground"
+                            title="Not measured yet — Search Console keyword data for this campaign appears after the next traffic sync."
+                          >
+                            —
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td className="py-2">#{kw.targetRanking}</td>
                   </tr>

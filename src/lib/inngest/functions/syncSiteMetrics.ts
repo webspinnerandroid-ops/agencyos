@@ -5,7 +5,11 @@ import {
   encodeTokenBundle,
   getAccessToken,
 } from "@/lib/connections";
-import { fetchGADailyMetrics, fetchSCDailyMetrics } from "@/lib/site-metrics";
+import {
+  fetchGADailyMetrics,
+  fetchSCDailyMetrics,
+  fetchSCKeywordRankings,
+} from "@/lib/site-metrics";
 
 /**
  * Daily site-metrics sync — pulls real GA4 and Search Console numbers for
@@ -100,6 +104,41 @@ export const syncSiteMetrics = inngest.createFunction(
               onConflict: "tenant_id,provider,resource,metric_date",
             });
           if (error) throw new Error(error.message);
+
+          // Per-query keyword rankings (Search Console only) so the campaign
+          // Current Rank column can show measured positions.
+          if (conn.provider === "search_console") {
+            try {
+              const kwRows = await fetchSCKeywordRankings(accessToken, resource);
+              if (kwRows.length > 0) {
+                const { error: kwError } = await supabase
+                  .from("keyword_rankings")
+                  .upsert(
+                    kwRows.map((r) => ({
+                      tenant_id: conn.tenant_id,
+                      resource,
+                      query: r.query,
+                      clicks: r.clicks,
+                      impressions: r.impressions,
+                      ctr: r.ctr,
+                      position: r.position,
+                    })),
+                    { onConflict: "tenant_id,resource,query" }
+                  );
+                if (kwError) {
+                  console.error(
+                    `[syncSiteMetrics] keyword_rankings upsert (${conn.tenant_id}):`,
+                    kwError.message
+                  );
+                }
+              }
+            } catch (kwErr) {
+              console.error(
+                `[syncSiteMetrics] keyword rankings fetch (${conn.tenant_id}):`,
+                (kwErr as Error).message
+              );
+            }
+          }
 
           await supabase
             .from("tenant_connections")

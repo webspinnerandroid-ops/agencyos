@@ -23,6 +23,14 @@ export interface SCDailyMetrics {
   position: number;
 }
 
+export interface SCKeywordRanking {
+  query: string;
+  clicks: number;
+  impressions: number;
+  ctr: number; // 0-1
+  position: number;
+}
+
 function dateNDaysAgo(days: number): string {
   const d = new Date();
   d.setDate(d.getDate() - days);
@@ -131,6 +139,59 @@ export async function fetchSCDailyMetrics(
   }
   return (data.rows ?? []).map((row) => ({
     date: row.keys?.[0] ?? "",
+    clicks: row.clicks ?? 0,
+    impressions: row.impressions ?? 0,
+    ctr: row.ctr ?? 0,
+    position: row.position ?? 0,
+  }));
+}
+
+/**
+ * Search Console: per-query keyword rankings (dimension = query) over the
+ * window, so the Current Rank column can show measured positions for a
+ * campaign's target keywords. Best row per query is the most-impressions one.
+ */
+export async function fetchSCKeywordRankings(
+  accessToken: string,
+  siteUrl: string,
+  days = 90
+): Promise<SCKeywordRanking[]> {
+  const encodedSite = encodeURIComponent(siteUrl);
+  const res = await fetch(
+    `https://www.googleapis.com/webmasters/v3/sites/${encodedSite}/searchAnalytics/query`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        startDate: dateNDaysAgo(days),
+        endDate: new Date().toISOString().slice(0, 10),
+        dimensions: ["query"],
+        rowLimit: 1000,
+      }),
+      signal: AbortSignal.timeout(30_000),
+    }
+  );
+  const text = await res.text().catch(() => "");
+  const data = JSON.parse(text || "{}") as {
+    rows?: {
+      keys?: string[];
+      clicks?: number;
+      impressions?: number;
+      ctr?: number;
+      position?: number;
+    }[];
+    error?: { message?: string };
+  };
+  if (!res.ok) {
+    throw new Error(
+      data.error?.message ?? `Search Console query failed (${res.status})`
+    );
+  }
+  return (data.rows ?? []).map((row) => ({
+    query: row.keys?.[0] ?? "",
     clicks: row.clicks ?? 0,
     impressions: row.impressions ?? 0,
     ctr: row.ctr ?? 0,

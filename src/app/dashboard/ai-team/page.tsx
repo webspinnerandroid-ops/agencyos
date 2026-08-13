@@ -125,6 +125,15 @@ export default function AiTeamPage() {
         </a>
       </div>
 
+      {/* Team photo */}
+      <div className="rounded-lg overflow-hidden border bg-card">
+        <img
+          src="/team/team.png"
+          alt="Your AI team"
+          className="w-full h-auto max-h-80 object-cover"
+        />
+      </div>
+
       {feedback && (
         <div className={`p-3 rounded-md text-sm ${feedback.type === "success" ? "bg-green-50 text-green-700 border-green-200" : "bg-red-50 text-red-700 border-red-200"} border`}>
           {feedback.message}
@@ -270,8 +279,8 @@ function EmployeeCard({
   return (
     <div className="rounded-lg border p-4 flex flex-col gap-2">
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <EmployeeAvatar employeeKey={emp.key} name={emp.name} size={40} />
+        <div className="flex items-center gap-4 min-w-0">
+          <EmployeeAvatar employeeKey={emp.key} name={emp.name} size={80} />
           <span className="text-lg font-bold truncate">{emp.name}</span>
         </div>
         <Badge className={badge.className}>{badge.label}</Badge>

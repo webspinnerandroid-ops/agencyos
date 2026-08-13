@@ -104,7 +104,7 @@ export interface ProposedItem {
   id: string;
   date: string; // yyyy-MM-dd
   title: string;
-  kind: "blog" | "social" | "website";
+  kind: "blog" | "social" | "website" | "research";
   planId: string;
   planTitle: string;
   platform?: string | null;
@@ -805,16 +805,20 @@ export default function ContentCalendar({
                               <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                                 {item.kind === "website"
                                   ? "🌐"
-                                  : item.kind === "blog"
-                                    ? "📝"
-                                    : (PLATFORM_ICONS[item.platform ?? ""] ?? "📣")}
+                                  : item.kind === "research"
+                                    ? "🔎"
+                                    : item.kind === "blog"
+                                      ? "📝"
+                                      : (PLATFORM_ICONS[item.platform ?? ""] ?? "📣")}
                               </span>
                               <span className="text-[10px] font-medium text-muted-foreground">
                                 {item.kind === "website"
                                   ? "Proposed website build"
-                                  : item.kind === "blog"
-                                    ? "Proposed blog"
-                                    : "Proposed social"}
+                                  : item.kind === "research"
+                                    ? "Research checkpoint"
+                                    : item.kind === "blog"
+                                      ? "Proposed blog"
+                                      : "Proposed social"}
                               </span>
                             </div>
                             <p className="truncate text-muted-foreground leading-tight">
@@ -1431,6 +1435,19 @@ export default function ContentCalendar({
                 </div>
               )}
 
+              {/* Research checkpoints: no content generation — approving
+                  marks the foundation step done. */}
+              {selectedProposed.kind === "research" && (
+                <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-muted-foreground dark:bg-amber-950/40 dark:border-amber-800">
+                  <p className="font-medium text-amber-700 dark:text-amber-300 mb-0.5">🔎 Foundation research</p>
+                  <p>
+                    Voice &amp; tone, brand persona, and buyer-persona research
+                    ground everything the team produces. Approving marks it done
+                    — no content is generated for research checkpoints.
+                  </p>
+                </div>
+              )}
+
               {/* Website milestones: no content generation — approving marks
                   the build step active and points at the Web Builder. */}
               {selectedProposed.kind === "website" && (
@@ -1520,7 +1537,11 @@ export default function ContentCalendar({
               ) : (
                 <ThumbsUp className="size-4 mr-1" />
               )}
-              {selectedProposed?.kind === "website" ? "Approve milestone" : "Approve & Generate"}
+              {selectedProposed?.kind === "website"
+                ? "Approve milestone"
+                : selectedProposed?.kind === "research"
+                  ? "Approve checkpoint"
+                  : "Approve & Generate"}
             </Button>
             <Button
               variant="ghost"

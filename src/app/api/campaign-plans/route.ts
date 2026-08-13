@@ -108,6 +108,17 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    // Foundation research checkpoints (voice/tone, persona, buyer personas)
+    // have no generated content either — approving marks the research done.
+    if (item.kind === "research") {
+      return NextResponse.json({
+        success: true,
+        generating: false,
+        message:
+          "Research checkpoint approved — the team will use this as the campaign's foundation.",
+      });
+    }
+
     // The workspace lives on the plan (items are scoped to the tenant).
     const workspaceId = await getCampaignPlanWorkspace(tenantId, item.plan_id);
     void generateApprovedCampaignItem(tenantId, itemId, workspaceId, mediaKind).catch(

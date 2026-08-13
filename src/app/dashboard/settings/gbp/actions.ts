@@ -151,6 +151,13 @@ export async function syncGbpProfiles(): Promise<ActionResponse<GoogleBusinessPr
     );
     const accountsText = await accountsRes.text().catch(() => "");
     if (!accountsRes.ok) {
+      if (accountsRes.status === 429 || /quota exceeded/i.test(accountsText)) {
+        return {
+          success: false,
+          error:
+            "Google is rate-limiting the Business Profile API (default 1 request/min). Raise the quota in Google Cloud (APIs & Services → Quotas → My Business Account Management API), then wait a minute and retry.",
+        };
+      }
       const detail = accountsText.startsWith("{")
         ? JSON.parse(accountsText).error?.message ?? accountsText.slice(0, 200)
         : accountsText.slice(0, 200);

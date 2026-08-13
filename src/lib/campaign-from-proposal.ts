@@ -86,6 +86,31 @@ const TYPE_PLATFORM: Record<string, string | null> = {
 };
 
 /**
+ * Campaign foundation research — seeded into EVERY campaign before the
+ * content sprint. Cheryl (penny) owns voice/tone and persona, Malory (nina)
+ * owns the buyer-personas research. These are checkpoints, not content:
+ * approving them marks the step done (no generation) so the team's later
+ * output is grounded in a defined voice and audience.
+ */
+const RESEARCH_MILESTONES = [
+  {
+    topic:
+      "Brand voice & tone — define the brand's voice, tone, messaging pillars and do-not-say list",
+    owner: "penny",
+  },
+  {
+    topic:
+      "Brand persona — define the brand's personality and how it speaks to customers",
+    owner: "penny",
+  },
+  {
+    topic:
+      "Buyer personas research — audience segments, pain points, questions and buying intent",
+    owner: "nina",
+  },
+];
+
+/**
  * Seed a campaign plan from an approved SEO proposal tier.
  *
  * - Uses the tier's first month (the launch sprint) as the plan scope: its
@@ -161,6 +186,22 @@ export async function createCampaignFromProposal(
     ? ` — ${launch.focusArea}`
     : "";
 
+  // Foundation research (voice, persona, buyer personas) always lands at the
+  // start of the plan — approving them is a checkbox, not content generation.
+  const researchItems = RESEARCH_MILESTONES.map((m, i) => {
+    const due = dates[Math.min(i, dates.length - 1)]?.slice(0, 10);
+    if (!due) return null;
+    return {
+      kind: "research" as const,
+      topic: m.topic,
+      dueDate: due,
+      platform: null,
+      owner: m.owner,
+      keywords: null,
+      externalLinks: null,
+    };
+  }).filter((i): i is NonNullable<typeof i> => i !== null);
+
   // Website-build milestones (owner: Ray / dev) when the owner opted in —
   // dated across the first month so the build lands on the calendar
   // alongside the content sprint.
@@ -180,13 +221,14 @@ export async function createCampaignFromProposal(
       }).filter((i): i is NonNullable<typeof i> => i !== null)
     : [];
 
-  const allItems = [...items, ...websiteItems].sort((a, b) =>
+  const allItems = [...researchItems, ...items, ...websiteItems].sort((a, b) =>
     a.dueDate.localeCompare(b.dueDate)
   );
 
   const summary = [
     json.executiveSummary ?? "",
     `Seeded from the ${tierName} proposal: ${items.length} content pieces across the first month${focusArea}, scheduled at the tier's cadence. Owners assigned by content type. Approve items to turn them into drafts.`,
+    "Foundation research first: brand voice & tone, brand persona and buyer personas are seeded at the start of the plan — Cheryl owns voice/persona, Malory owns the buyer research. Approving them is a checkpoint, not content generation.",
     includeWebsite
       ? "Website build included: structure, page build and launch milestones are on the calendar, owned by Ray — approving one opens the Web Builder to work on it."
       : "",

@@ -44,7 +44,13 @@ export interface CompetitorRecord {
 export async function discoverCompetitors(
   domain: string,
   tenantId?: string,
-  auditContext?: { url: string; homepageTitle?: string; metaDescription?: string; overallScore?: number }
+  auditContext?: {
+    url: string;
+    homepageTitle?: string;
+    metaDescription?: string;
+    overallScore?: number;
+    location?: string | null;
+  }
 ): Promise<string[]> {
   const competitors: string[] = [];
 
@@ -74,56 +80,79 @@ export async function discoverCompetitors(
     }
   }
 
-  // 2. AI-powered competitor discovery
+  // 2. AI-powered competitor discovery (retried — DeepSeek thinking mode
+  // intermittently returns empty, so a single failure must not leave the
+  // benchmark empty).
   if (tenantId && auditContext) {
-    try {
-      const { generateStructuredOutput } = await import("@/lib/ai/orchestrator");
+    const titleInfo = auditContext.homepageTitle ? `Website title: "${auditContext.homepageTitle}". ` : "";
+    const descInfo = auditContext.metaDescription ? `Meta description: "${auditContext.metaDescription}". ` : "";
+    const locationInfo = auditContext.location
+      ? `Service area / location: ${auditContext.location}. `
+      : "";
 
-      const titleInfo = auditContext.homepageTitle ? `Website title: "${auditContext.homepageTitle}". ` : "";
-      const descInfo = auditContext.metaDescription ? `Meta description: "${auditContext.metaDescription}". ` : "";
+    const systemPrompt = `You are an SEO competitor research expert. Given a website domain, its audit data and its service location, identify the TOP 5 REAL competing businesses in that same industry/niche and geographic market. These must be actual businesses that compete for the same customers, NOT SEO tools or marketing platforms. Return ONLY their website URLs.`;
 
-      const systemPrompt = `You are an SEO competitor research expert. Given a website domain and its audit data, identify the TOP 5 REAL competing businesses in that same industry/niche. These must be actual businesses that compete for the same customers, NOT SEO tools or marketing platforms. Return ONLY their website URLs.`;
+    const userPrompt = `Domain: ${auditContext.url}
+${titleInfo}${descInfo}${locationInfo}Overall SEO score: ${auditContext.overallScore ?? "N/A"}/100.
 
-      const userPrompt = `Domain: ${auditContext.url}
-${titleInfo}${descInfo}Overall SEO score: ${auditContext.overallScore ?? "N/A"}/100.
+Research and identify the top 5 businesses that directly compete with this website in its industry and location. These should be real companies in the same industry that would appear in Google search results, Google Business Profile local pack, or industry directories for the same keywords.
 
-Research and identify the top 5 businesses that directly compete with this website. These should be real companies in the same industry that would appear in Google search results, Google Business Profile local pack, or industry directories for the same keywords.
+IMPORTANT: Do NOT include SEO tool companies (ahrefs, moz, semrush, etc.). Find actual competing businesses. If the business is location-based, prefer competitors serving the same city/region.`;
 
-IMPORTANT: Do NOT include SEO tool companies (ahrefs, moz, semrush, etc.). Find actual competing businesses.`;
-
-      const result = await generateStructuredOutput<{ competitors: string[] }>(
-        "seo_audit" as any,
-        systemPrompt,
-        userPrompt,
-        tenantId,
-        {
-          type: "object",
-          properties: {
-            competitors: {
-              type: "array",
-              items: { type: "string" },
-              description: "Array of competitor website URLs (e.g. https://competitor.com)",
+    let aiUrls: string[] = [];
+    for (let attempt = 0; attempt < 3 && aiUrls.length < 3; attempt++) {
+      try {
+        const { generateStructuredOutput } = await import("@/lib/ai/orchestrator");
+        const result = await generateStructuredOutput<{ competitors: string[] }>(
+          "seo_audit" as any,
+          systemPrompt,
+          userPrompt,
+          tenantId,
+          {
+            type: "object",
+            properties: {
+              competitors: {
+                type: "array",
+                items: { type: "string" },
+                description: "Array of competitor website URLs (e.g. https://competitor.com)",
+              },
             },
+            required: ["competitors"],
           },
-          required: ["competitors"],
-        },
-        { temperature: 0.3, maxTokens: 2048, functionName: "discover_competitors" }
-      );
+          { temperature: 0.3 + attempt * 0.2, maxTokens: 16384, functionName: "discover_competitors" }
+        );
 
-      if (result?.competitors && Array.isArray(result.competitors)) {
-        for (const c of result.competitors) {
-          if (competitors.length >= 10) break;
-          // Validate it looks like a URL and isn't an SEO tool
-          const normalized = c.startsWith("http") ? c : `https://${c}`;
-          const isSeoTool = /ahrefs|moz\.com|semrush|spyfu|serpstat|majestic/i.test(normalized);
-          if (!isSeoTool && !competitors.includes(normalized)) {
-            competitors.push(normalized);
+        if (result?.competitors && Array.isArray(result.competitors)) {
+          for (const c of result.competitors) {
+            // Validate it looks like a URL and isn't an SEO tool
+            const normalized = c.startsWith("http") ? c : `https://${c}`;
+            const isSeoTool = /ahrefs|moz\.com|semrush|spyfu|serpstat|majestic/i.test(normalized);
+            if (!isSeoTool && !aiUrls.includes(normalized)) {
+              aiUrls.push(normalized);
+            }
           }
         }
+      } catch (err) {
+        console.warn(
+          `[Competitors] AI discovery attempt ${attempt + 1} failed:`,
+          (err as Error).message
+        );
       }
-    } catch (err) {
-      console.warn("[Competitors] AI-powered discovery failed, using fallback:", (err as Error).message);
     }
+
+    for (const u of aiUrls) {
+      if (competitors.length >= 10) break;
+      if (!competitors.includes(u)) competitors.push(u);
+    }
+  }
+
+  // 3. If AI research still found nothing after retries, leave the list
+  // empty rather than fabricate domains — callers surface an honest
+  // "add competitors manually / re-run" state instead.
+  if (competitors.length === 0) {
+    console.warn(
+      `[Competitors] No competitors discovered for ${auditContext?.url ?? domain} after retries`
+    );
   }
 
   return competitors.slice(0, 10);

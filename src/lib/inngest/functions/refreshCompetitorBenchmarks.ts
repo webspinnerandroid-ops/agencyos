@@ -1,6 +1,10 @@
 import { inngest } from "@/lib/inngest/client";
 import { createClient } from "@supabase/supabase-js";
 import { rescoreCompetitorEntries } from "@/lib/seo/competitor-backfill";
+import {
+  discoverCompetitors,
+  toCompetitorData,
+} from "@/lib/seo/competitors";
 
 /**
  * Monthly competitor-benchmark refresh (1st of the month, 07:00 UTC).
@@ -28,7 +32,7 @@ export const refreshCompetitorBenchmarks = inngest.createFunction(
 
       const { data: rows, error } = await supabase
         .from("seo_campaigns")
-        .select("id, url, competitors_json")
+        .select("id, tenant_id, url, location, audit_json, competitors_json")
         .limit(1000);
 
       if (error) throw new Error(`Query failed: ${error.message}`);
@@ -36,10 +40,43 @@ export const refreshCompetitorBenchmarks = inngest.createFunction(
       let campaignsUpdated = 0;
       let competitorsScored = 0;
       let unreachable = 0;
+      let discovered = 0;
       for (const row of rows ?? []) {
-        const comps = Array.isArray(row.competitors_json)
+        let comps = Array.isArray(row.competitors_json)
           ? row.competitors_json
           : [];
+
+        // Campaigns with no competitors yet: research + discover them here so
+        // no workspace is ever stuck with an empty benchmark.
+        if (comps.length === 0) {
+          try {
+            const audit = (row.audit_json ?? {}) as any;
+            const context = {
+              url: audit.url ?? row.url ?? "",
+              homepageTitle: audit.homepage?.title ?? undefined,
+              metaDescription: audit.homepage?.metaDescription ?? undefined,
+              overallScore: audit.overallScore ?? undefined,
+              location: row.location ?? audit.location ?? null,
+            };
+            const host = (() => {
+              try {
+                return new URL(row.url).hostname;
+              } catch {
+                return (row.url ?? "").replace(/^https?:\/\//, "").split("/")[0] ?? "";
+              }
+            })();
+            const urls = await discoverCompetitors(host, row.tenant_id, context);
+            if (urls.length > 0) {
+              comps = await toCompetitorData(urls.slice(0, 5), context);
+              discovered++;
+            }
+          } catch (err: any) {
+            console.warn(
+              `[refresh-competitors] discovery failed for ${row.id}: ${err?.message}`
+            );
+          }
+        }
+
         if (comps.length === 0) continue;
         const res = await rescoreCompetitorEntries(comps);
         campaignsUpdated++;
@@ -61,6 +98,7 @@ export const refreshCompetitorBenchmarks = inngest.createFunction(
         campaignsUpdated,
         competitorsScored,
         unreachable,
+        discovered,
       };
     });
   }

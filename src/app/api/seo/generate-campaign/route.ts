@@ -384,6 +384,7 @@ export async function POST(request: NextRequest) {
           homepageTitle: siteAudit?.homepage?.title,
           metaDescription: siteAudit?.homepage?.metaDescription,
           overallScore: auditData.overallScore,
+          location: location || null,
         }
       );
       // Manual first, then discovered, deduped — manual wins on tie.

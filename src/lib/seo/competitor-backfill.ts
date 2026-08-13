@@ -14,6 +14,10 @@
 import { createClient } from "@supabase/supabase-js";
 import { scoreCompetitorHtml } from "@/lib/seo/audit-report";
 import { fetchCompetitorHtml } from "@/lib/seo/competitor-fetch";
+import {
+  discoverCompetitors,
+  toCompetitorData,
+} from "@/lib/seo/competitors";
 
 export interface CompetitorBackfillStats {
   rowsTouched: number;
@@ -132,6 +136,107 @@ export interface BackfillOptions {
   apply?: boolean;
   limit?: number;
   onLog?: (message: string) => void;
+}
+
+// ----------------------------------------------------------------------------
+// Competitor discovery backfill.
+//
+// Campaigns generated before competitor discovery was wired (or whose AI
+// discovery failed at the time) have an empty competitors_json. This discovers
+// real competitors for those campaigns — researching the client's industry +
+// location — then scores them with the same SEO + AEO/GEO engines and writes
+// them back. It never touches campaigns that already have competitors.
+// ----------------------------------------------------------------------------
+
+export interface DiscoveryStats {
+  rowsTouched: number;
+  discovered: number;
+  empty: number;
+}
+
+function hostnameOf(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return (url || "").replace(/^https?:\/\//, "").split("/")[0] ?? "";
+  }
+}
+
+/**
+ * Discover + score competitors for campaigns whose competitors_json is empty
+ * or null. Pure per-row logic lives here so the one-off script, the
+ * "Re-run audit" route and the scheduled job can't drift.
+ */
+export async function discoverAndBackfillCompetitors(
+  options: BackfillOptions = {}
+): Promise<DiscoveryStats> {
+  const { apply = true, limit = 500, onLog } = options;
+  const log = onLog ?? (() => {});
+  const supabase = makeClient();
+
+  const { data: rows, error } = await supabase
+    .from("seo_campaigns")
+    .select("id, tenant_id, url, location, audit_json, competitors_json")
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (error) throw new Error(`Query failed: ${error.message}`);
+
+  const stats: DiscoveryStats = { rowsTouched: 0, discovered: 0, empty: 0 };
+
+  for (const row of rows ?? []) {
+    const comps = Array.isArray(row.competitors_json)
+      ? row.competitors_json
+      : [];
+    if (comps.length > 0) continue; // already has competitors — leave untouched
+
+    const audit = (row.audit_json ?? {}) as any;
+    const context = {
+      url: audit.url ?? row.url ?? "",
+      homepageTitle: audit.homepage?.title ?? undefined,
+      metaDescription: audit.homepage?.metaDescription ?? undefined,
+      overallScore: audit.overallScore ?? undefined,
+      location: row.location ?? audit.location ?? null,
+    };
+
+    let discovered: string[] = [];
+    try {
+      discovered = await discoverCompetitors(
+        hostnameOf(row.url),
+        row.tenant_id,
+        context
+      );
+    } catch (err) {
+      log(`[discover] ${row.id} discovery failed: ${(err as Error).message}`);
+    }
+
+    if (discovered.length === 0) {
+      stats.empty++;
+      log(`[empty] ${row.id} (${row.url}) — no competitors discovered`);
+      continue;
+    }
+
+    // Convert + score with the same engines the crawl uses (SEO + AEO/GEO).
+    const entries = await toCompetitorData(discovered.slice(0, 5), context);
+
+    stats.rowsTouched++;
+    if (!apply) {
+      log(`[dry] would write ${discovered.length} competitors to ${row.id} (${row.url})`);
+      continue;
+    }
+    const { error: upErr } = await supabase
+      .from("seo_campaigns")
+      .update({ competitors_json: entries })
+      .eq("id", row.id);
+    if (upErr) {
+      log(`[fail] ${row.id}: ${upErr.message}`);
+    } else {
+      stats.discovered++;
+      log(`[ok] ${row.id} (${row.url}) → ${discovered.length} competitors`);
+    }
+  }
+
+  return stats;
 }
 
 export async function backfillCompetitorScores(

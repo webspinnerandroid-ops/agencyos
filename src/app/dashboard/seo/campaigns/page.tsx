@@ -231,6 +231,10 @@ export default function SeoCampaignsPage() {
     url: string;
   } | null>(null);
   const [startDialogCampaign, setStartDialogCampaign] = useState<string | null>(null);
+  const [signDialogCampaign, setSignDialogCampaign] = useState<StoredCampaign | null>(null);
+  const [signFormName, setSignFormName] = useState("");
+  const [signFormEmail, setSignFormEmail] = useState("");
+  const [signFormError, setSignFormError] = useState<string | null>(null);
   const [startIncludeWebsite, setStartIncludeWebsite] = useState(false);
   const [startCreateWorkspace, setStartCreateWorkspace] = useState(true);
   const [startBusy, setStartBusy] = useState(false);
@@ -475,82 +479,84 @@ export default function SeoCampaignsPage() {
   }, []);
 
   // ------------------------------------------------------------------
-  // Send a proposal for signature (in-house signing link). If the client has
-  // no email on file, ask for it once so the link can be emailed.
-  const handleSendForSignature = useCallback(async (campaign: StoredCampaign) => {
-    setSendingSigId(campaign.id);
-    setError(null);
-    try {
-      let body: Record<string, string> = {};
-      let res = await fetch(`/api/seo/campaigns/${campaign.id}/sign-request`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      let data = await res.json().catch(() => ({}));
-
-      // No signer identity on file → prompt once and retry with the details.
-      if (!res.ok && (data.error ?? "").includes("No signer identity")) {
-        const signerEmail = window.prompt(
-          "Enter the client's email to send the signing link:",
-          campaign.signer_email ?? ""
-        );
-        if (!signerEmail || !signerEmail.includes("@")) {
-          setSendingSigId(null);
-          return;
-        }
-        body = { signerEmail, signerName: campaign.signer_name ?? "" };
-        res = await fetch(`/api/seo/campaigns/${campaign.id}/sign-request`, {
+  // Send a proposal for signature (in-house signing link). Emails the client
+  // a secure /sign/[token] link and stores the same link so the agency can
+  // copy/share it manually. Returns an error message on failure (null on
+  // success) so the signing dialog can show it inline.
+  const handleSendForSignature = useCallback(
+    async (campaign: StoredCampaign, signerName?: string, signerEmail?: string) => {
+      setSendingSigId(campaign.id);
+      setError(null);
+      try {
+        const res = await fetch(`/api/seo/campaigns/${campaign.id}/sign-request`, {
           method: "POST",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
+          body: JSON.stringify({
+            signerName: (signerName ?? campaign.signer_name ?? "").trim(),
+            signerEmail: (signerEmail ?? campaign.signer_email ?? "").trim(),
+          }),
         });
-        data = await res.json().catch(() => ({}));
-      }
+        const data = await res.json().catch(() => ({}));
 
-      if (!res.ok) {
-        setError(data.error ?? "Failed to send for signature");
-        return;
-      }
+        if (!res.ok) {
+          const message = data.error ?? "Failed to send for signature";
+          setError(message);
+          return message;
+        }
 
-      // Store the link so the agency can copy/share it manually if the
-      // client's email didn't receive it.
-      if (data.signUrl) {
-        setSentSignLink({ campaignId: campaign.id, url: data.signUrl });
+        // Store the link so the agency can copy/share it manually if the
+        // client's email didn't receive it.
+        if (data.signUrl) {
+          setSentSignLink({ campaignId: campaign.id, url: data.signUrl });
+        }
+        setCampaigns((prev) =>
+          prev.map((c) =>
+            c.id === campaign.id
+              ? {
+                  ...c,
+                  docusign_status: data.status ?? "sent",
+                  signer_name: data.signerName ?? c.signer_name,
+                  signer_email: data.signerEmail ?? c.signer_email,
+                }
+              : c
+          )
+        );
+        setPastCampaigns((prev) =>
+          prev.map((c) =>
+            c.id === campaign.id
+              ? {
+                  ...c,
+                  docusign_status: data.status ?? "sent",
+                  signer_name: data.signerName ?? c.signer_name,
+                  signer_email: data.signerEmail ?? c.signer_email,
+                }
+              : c
+          )
+        );
+        return null;
+      } catch {
+        const message = "Network error while sending for signature";
+        setError(message);
+        return message;
+      } finally {
+        setSendingSigId(null);
       }
-      setCampaigns((prev) =>
-        prev.map((c) =>
-          c.id === campaign.id
-            ? { ...c, docusign_status: data.status ?? "sent" }
-            : c
-        )
-      );
-      setPastCampaigns((prev) =>
-        prev.map((c) =>
-          c.id === campaign.id
-            ? { ...c, docusign_status: data.status ?? "sent" }
-            : c
-        )
-      );
-    } catch {
-      setError("Network error while sending for signature");
-    } finally {
-      setSendingSigId(null);
-    }
-  }, []);
+    },
+    []
+  );
 
-  // Refresh a proposal's signing status (the Connect webhook normally updates
-  // it; this is the manual pull for when it hasn't fired yet).
+  // Refresh a proposal's signing status from the in-house sign_requests table
+  // (manual pull — the client's signing page updates status live).
   const handleRefreshSignature = useCallback(async (campaign: StoredCampaign) => {
     try {
-      const res = await fetch(`/api/seo/campaigns/${campaign.id}/docusign`, {
+      const res = await fetch(`/api/seo/campaigns/${campaign.id}/sign-request`, {
         credentials: "include",
       });
       if (!res.ok) return;
       const data = await res.json();
-      const status = data.status ?? "unsigned";
+      const requests = Array.isArray(data.requests) ? data.requests : [];
+      const status = requests[0]?.status ?? "unsigned";
       setCampaigns((prev) =>
         prev.map((c) => (c.id === campaign.id ? { ...c, docusign_status: status } : c))
       );
@@ -561,6 +567,35 @@ export default function SeoCampaignsPage() {
       // ignore
     }
   }, []);
+
+  // Open the signing dialog pre-filled with the client's name/email.
+  const openSignDialog = useCallback((campaign: StoredCampaign) => {
+    setSignFormName(campaign.signer_name ?? "");
+    setSignFormEmail(campaign.signer_email ?? "");
+    setSignFormError(null);
+    setSignDialogCampaign(campaign);
+  }, []);
+
+  // Submit the signing dialog: validate the email, send the link, and close
+  // on success (the copyable link + "emailed to" feedback renders in the card).
+  const submitSignDialog = useCallback(async () => {
+    if (!signDialogCampaign) return;
+    if (!signFormEmail || !signFormEmail.includes("@")) {
+      setSignFormError("Enter a valid email address for the client.");
+      return;
+    }
+    setSignFormError(null);
+    const err = await handleSendForSignature(
+      signDialogCampaign,
+      signFormName,
+      signFormEmail
+    );
+    if (err) {
+      setSignFormError(err);
+      return;
+    }
+    setSignDialogCampaign(null);
+  }, [signDialogCampaign, signFormName, signFormEmail, handleSendForSignature]);
 
   // ------------------------------------------------------------------
   // Render
@@ -1045,9 +1080,9 @@ export default function SeoCampaignsPage() {
                           onClick={() =>
                             campaign.docusign_status === "completed"
                               ? undefined
-                              : campaign.docusign_status && campaign.docusign_status !== "declined" && campaign.docusign_status !== "voided"
+                              : campaign.docusign_status === "sent"
                               ? handleRefreshSignature(campaign)
-                              : handleSendForSignature(campaign)
+                              : openSignDialog(campaign)
                           }
                           title={
                             campaign.docusign_status === "completed"
@@ -1062,10 +1097,10 @@ export default function SeoCampaignsPage() {
                             </>
                           ) : campaign.docusign_status === "completed" ? (
                             "✓ Signed"
-                          ) : campaign.docusign_status && campaign.docusign_status !== "declined" && campaign.docusign_status !== "voided" ? (
+                          ) : campaign.docusign_status === "sent" ? (
                             "Check Signature"
                           ) : (
-                            "DocuSign Sign"
+                            "Send for Signature"
                           )}
                         </Button>
                         {campaign.docusign_status === "completed" && campaign.signed_document_url ? (
@@ -1120,9 +1155,9 @@ export default function SeoCampaignsPage() {
                             onClick={() =>
                               campaign.docusign_status === "completed"
                                 ? undefined
-                                : campaign.docusign_status && campaign.docusign_status !== "declined" && campaign.docusign_status !== "voided"
+                                : campaign.docusign_status === "sent"
                                 ? handleRefreshSignature(campaign)
-                                : handleSendForSignature(campaign)
+                                : openSignDialog(campaign)
                             }
                           >
                             {sendingSigId === campaign.id ? (
@@ -1132,10 +1167,10 @@ export default function SeoCampaignsPage() {
                               </>
                             ) : campaign.docusign_status === "completed" ? (
                               "✓ Signed"
-                            ) : campaign.docusign_status && campaign.docusign_status !== "declined" && campaign.docusign_status !== "voided" ? (
+                            ) : campaign.docusign_status === "sent" ? (
                               "Check Signature"
                             ) : (
-                              "DocuSign Sign"
+                              "Send for Signature"
                             )}
                           </Button>
                           {campaign.docusign_status === "completed" && campaign.signed_document_url && (
@@ -1237,6 +1272,81 @@ export default function SeoCampaignsPage() {
           </div>
         </Card>
       )}
+
+      {/* Send-for-signature dialog — collects the client's email (it's never
+          on file by default), then emails them a private signing link. */}
+      <Dialog
+        open={!!signDialogCampaign}
+        onOpenChange={(open) => !open && setSignDialogCampaign(null)}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Send proposal for e-signature</DialogTitle>
+            <DialogDescription>
+              Emails <span className="font-medium">{signFormEmail || "the client"}</span> a
+              private signing link. They review the proposal and terms, sign
+              online, and the signed agreement is stored in the workspace — the
+              campaign auto-starts once signed.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <label htmlFor="signName" className="block text-sm font-medium mb-1.5">
+                Client name
+              </label>
+              <input
+                id="signName"
+                type="text"
+                value={signFormName}
+                onChange={(e) => setSignFormName(e.target.value)}
+                placeholder="e.g., Jane Smith"
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+            </div>
+            <div>
+              <label htmlFor="signEmail" className="block text-sm font-medium mb-1.5">
+                Client email
+              </label>
+              <input
+                id="signEmail"
+                type="email"
+                value={signFormEmail}
+                onChange={(e) => setSignFormEmail(e.target.value)}
+                placeholder="client@example.com"
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+              <p className="text-xs text-muted-foreground mt-1.5">
+                The signing link is emailed here and also shown on the proposal
+                card so you can copy/share it manually.
+              </p>
+            </div>
+            {signFormError && (
+              <div className="p-3 rounded-md bg-destructive/10 text-destructive text-sm">
+                {signFormError}
+              </div>
+            )}
+          </div>
+          <DialogFooter className="gap-2">
+            <Button
+              variant="ghost"
+              disabled={sendingSigId === signDialogCampaign?.id}
+              onClick={() => setSignDialogCampaign(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="default"
+              disabled={sendingSigId === signDialogCampaign?.id}
+              onClick={submitSignDialog}
+            >
+              {sendingSigId === signDialogCampaign?.id ? (
+                <Loader2 className="size-4 animate-spin mr-1" />
+              ) : null}
+              Send signing link
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Start-campaign setup dialog — asks if a website is part of the build */}
       <Dialog

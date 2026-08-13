@@ -23,7 +23,11 @@ function getAdminClient() {
   );
 }
 
-export function generateKey(): string {
+// Note: this module carries `"use server"`, so every export must be async —
+// the production Turbopack build rejects sync exports from server-action
+// modules ("Server Actions must be async functions").
+
+export async function generateKey(): Promise<string> {
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   let key = "";
   for (const b of bytes) key += KEY_CHARS[b % KEY_CHARS.length];
@@ -31,7 +35,7 @@ export function generateKey(): string {
 }
 
 /** Platform canonical host, e.g. platform.blissmedialab.com (no scheme/path). */
-export function platformHost(): string {
+export async function platformHost(): Promise<string> {
   return (process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000")
     .replace(/^https?:\/\//, "")
     .replace(/\/$/, "");
@@ -50,7 +54,7 @@ export async function ensureIndexNowKey(host: string): Promise<string | null> {
     .maybeSingle();
   if (existing?.key) return existing.key;
 
-  const key = generateKey();
+  const key = await generateKey();
   const { data, error } = await supabase
     .from("indexnow_keys")
     .insert({ host: clean, key })
@@ -131,7 +135,7 @@ export async function pingPagePublish(
   tenantId: string,
   slug: string
 ): Promise<{ ok: boolean; detail?: string }[]> {
-  const hosts = [platformHost()];
+  const hosts = [await platformHost()];
   const supabase = getAdminClient();
   const { data: domains } = await supabase
     .from("site_domains")

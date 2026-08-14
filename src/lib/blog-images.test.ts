@@ -58,6 +58,18 @@ describe("selectBlogImageSpecs", () => {
     const titles = selected.map((s) => s.sectionTitle);
     expect(new Set(titles).size).toBe(titles.length);
   });
+
+  it("respects an explicit image-count limit", () => {
+    const specs = [
+      spec({ placement: "featured", sectionTitle: "" }),
+      spec({ sectionTitle: "A" }),
+      spec({ sectionTitle: "B" }),
+    ];
+    expect(selectBlogImageSpecs(specs, 0)).toEqual([]);
+    expect(selectBlogImageSpecs(specs, 1)).toHaveLength(1);
+    expect(selectBlogImageSpecs(specs, 1)[0].placement).toBe("featured");
+    expect(selectBlogImageSpecs(specs, 2)).toHaveLength(2);
+  });
 });
 
 describe("injectImagesIntoBody", () => {

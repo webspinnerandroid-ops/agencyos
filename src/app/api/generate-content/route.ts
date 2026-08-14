@@ -117,7 +117,8 @@ async function generateBlogImages(
   tenantId: string,
   clientId: string | null | undefined,
   specs: BlogImageSpec[],
-  postTitle: string
+  postTitle: string,
+  imageCount: number = MAX_BLOG_IMAGES
 ): Promise<GeneratedBlogImage[]> {
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -127,9 +128,9 @@ async function generateBlogImages(
 
   const workspaceId = await getCurrentWorkspaceId().catch(() => null);
 
-  // Cap + de-duplicate: at most MAX_BLOG_IMAGES total, never two images for
+  // Cap + de-duplicate: at most `imageCount` total, never two images for
   // the same section (that is what caused stacked images).
-  const capped = selectBlogImageSpecs(specs);
+  const capped = selectBlogImageSpecs(specs, imageCount);
 
   const results: GeneratedBlogImage[] = [];
 
@@ -261,8 +262,15 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { clientId, topic, brandVoice, platforms = [], title, keywords = [] } =
-      parsed.data;
+    const {
+      clientId,
+      topic,
+      brandVoice,
+      platforms = [],
+      title,
+      keywords = [],
+      imageCount = MAX_BLOG_IMAGES,
+    } = parsed.data;
 
     // The user may supply a title, keywords/topics, or both. "topic" is the
     // primary working keyword the model writes around; when only a title is
@@ -510,7 +518,8 @@ export async function POST(request: NextRequest) {
       tenantId,
       clientId,
       imageSpecs,
-      blogPost.title
+      blogPost.title,
+      imageCount
     );
 
     // Resolve internal-link markers, then guarantee at least one internal

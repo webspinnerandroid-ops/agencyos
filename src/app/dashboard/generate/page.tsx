@@ -119,6 +119,7 @@ export default function GeneratePage() {
   const [result, setResult] = useState<GenerateResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [keywordsText, setKeywordsText] = useState("");
+  const [imageCount, setImageCount] = useState(1);
   const { copied, copy } = useCopy();
 
   const {
@@ -175,7 +176,7 @@ export default function GeneratePage() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...data, keywords }),
+        body: JSON.stringify({ ...data, keywords, imageCount }),
       });
 
       const json = await res.json();
@@ -268,6 +269,26 @@ export default function GeneratePage() {
                 disabled={loading}
                 {...register("brandVoice")}
               />
+            </div>
+
+            {/* Images per blog */}
+            <div className="space-y-2">
+              <Label htmlFor="imageCount">Images in the post</Label>
+              <select
+                id="imageCount"
+                value={imageCount}
+                onChange={(e) => setImageCount(Number(e.target.value))}
+                disabled={loading}
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              >
+                <option value={0}>None (text only)</option>
+                <option value={1}>1 — featured image</option>
+                <option value={2}>2 — featured + 1 inline</option>
+                <option value={3}>3 — featured + 2 inline</option>
+              </select>
+              <p className="text-xs text-muted-foreground">
+                Fewer images generates faster and costs less.
+              </p>
             </div>
 
             {/* Client Selector (agency only) */}

@@ -28,7 +28,11 @@ export interface GeneratedBlogImage {
  * never two images for the same section (that is what caused stacked images —
  * two specs targeting one H2 heading). First occurrence wins, featured first.
  */
-export function selectBlogImageSpecs(specs: BlogImageSpec[]): BlogImageSpec[] {
+export function selectBlogImageSpecs(
+  specs: BlogImageSpec[],
+  limit: number = MAX_BLOG_IMAGES
+): BlogImageSpec[] {
+  if (limit <= 0) return [];
   const seen = new Set<string>();
   const selected: BlogImageSpec[] = [];
   for (const spec of specs) {
@@ -39,7 +43,7 @@ export function selectBlogImageSpecs(specs: BlogImageSpec[]): BlogImageSpec[] {
     if (seen.has(key)) continue;
     seen.add(key);
     selected.push(spec);
-    if (selected.length >= MAX_BLOG_IMAGES) break;
+    if (selected.length >= limit) break;
   }
   // Featured image always goes first, even if the model listed it later.
   return selected.sort((a, b) =>

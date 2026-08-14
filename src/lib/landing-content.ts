@@ -34,6 +34,27 @@ export interface LandingFaq {
   a: string;
 }
 
+/** A pricing tier. `planId` is the Stripe sync key (product metadata
+ * `plan_id`) — it must stay in sync with Stripe, so the builder renders it
+ * read-only. Everything else is editable display copy. */
+export interface LandingPlan {
+  planId: string;
+  name: string;
+  price: string;
+  description: string;
+  features: string[];
+  popular?: boolean;
+}
+
+/** An a-la-carte hub add-on. `hubId` is the Stripe sync key (product metadata
+ * `hub_id`) — read-only in the builder. */
+export interface LandingHub {
+  hubId: string;
+  name: string;
+  price: string;
+  blurb: string;
+}
+
 export interface LandingContent {
   heroTitle: string;
   heroSubtitle: string;
@@ -50,6 +71,12 @@ export interface LandingContent {
   testimonials: LandingTestimonial[];
   faqHeading: string;
   faqs: LandingFaq[];
+  pricingHeading: string;
+  pricingSubheading: string;
+  plans: LandingPlan[];
+  hubsHeading: string;
+  hubsSubheading: string;
+  hubs: LandingHub[];
   ctaTitle: string;
   ctaSubtitle: string;
   ctaButton: string;
@@ -140,6 +167,68 @@ export const DEFAULT_LANDING_CONTENT: LandingContent = {
       q: "Can I white-label the portal for my clients?",
       a: "Yes. Each client gets a branded portal to review and approve content — no Agency OS branding required.",
     },
+  ],
+  pricingHeading: "Simple, Transparent Pricing",
+  pricingSubheading:
+    "Start with a 14-day free trial. No credit card required. Upgrade anytime.",
+  plans: [
+    {
+      planId: "foundation",
+      name: "Foundation",
+      price: "49",
+      description: "Everything on the platform, at starter levels.",
+      features: [
+        "All six hubs included",
+        "4 blogs / 40 socials per month",
+        "40 images, 8 videos per month",
+        "200K AI tokens / month",
+        "Content calendar + approvals",
+        "White-label portal",
+        "Email support",
+      ],
+    },
+    {
+      planId: "growth",
+      name: "Growth",
+      price: "99",
+      description: "For growing agencies with multiple clients.",
+      features: [
+        "All six hubs included",
+        "12 blogs / 150 socials per month",
+        "150 images, 30 videos per month",
+        "750K AI tokens / month",
+        "SEO campaign automation",
+        "Competitor analysis",
+        "Priority support",
+      ],
+      popular: true,
+    },
+    {
+      planId: "dominance",
+      name: "Dominance",
+      price: "299",
+      description: "Full-scale content engine, white-label ready.",
+      features: [
+        "All six hubs included",
+        "40 blogs / 500 socials per month",
+        "500 images, 120 videos per month",
+        "2.5M AI tokens / month",
+        "Outreach + link building",
+        "Dedicated account manager",
+        "Custom integrations",
+      ],
+    },
+  ],
+  hubsHeading: "Or pick just the hub you need",
+  hubsSubheading:
+    "A-la-carte add-ons — stack a few, or take an all-in-one tier above. Any 3 hubs for $69/mo.",
+  hubs: [
+    { hubId: "content", name: "Content Hub", price: "29", blurb: "Blogs, SEO scoring, content calendar + publish" },
+    { hubId: "social", name: "Social Hub", price: "29", blurb: "Captions, scheduling, approvals, 3 profiles" },
+    { hubId: "video", name: "Video Hub", price: "29", blurb: "Text-to-video & image-to-video generation" },
+    { hubId: "website", name: "Website Hub", price: "29", blurb: "Web Builder — build and host client sites" },
+    { hubId: "outreach", name: "Outreach Hub", price: "29", blurb: "Guest posts, reply watching, opportunities" },
+    { hubId: "ai_team", name: "AI Team", price: "49", blurb: "The full employee roster, chat + campaigns" },
   ],
   ctaTitle: "Ready to Scale Your Agency?",
   ctaSubtitle:
@@ -232,6 +321,47 @@ function asTestimonials(value: unknown): LandingTestimonial[] | null {
   return out.length ? out : null;
 }
 
+function asPlans(value: unknown): LandingPlan[] | null {
+  if (!Array.isArray(value)) return null;
+  const out: LandingPlan[] = [];
+  for (const v of value) {
+    if (!v || typeof v !== "object") continue;
+    const item = v as Record<string, unknown>;
+    const planId = typeof item.planId === "string" ? item.planId.trim() : "";
+    const name = typeof item.name === "string" ? item.name.trim() : "";
+    if (!planId || !name) continue;
+    out.push({
+      planId,
+      name,
+      price: typeof item.price === "string" ? item.price.trim() : "",
+      description:
+        typeof item.description === "string" ? item.description.trim() : "",
+      features: asStringArray(item.features) ?? [],
+      popular: item.popular === true,
+    });
+  }
+  return out.length ? out : null;
+}
+
+function asHubs(value: unknown): LandingHub[] | null {
+  if (!Array.isArray(value)) return null;
+  const out: LandingHub[] = [];
+  for (const v of value) {
+    if (!v || typeof v !== "object") continue;
+    const item = v as Record<string, unknown>;
+    const hubId = typeof item.hubId === "string" ? item.hubId.trim() : "";
+    const name = typeof item.name === "string" ? item.name.trim() : "";
+    if (!hubId || !name) continue;
+    out.push({
+      hubId,
+      name,
+      price: typeof item.price === "string" ? item.price.trim() : "",
+      blurb: typeof item.blurb === "string" ? item.blurb.trim() : "",
+    });
+  }
+  return out.length ? out : null;
+}
+
 function asFaqs(value: unknown): LandingFaq[] | null {
   if (!Array.isArray(value)) return null;
   const out: LandingFaq[] = [];
@@ -269,6 +399,12 @@ export function mergeLandingContent(raw: unknown): LandingContent {
     testimonials: asTestimonials(r.testimonials) ?? d.testimonials,
     faqHeading: asString(r.faqHeading, d.faqHeading),
     faqs: asFaqs(r.faqs) ?? d.faqs,
+    pricingHeading: asString(r.pricingHeading, d.pricingHeading),
+    pricingSubheading: asString(r.pricingSubheading, d.pricingSubheading),
+    plans: asPlans(r.plans) ?? d.plans,
+    hubsHeading: asString(r.hubsHeading, d.hubsHeading),
+    hubsSubheading: asString(r.hubsSubheading, d.hubsSubheading),
+    hubs: asHubs(r.hubs) ?? d.hubs,
     ctaTitle: asString(r.ctaTitle, d.ctaTitle),
     ctaSubtitle: asString(r.ctaSubtitle, d.ctaSubtitle),
     ctaButton: asString(r.ctaButton, d.ctaButton),

@@ -27,6 +27,8 @@ import {
   type LandingTestimonial,
   type LandingFaq,
   type LandingLogo,
+  type LandingPlan,
+  type LandingHub,
 } from "@/lib/landing-content";
 import { renderBlogBody } from "@/lib/blog-render";
 
@@ -384,6 +386,99 @@ export default function PageBuilderPage() {
           <Button variant="outline" size="sm" onClick={() => patch("howItWorks", [...content.howItWorks, { step: String(content.howItWorks.length + 1).padStart(2, "0"), title: "New step", description: "" }])}>
             <Plus className="size-3.5 mr-1" /> Add step
           </Button>
+        </CardContent>
+      </Card>
+
+      {/* Pricing plans */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Pricing plans</CardTitle>
+          <CardDescription>
+            Display copy for the all-in-one tiers. The Stripe plan ID is the sync key
+            (matched to the product&apos;s <code>plan_id</code> metadata at checkout) — it&apos;s
+            locked so checkout keeps working. Reprice in Stripe, then mirror the number here.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Field label="Section heading" value={content.pricingHeading} onChange={(v) => patch("pricingHeading", v)} />
+          <AreaField label="Section subheading" value={content.pricingSubheading} onChange={(v) => patch("pricingSubheading", v)} />
+          {content.plans.map((p: LandingPlan, i: number) => (
+            <div key={p.planId} className="rounded-md border p-3 space-y-2">
+              <div className="flex items-center gap-1">
+                <span className="text-xs font-medium text-muted-foreground">Plan {i + 1}</span>
+                <span className="ml-2 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground" title="Stripe plan ID (sync key)">
+                  {p.planId}
+                </span>
+                <div className="ml-auto flex items-center gap-0.5">
+                  <Button variant="ghost" size="sm" disabled={i === 0} onClick={() => patch("plans", [...content.plans.slice(0, i - 1), content.plans[i], content.plans[i - 1], ...content.plans.slice(i + 1)])} title="Move up"><ChevronUp className="size-3.5" /></Button>
+                  <Button variant="ghost" size="sm" disabled={i === content.plans.length - 1} onClick={() => patch("plans", [...content.plans.slice(0, i), content.plans[i + 1], content.plans[i], ...content.plans.slice(i + 2)])} title="Move down"><ChevronDown className="size-3.5" /></Button>
+                  <Button variant="ghost" size="sm" className="text-destructive" onClick={() => patch("plans", content.plans.filter((_, j) => j !== i))} title="Remove from page"><Trash2 className="size-3.5" /></Button>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <Input value={p.name} onChange={(e) => patch("plans", content.plans.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} placeholder="Plan name" />
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">$</span>
+                  <Input value={p.price} onChange={(e) => patch("plans", content.plans.map((x, j) => (j === i ? { ...x, price: e.target.value } : x)))} placeholder="99" className="pl-7" />
+                </div>
+              </div>
+              <Input value={p.description} onChange={(e) => patch("plans", content.plans.map((x, j) => (j === i ? { ...x, description: e.target.value } : x)))} placeholder="Short description" />
+              <textarea
+                value={p.features.join("\n")}
+                onChange={(e) => patch("plans", content.plans.map((x, j) => (j === i ? { ...x, features: e.target.value.split("\n") } : x)))}
+                rows={5}
+                placeholder="One feature per line"
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-y"
+              />
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={!!p.popular}
+                  onChange={(e) => patch("plans", content.plans.map((x, j) => (j === i ? { ...x, popular: e.target.checked } : x)))}
+                  className="size-4 rounded border-input"
+                />
+                Mark as &ldquo;Most Popular&rdquo;
+              </label>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
+
+      {/* Hub add-ons */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Hub add-ons</CardTitle>
+          <CardDescription>
+            The a-la-carte hub cards. Hub IDs are Stripe sync keys (product metadata
+            <code>hub_id</code>) and are locked so hub checkout keeps working.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Field label="Section heading" value={content.hubsHeading} onChange={(v) => patch("hubsHeading", v)} />
+          <AreaField label="Section subheading" value={content.hubsSubheading} onChange={(v) => patch("hubsSubheading", v)} />
+          {content.hubs.map((h: LandingHub, i: number) => (
+            <div key={h.hubId} className="rounded-md border p-3 space-y-2">
+              <div className="flex items-center gap-1">
+                <span className="text-xs font-medium text-muted-foreground">Hub {i + 1}</span>
+                <span className="ml-2 rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground" title="Stripe hub ID (sync key)">
+                  {h.hubId}
+                </span>
+                <div className="ml-auto flex items-center gap-0.5">
+                  <Button variant="ghost" size="sm" disabled={i === 0} onClick={() => patch("hubs", [...content.hubs.slice(0, i - 1), content.hubs[i], content.hubs[i - 1], ...content.hubs.slice(i + 1)])} title="Move up"><ChevronUp className="size-3.5" /></Button>
+                  <Button variant="ghost" size="sm" disabled={i === content.hubs.length - 1} onClick={() => patch("hubs", [...content.hubs.slice(0, i), content.hubs[i + 1], content.hubs[i], ...content.hubs.slice(i + 2)])} title="Move down"><ChevronDown className="size-3.5" /></Button>
+                  <Button variant="ghost" size="sm" className="text-destructive" onClick={() => patch("hubs", content.hubs.filter((_, j) => j !== i))} title="Remove from page"><Trash2 className="size-3.5" /></Button>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <Input value={h.name} onChange={(e) => patch("hubs", content.hubs.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} placeholder="Hub name" />
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">$</span>
+                  <Input value={h.price} onChange={(e) => patch("hubs", content.hubs.map((x, j) => (j === i ? { ...x, price: e.target.value } : x)))} placeholder="29" className="pl-7" />
+                </div>
+              </div>
+              <Input value={h.blurb} onChange={(e) => patch("hubs", content.hubs.map((x, j) => (j === i ? { ...x, blurb: e.target.value } : x)))} placeholder="One-line blurb" />
+            </div>
+          ))}
         </CardContent>
       </Card>
 

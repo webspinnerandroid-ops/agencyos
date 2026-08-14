@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -34,8 +34,8 @@ export default function NavBuilderPage() {
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const [dragItem, setDragItem] = useState<{ section: number; item: number } | null>(null);
   const [dragSection, setDragSection] = useState<number | null>(null);
-  const dragOverItem = useRef<{ section: number; item: number } | null>(null);
-  const dragOverSection = useRef<number | null>(null);
+  const [dragOverItem, setDragOverItem] = useState<{ section: number; item: number } | null>(null);
+  const [dragOverSection, setDragOverSection] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -100,7 +100,7 @@ export default function NavBuilderPage() {
   const onDropItem = (target: { section: number; item: number }) => {
     const from = dragItem;
     setDragItem(null);
-    dragOverItem.current = null;
+    setDragOverItem(null);
     if (!from || !sections) return;
     if (from.section === target.section) {
       // Reorder within the same section.
@@ -129,7 +129,7 @@ export default function NavBuilderPage() {
   const onDropSection = (target: number) => {
     const from = dragSection;
     setDragSection(null);
-    dragOverSection.current = null;
+    setDragOverSection(null);
     if (from === null || !sections) return;
     setSections((prev) => {
       if (!prev) return prev;
@@ -241,10 +241,10 @@ export default function NavBuilderPage() {
             key={si}
             draggable
             onDragStart={(e) => { setDragSection(si); e.dataTransfer.effectAllowed = "move"; }}
-            onDragOver={(e) => { e.preventDefault(); dragOverSection.current = si; }}
-            onDragLeave={() => { if (dragOverSection.current === si) dragOverSection.current = null; }}
+            onDragOver={(e) => { e.preventDefault(); setDragOverSection(si); }}
+            onDragLeave={() => { if (dragOverSection === si) setDragOverSection(null); }}
             onDrop={(e) => { e.preventDefault(); e.stopPropagation(); onDropSection(si); }}
-            className={`p-4 cursor-grab active:cursor-grabbing ${dragOverSection.current === si && dragSection !== null && dragSection !== si ? "ring-2 ring-primary" : ""}`}
+            className={`p-4 cursor-grab active:cursor-grabbing ${dragOverSection === si && dragSection !== null && dragSection !== si ? "ring-2 ring-primary" : ""}`}
           >
             <div className="flex items-center gap-2 mb-3">
               <GripVertical className="size-4 text-muted-foreground shrink-0" />
@@ -267,11 +267,11 @@ export default function NavBuilderPage() {
                   key={ii}
                   draggable
                   onDragStart={(e) => { setDragItem({ section: si, item: ii }); e.dataTransfer.effectAllowed = "move"; }}
-                  onDragOver={(e) => { e.preventDefault(); dragOverItem.current = { section: si, item: ii }; }}
-                  onDragLeave={() => { if (dragOverItem.current?.section === si && dragOverItem.current?.item === ii) dragOverItem.current = null; }}
+                  onDragOver={(e) => { e.preventDefault(); setDragOverItem({ section: si, item: ii }); }}
+                  onDragLeave={() => { if (dragOverItem?.section === si && dragOverItem?.item === ii) setDragOverItem(null); }}
                   onDrop={(e) => { e.preventDefault(); e.stopPropagation(); onDropItem({ section: si, item: ii }); }}
                   className={`flex items-center gap-2 rounded-md border p-1.5 cursor-grab active:cursor-grabbing ${
-                    dragOverItem.current?.section === si && dragOverItem.current?.item === ii && dragItem
+                    dragOverItem?.section === si && dragOverItem?.item === ii && dragItem
                       ? "ring-2 ring-primary"
                       : "border-transparent"
                   }`}

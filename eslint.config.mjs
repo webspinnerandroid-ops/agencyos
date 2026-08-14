@@ -14,6 +14,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Local puppeteer screenshot profiles (Chrome user-data dirs).
+    ".edge-profile-*/**",
     "*.cjs",
     "*.js",
     "*.txt",

@@ -198,7 +198,7 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
-      let slug = slugify(content?.slug || title);
+      const slug = slugify(content?.slug || title);
       // Upsert by (tenant, slug): re-publishing updates the existing page.
       const { data: existing } = await supabase
         .from("site_pages")

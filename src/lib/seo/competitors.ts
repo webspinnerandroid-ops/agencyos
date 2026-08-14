@@ -99,7 +99,7 @@ Research and identify the top 5 businesses that directly compete with this websi
 
 IMPORTANT: Do NOT include SEO tool companies (ahrefs, moz, semrush, etc.). Find actual competing businesses. If the business is location-based, prefer competitors serving the same city/region.`;
 
-    let aiUrls: string[] = [];
+    const aiUrls: string[] = [];
     for (let attempt = 0; attempt < 3 && aiUrls.length < 3; attempt++) {
       try {
         const { generateStructuredOutput } = await import("@/lib/ai/orchestrator");

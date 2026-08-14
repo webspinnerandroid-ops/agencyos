@@ -11,6 +11,7 @@ const CASES: {
   request: string;
   expectedKey: string | null;
   expectedAction?: "content" | "campaign" | "chat";
+  expectedReferral?: string | null;
   fixed?: string | null;
 }[] = [
   // ---- Content requests → Cheryl (penny) ----
@@ -64,8 +65,20 @@ const CASES: {
   { request: "triage my inbox please", expectedKey: "eva", expectedAction: "chat" },
 
   // ---- Fixed employee (DM) ----
-  // Content requests go to the writer even from another DM.
-  { request: "write a blog post about coffee", fixed: "linda", expectedKey: "penny", expectedAction: "content" },
+  // A DM is answered BY that employee. Their own pipeline still fires
+  // (Cheryl writes, Malory plans); anything out of their lane is answered
+  // with a referral to the specialist.
+  { request: "write a blog post about coffee", fixed: "linda", expectedKey: "linda", expectedAction: "chat", expectedReferral: "penny" },
+  { request: "write a blog post about coffee", fixed: "stan", expectedKey: "stan", expectedAction: "chat", expectedReferral: "penny" },
+  { request: "plan a campaign for summer", fixed: "stan", expectedKey: "stan", expectedAction: "chat", expectedReferral: "nina" },
+  { request: "someone left a 1-star review", fixed: "stan", expectedKey: "stan", expectedAction: "chat", expectedReferral: "juno" },
+  { request: "draft a liability disclaimer", fixed: "gauge", expectedKey: "gauge", expectedAction: "chat", expectedReferral: "linda" },
+  // The writer's own DM still runs the real content pipeline.
+  { request: "write a blog post about coffee", fixed: "penny", expectedKey: "penny", expectedAction: "content" },
+  // Malory's own DM still runs the campaign pipeline.
+  { request: "plan a campaign for summer", fixed: "nina", expectedKey: "nina", expectedAction: "campaign" },
+  // In their own lane → no referral.
+  { request: "find me 20 new leads", fixed: "stan", expectedKey: "stan", expectedAction: "chat" },
   // In a Sterling DM the fixed employee is applied by the LLM fallback when
   // no deterministic rule matches (returns null here — not the classifier).
   { request: "what can you do?", fixed: "gauge", expectedKey: null },
@@ -77,7 +90,7 @@ const CASES: {
 ];
 
 describe("routeRequestDeterministically", () => {
-  it.each(CASES)("routes: $request", ({ request, expectedKey, expectedAction, fixed }) => {
+  it.each(CASES)("routes: $request", ({ request, expectedKey, expectedAction, expectedReferral, fixed }) => {
     const decision = routeRequestDeterministically(request, fixed ?? null);
     if (expectedKey === null) {
       expect(decision).toBeNull();
@@ -86,6 +99,9 @@ describe("routeRequestDeterministically", () => {
     expect(decision).not.toBeNull();
     expect(decision!.employeeKey).toBe(expectedKey);
     if (expectedAction) expect(decision!.action).toBe(expectedAction);
+    if (expectedReferral !== undefined) {
+      expect(decision!.referralKey).toBe(expectedReferral);
+    }
   });
 
   it("never routes to an unknown employee key", () => {

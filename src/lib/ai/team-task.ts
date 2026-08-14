@@ -56,6 +56,7 @@ import { incrementUsage } from "@/lib/usage";
 import { checkTrialContentLimit } from "@/lib/trial-limits";
 import { checkUsageLimit } from "@/lib/plan-limits";
 import { createCampaignPlan } from "@/lib/campaign-plans";
+import { createNotification } from "@/lib/in-app-notifications";
 
 // ----------------------------------------------------------------------------
 // Payload + result types
@@ -77,6 +78,8 @@ interface TaskChatRow {
   title: string;
   kind: "team" | "employee" | "room";
   employee_key: string | null;
+  /** Group rooms: the employee keys currently in the chat. */
+  participants?: string[] | null;
   created_at: string;
 }
 
@@ -318,11 +321,16 @@ async function dispatchRequest(
       DISPATCH_SCHEMA,
       { functionName: "dispatch", maxTokens: 2048, temperature: 0.2 }
     );
+    const suggested = decision.employeeKey;
     return {
-      employeeKey: forced ?? (decision.employeeKey ?? "nina"),
+      employeeKey: forced ?? (suggested ?? "nina"),
       action: decision.action === "content" ? "content" : "chat",
       topic: decision.topic ?? "",
       note: decision.note ?? "",
+      // In a DM the classifier can still suggest another employee; keep the
+      // selected employee but remember who it thought should help.
+      referralKey:
+        forced && suggested && suggested !== forced ? suggested : undefined,
     };
   } catch (err) {
     console.warn("[team-task] Dispatch failed:", err);
@@ -352,7 +360,8 @@ async function cherylGenerateBlog(
   workspaceContext: string,
   workspaceId: string | null,
   chatContext: string,
-  keywords: string[] = []
+  keywords: string[] = [],
+  shouldCancel?: () => Promise<boolean>
 ): Promise<BlogDraft> {
   const supabase = await createServiceClient();
 
@@ -408,6 +417,7 @@ async function cherylGenerateBlog(
   await Promise.all(
     specs.map(async (spec) => {
       try {
+        if (shouldCancel && (await shouldCancel())) return;
         const size = spec.placement === "featured" ? "1792x1024" : "1024x1024";
         const images = await generateImage(tenantId, spec.prompt, {
           size: size as "1792x1024" | "1024x1024",
@@ -614,6 +624,17 @@ export async function generateApprovedCampaignItem(
         .from("campaign_plan_items")
         .update({ status: "draft", linked_post_id: postId })
         .eq("id", itemId);
+      // Content approval gate: the generated piece waits on a human sign-off,
+      // so ping the bell with a link straight to it.
+      void createNotification({
+        tenantId,
+        kind: "approval",
+        title: `Content ready for your approval: ${item.topic}`,
+        body: `The team generated ${
+          item.kind === "blog" ? "a blog draft" : "a social post"
+        } for "${item.topic}". Review and approve it before it goes live.`,
+        link: `/dashboard/posts?post=${postId}`,
+      });
     }
   } catch (err) {
     console.error("[team-task] Campaign item generation failed:", err);
@@ -1140,6 +1161,32 @@ async function maloryPlanCampaign(
   };
 }
 
+class TaskCancelledError extends Error {
+  constructor() {
+    super("Task cancelled by user");
+    this.name = "TaskCancelledError";
+  }
+}
+
+/** True when the user posted a stop signal for this task. */
+async function isTaskCancelled(
+  supabase: any,
+  chatId: string,
+  taskId: string
+): Promise<boolean> {
+  try {
+    const { data } = await supabase
+      .from("team_messages")
+      .select("id")
+      .eq("chat_id", chatId)
+      .contains("metadata", { taskId, cancel: true })
+      .limit(1);
+    return (data?.length ?? 0) > 0;
+  } catch {
+    return false;
+  }
+}
+
 // ----------------------------------------------------------------------------
 // processTeamTask — the full post-send pipeline.
 //
@@ -1147,6 +1194,88 @@ async function maloryPlanCampaign(
 // picked up by the chat UI's polling; the reply carries metadata.taskId so the
 // client knows this task is done.
 // ----------------------------------------------------------------------------
+
+/**
+ * Post a bell notification for a finished task, keyed off the reply's action.
+ * Approvals (draft ready / content pending review) get the "approval" kind;
+ * failures get "alert"; everything else is an informational update linking
+ * back to the chat or the produced work.
+ */
+async function notifyTaskResult(params: {
+  tenantId: string;
+  employeeName: string;
+  replyContent: string;
+  replyMeta: Record<string, unknown>;
+}): Promise<void> {
+  const { tenantId, employeeName, replyContent, replyMeta } = params;
+  const action = typeof replyMeta.action === "string" ? replyMeta.action : "";
+  const chatUrl = "/dashboard/ai-team/chat";
+  const excerpt = (replyContent || "").replace(/\s+/g, " ").trim();
+  const shortExcerpt =
+    excerpt.length > 140 ? excerpt.slice(0, 140) + "…" : excerpt;
+
+  if (action === "content_generated") {
+    const title =
+      typeof replyMeta.postTitle === "string"
+        ? replyMeta.postTitle
+        : "new draft";
+    const link =
+      typeof replyMeta.postUrl === "string" ? replyMeta.postUrl : chatUrl;
+    await createNotification({
+      tenantId,
+      kind: "approval",
+      title: `Draft ready for review: ${title}`,
+      body: `${employeeName} finished the post and it's waiting for your approval before it can be published.`,
+      link,
+    });
+    return;
+  }
+
+  if (action === "campaign_planned") {
+    const title =
+      typeof replyMeta.planTitle === "string"
+        ? replyMeta.planTitle
+        : "new campaign";
+    const link =
+      typeof replyMeta.planUrl === "string"
+        ? replyMeta.planUrl
+        : "/dashboard/calendar";
+    await createNotification({
+      tenantId,
+      kind: "info",
+      title: `Campaign planned: ${title}`,
+      body: `${employeeName} mapped the campaign. Review the calendar and approve items to start generating content.`,
+      link,
+    });
+    return;
+  }
+
+  if (
+    action === "content_failed" ||
+    action === "campaign_failed" ||
+    action === "chat_failed"
+  ) {
+    const err =
+      typeof replyMeta.error === "string" ? replyMeta.error : "unknown error";
+    await createNotification({
+      tenantId,
+      kind: "alert",
+      title: "AI team hit a snag",
+      body: `${employeeName}: ${err}`,
+      link: chatUrl,
+    });
+    return;
+  }
+
+  // Plain chat replies, reputation drafts, and legal drafts.
+  await createNotification({
+    tenantId,
+    kind: "info",
+    title: `${employeeName} replied`,
+    body: shortExcerpt || "See the chat for the full reply.",
+    link: chatUrl,
+  });
+}
 
 export async function processTeamTask(payload: TeamTaskPayload): Promise<void> {
   const { chatId, tenantId, workspaceId, userMessage, taskId } = payload;
@@ -1165,16 +1294,49 @@ export async function processTeamTask(payload: TeamTaskPayload): Promise<void> {
     const workspaceContext = await loadWorkspaceContext(tenantId, workspaceId);
     // Rolling memory of this chat — agents pick up where the work left off.
     const chatContext = await buildChatContext(chatId, tenantId);
+
+    if (await isTaskCancelled(supabase, chatId, taskId)) {
+      throw new TaskCancelledError();
+    }
+
     const fixedEmployee =
       room.kind === "employee" ? room.employee_key : null;
+    // Group rooms carry the invited participants; clamp answers to them.
+    const participants =
+      room.kind === "employee"
+        ? room.employee_key
+          ? [room.employee_key]
+          : []
+        : Array.isArray(room.participants)
+          ? (room.participants as string[])
+          : null;
 
-    const decision = await dispatchRequest(
+    let decision = await dispatchRequest(
       tenantId,
       userMessage,
       fixedEmployee,
       workspaceContext,
       chatContext
     );
+
+    // Keep a group chat's answers among the invited employees. A request for
+    // someone not in the room is answered by the first participant, who
+    // suggests inviting the missing specialist.
+    if (
+      room.kind === "room" &&
+      participants &&
+      participants.length > 0 &&
+      !participants.includes(decision.employeeKey)
+    ) {
+      decision = {
+        ...decision,
+        referralKey: decision.referralKey ?? decision.employeeKey,
+        employeeKey: participants[0],
+        action: "chat",
+        topic: "",
+      };
+    }
+
     const targetKey = decision.employeeKey;
 
     // Team Room + named rooms: Malory posts a visible handoff — but only when
@@ -1198,12 +1360,18 @@ export async function processTeamTask(payload: TeamTaskPayload): Promise<void> {
     const employeeDisplayName =
       EMPLOYEE_PERSONAS[targetKey as keyof typeof EMPLOYEE_PERSONAS]?.name ??
       targetKey;
-    const statusText =
-      decision.action === "content"
-        ? `${employeeDisplayName} is writing the post and generating the images — this takes a couple of minutes. I'll post the draft here when it's ready.`
-        : decision.action === "campaign"
-          ? `Malory is mapping out the campaign plan — this takes a minute or two. I'll post the calendar link when it's ready.`
-          : `${employeeDisplayName} is putting together a reply…`;
+    // Only Cheryl's content branch and Malory's campaign branch actually run
+    // their pipelines; everything else is a chat reply. (The classifier can
+    // label a DM message "content" even when the selected employee isn't the
+    // writer — don't claim they're generating images.)
+    const isContentPipeline =
+      targetKey === "penny" && decision.action === "content";
+    const isCampaignPipeline = decision.action === "campaign";
+    const statusText = isContentPipeline
+      ? `${employeeDisplayName} is writing the post and generating the images — this takes a couple of minutes. I'll post the draft here when it's ready.`
+      : isCampaignPipeline
+        ? `Malory is mapping out the campaign plan — this takes a minute or two. I'll post the calendar link when it's ready.`
+        : `${employeeDisplayName} is putting together a reply…`;
     await supabase.from("team_messages").insert({
       chat_id: chatId,
       role: "system",
@@ -1211,15 +1379,18 @@ export async function processTeamTask(payload: TeamTaskPayload): Promise<void> {
       content: statusText,
       metadata: {
         status: true,
-        stage:
-          decision.action === "content"
-            ? "working"
-            : decision.action === "campaign"
-              ? "planning"
-              : "replying",
+        stage: isContentPipeline
+          ? "working"
+          : isCampaignPipeline
+            ? "planning"
+            : "replying",
         taskId,
       },
     });
+
+    if (await isTaskCancelled(supabase, chatId, taskId)) {
+      throw new TaskCancelledError();
+    }
 
     // Run the employee: content generation for Cheryl, persona chat otherwise.
     let replyContent = "";
@@ -1268,7 +1439,9 @@ export async function processTeamTask(payload: TeamTaskPayload): Promise<void> {
           topic,
           workspaceContext,
           workspaceId,
-          chatContext
+          chatContext,
+          [],
+          () => isTaskCancelled(supabase, chatId, taskId)
         );
         replyContent =
           `Done — draft is ready: **${draft.title}**\n\n` +
@@ -1326,11 +1499,28 @@ export async function processTeamTask(payload: TeamTaskPayload): Promise<void> {
       }
     } else {
       const config = await loadEmployeeConfig(targetKey, tenantId);
-      const personaPrompt = buildEmployeeSystemPrompt(targetKey, {
+      let personaPrompt = buildEmployeeSystemPrompt(targetKey, {
         ...config,
         workspaceContext,
         chatContext,
       });
+      // Out-of-lane request in a DM: the selected employee answers, but
+      // honestly points at the specialist who should really handle it.
+      const referralKey = decision.referralKey;
+      if (
+        referralKey &&
+        referralKey !== targetKey &&
+        EMPLOYEE_PERSONAS[referralKey as keyof typeof EMPLOYEE_PERSONAS]
+      ) {
+        const referral =
+          EMPLOYEE_PERSONAS[referralKey as keyof typeof EMPLOYEE_PERSONAS];
+        personaPrompt +=
+          `\n\n## Out of your lane — point the owner to the specialist\n` +
+          `The owner just asked for something that is ${referral.name}'s job (${referral.role}), not yours. ` +
+          `Respond as yourself: briefly acknowledge the request, say it is ${referral.name}'s specialty, and offer two paths — ` +
+          `(1) message ${referral.name} directly, or (2) bring ${referral.name} into this chat for a group discussion. ` +
+          `If you can still help in a way that fits YOUR role, offer that too — but do not pretend to do ${referral.name}'s work.`;
+      }
       try {
         replyContent = await generateText(
           "team_chat",
@@ -1363,6 +1553,10 @@ export async function processTeamTask(payload: TeamTaskPayload): Promise<void> {
       }
     }
 
+    if (await isTaskCancelled(supabase, chatId, taskId)) {
+      throw new TaskCancelledError();
+    }
+
     await supabase.from("team_messages").insert({
       chat_id: chatId,
       role: "employee",
@@ -1370,10 +1564,30 @@ export async function processTeamTask(payload: TeamTaskPayload): Promise<void> {
       content: replyContent,
       metadata: { ...replyMeta, taskId },
     });
+
+    // Surface the finished work in the top-nav bell (approval / update / alert).
+    void notifyTaskResult({
+      tenantId,
+      employeeName: employeeDisplayName,
+      replyContent,
+      replyMeta,
+    });
   } catch (err) {
+    if (err instanceof TaskCancelledError) {
+      // The cancel action already posted the "Stopped by you." status — just
+      // stop without writing a reply or an error.
+      return;
+    }
     console.error("[team-task] Task failed:", err);
     // Never leave the user hanging — post an error reply so the client's
     // pending task resolves.
+    void createNotification({
+      tenantId,
+      kind: "alert",
+      title: "AI team task failed",
+      body: err instanceof Error ? err.message : "Unknown error",
+      link: "/dashboard/ai-team/chat",
+    });
     try {
       await supabase.from("team_messages").insert({
         chat_id: chatId,
@@ -1446,14 +1660,25 @@ export async function enqueueOrRun(
   // a status line once the task's final message lands.
   const taskId = crypto.randomUUID();
 
+  // The "reviewing" status is DM-aware: a direct message is answered by that
+  // employee, not dispatched by Malory.
+  const chatRow = chat as TaskChatRow;
+  const isEmployeeChat = chatRow?.kind === "employee";
+  const reviewingName = isEmployeeChat
+    ? EMPLOYEE_PERSONAS[
+        chatRow.employee_key as keyof typeof EMPLOYEE_PERSONAS
+      ]?.name ?? "your employee"
+    : null;
+  const reviewingContent = isEmployeeChat
+    ? `${reviewingName} is on it — one moment…`
+    : "Malory is reviewing your request and assigning it to the team…";
   const reviewing: TaskMessageRow = {
     id: crypto.randomUUID(),
     chat_id: input.chatId,
     tenant_id: input.tenantId,
     role: "system",
     employee_key: null,
-    content:
-      "Malory is reviewing your request and assigning it to the team…",
+    content: reviewingContent,
     metadata: { status: true, stage: "reviewing", taskId },
     created_at: new Date().toISOString(),
   };

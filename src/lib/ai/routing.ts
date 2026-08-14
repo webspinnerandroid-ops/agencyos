@@ -12,6 +12,10 @@ export interface DispatchDecision {
   action: "content" | "campaign" | "chat" | "other";
   topic: string;
   note: string;
+  /** When a DM employee is asked something outside their lane, the key of
+   * the specialist who should really handle it — so the selected employee can
+   * suggest messaging them or pulling them into the chat. */
+  referralKey?: string;
 }
 
 /**
@@ -90,20 +94,10 @@ export const DOMAIN_ROUTES: { re: RegExp; employeeKey: string }[] = [
 ];
 
 /**
- * Returns a deterministic decision when a rule matches (fixed employee,
- * campaign/content requests, explicit addressing, domain keywords), or null
- * so the caller can fall back to the LLM classifier for ambiguous messages.
+ * The natural route for a message — who would handle it in the Team Room,
+ * with no fixed-employee override. Pure: no model calls.
  */
-export function routeRequestDeterministically(
-  request: string,
-  fixedEmployeeKey: string | null
-): DispatchDecision | null {
-  const forced =
-    fixedEmployeeKey &&
-    (EMPLOYEE_KEYS as readonly string[]).includes(fixedEmployeeKey)
-      ? fixedEmployeeKey
-      : null;
-
+function naturalRoute(request: string): DispatchDecision | null {
   // Explicitly addressed to one employee → route to them, no model call.
   // The address chooses WHO answers; the action stays chat unless the
   // addressed employee is the one whose pipeline the request maps to
@@ -167,5 +161,51 @@ export function routeRequestDeterministically(
     }
   }
 
+  return null;
+}
+
+/**
+ * Returns a deterministic decision when a rule matches (fixed employee,
+ * campaign/content requests, explicit addressing, domain keywords), or null
+ * so the caller can fall back to the LLM classifier for ambiguous messages.
+ *
+ * A fixed employee (a DM chat) ALWAYS answers. The fixed employee's own
+ * pipeline still fires (Cheryl writes content, Malory plans campaigns), but
+ * an out-of-lane request is answered by the selected employee — with a
+ * referralKey pointing at the specialist who should really handle it.
+ */
+export function routeRequestDeterministically(
+  request: string,
+  fixedEmployeeKey: string | null
+): DispatchDecision | null {
+  const forced =
+    fixedEmployeeKey &&
+    (EMPLOYEE_KEYS as readonly string[]).includes(fixedEmployeeKey)
+      ? fixedEmployeeKey
+      : null;
+
+  const natural = naturalRoute(request);
+
+  // Team Room / named rooms: the natural route decides.
+  if (!forced) return natural;
+
+  // The DM employee is the right person — keep their own pipeline.
+  if (natural && natural.employeeKey === forced) return natural;
+
+  // Asked something out of their lane: the selected employee answers and
+  // points at the specialist (the caller adds the "message them / bring them
+  // into the chat" suggestion to the persona prompt).
+  if (natural && natural.employeeKey !== forced) {
+    return {
+      employeeKey: forced,
+      action: "chat",
+      topic: "",
+      note: "Direct message — answered by the selected employee.",
+      referralKey: natural.employeeKey,
+    };
+  }
+
+  // Ambiguous (no natural route) — fall through to the LLM classifier, which
+  // still forces the employee while classifying content/campaign/chat.
   return null;
 }

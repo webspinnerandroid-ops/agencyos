@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Building2, Users, FileText, Key, TrendingUp, Shield, X, UserCog, Menu, Wallet } from "lucide-react";
+import { Loader2, Building2, Users, FileText, Key, TrendingUp, Shield, X, UserCog, Menu, Wallet, LayoutTemplate } from "lucide-react";
 import { getDashboardStats, getAllTenants, getLicenses, getLicenseAudit, issueLicense, updateLicensePlan, renewLicense, revokeLicense, deleteLicense, deleteUser, deleteTenant, getAllUsers, assignLevel, grantHub, revokeHub, type TenantSummary, type LicenseRecord, type LicenseAuditEntry, type UserRecord } from "./actions";
 
 // Hub-and-spoke add-ons the super admin can grant/revoke without payment.
@@ -169,6 +169,9 @@ export default function AdminDashboardPage() {
       <div className="flex items-center justify-between">
         <div><h1 className="text-3xl font-bold tracking-tight">Super Admin</h1><p className="text-muted-foreground mt-1">Platform management.</p></div>
         <div className="flex items-center gap-2">
+          <a href="/dashboard/admin/page-builder">
+            <Button variant="outline"><LayoutTemplate className="size-4 mr-2" /> Page Builder</Button>
+          </a>
           <a href="/dashboard/admin/nav-builder">
             <Button variant="outline"><Menu className="size-4 mr-2" /> Menu Builder</Button>
           </a>

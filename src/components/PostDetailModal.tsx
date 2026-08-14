@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { X, ImageIcon, Sparkles } from "lucide-react";
+import { X, ImageIcon, Sparkles, RefreshCw, Loader2 } from "lucide-react";
 import PublishButton from "@/components/PublishButton";
 import PostContent from "@/components/BlogContent";
 import ScoreBadge from "@/components/ScoreBadge";
@@ -30,6 +30,11 @@ export default function PostDetailModal({
   const [full, setFull] = useState<PostRow | null>(null);
   const [loading, setLoading] = useState(true);
   const [deleting, setDeleting] = useState(false);
+  // Rewrite with AI — the "why" guides Cheryl's regeneration.
+  const [rewriteOpen, setRewriteOpen] = useState(false);
+  const [rewriteFeedback, setRewriteFeedback] = useState("");
+  const [rewriting, setRewriting] = useState(false);
+  const [rewriteMessage, setRewriteMessage] = useState<string | null>(null);
   // AEO/GEO panel state
   const [aeoGeo, setAeoGeo] = useState<{
     result: any;
@@ -111,6 +116,42 @@ export default function PostDetailModal({
       runAeoGeo(false);
     }
   }, [preview.type]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleRewrite = async () => {
+    if (!post.id || !rewriteFeedback.trim() || rewriting) return;
+    setRewriting(true);
+    setRewriteMessage(null);
+    try {
+      const res = await fetch(`/api/posts/${post.id}/regenerate`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ feedback: rewriteFeedback.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setRewriteMessage(data?.error ?? "Rewrite failed — please try again.");
+        return;
+      }
+      setRewriteOpen(false);
+      setRewriteFeedback("");
+      setRewriteMessage("Rewritten — reloading the updated post…");
+      // Re-fetch the full post so the modal shows the new content + score.
+      try {
+        const r = await fetch(`/api/posts/${post.id}`, { credentials: "include" });
+        const d = await r.json().catch(() => ({}));
+        if (d?.post) setFull(d.post as PostRow);
+      } catch {
+        // keep the stale copy — the next open will be fresh
+      }
+      setAeoGeo(null);
+      setAeoError(null);
+    } catch {
+      setRewriteMessage("Network error — please try again.");
+    } finally {
+      setRewriting(false);
+    }
+  };
 
   const handleDelete = async () => {
     if (!confirm("Delete this post? This cannot be undone.")) return;
@@ -371,23 +412,92 @@ export default function PostDetailModal({
             </div>
           )}
         </div>
-        <div className="p-4 border-t flex justify-end gap-2">
-          <button
-            onClick={handleDelete}
-            disabled={deleting}
-            className="px-3 py-1.5 text-sm rounded-md border border-red-200 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors"
-          >
-            {deleting ? "Deleting…" : "Delete"}
-          </button>
-          <PublishButton postId={current.id} postType={preview.type as "blog" | "social"} />
-          <button
-            onClick={onClose}
-            className="px-3 py-1.5 text-sm border rounded-md hover:bg-muted"
-          >
-            Close
-          </button>
+        <div className="p-4 border-t flex items-center justify-between gap-2">
+          <span className="text-xs text-muted-foreground min-w-0">{rewriteMessage ?? ""}</span>
+          <div className="flex justify-end gap-2 shrink-0">
+            {preview.type === "blog" && (
+              <button
+                onClick={() => {
+                  setRewriteFeedback("");
+                  setRewriteMessage(null);
+                  setRewriteOpen(true);
+                }}
+                disabled={rewriting}
+                className="px-3 py-1.5 text-sm rounded-md border border-primary/30 text-primary hover:bg-primary/10 transition-colors inline-flex items-center gap-1.5"
+                title="Ask Cheryl to rewrite this post to match your preferred style"
+              >
+                <RefreshCw className="size-3.5" /> Rewrite
+              </button>
+            )}
+            <button
+              onClick={handleDelete}
+              disabled={deleting}
+              className="px-3 py-1.5 text-sm rounded-md border border-red-200 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors"
+            >
+              {deleting ? "Deleting…" : "Delete"}
+            </button>
+            <PublishButton postId={current.id} postType={preview.type as "blog" | "social"} />
+            <button
+              onClick={onClose}
+              className="px-3 py-1.5 text-sm border rounded-md hover:bg-muted"
+            >
+              Close
+            </button>
+          </div>
         </div>
       </div>
+
+      {/* Rewrite with AI — ask WHY so the rewrite is guided to the preferred style */}
+      {rewriteOpen && (
+        <div
+          className="fixed inset-0 z-[60] bg-black/60 flex items-center justify-center p-4"
+          onClick={() => !rewriting && setRewriteOpen(false)}
+        >
+          <div
+            className="bg-card border rounded-lg w-full max-w-md p-5 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div>
+              <h3 className="font-semibold tracking-tight flex items-center gap-2">
+                <RefreshCw className="size-4 text-primary" /> Rewrite with AI
+              </h3>
+              <p className="text-sm text-muted-foreground mt-1">
+                Describe what you want changed and Cheryl will regenerate the
+                post to match.
+              </p>
+            </div>
+            <textarea
+              autoFocus
+              value={rewriteFeedback}
+              onChange={(e) => setRewriteFeedback(e.target.value)}
+              rows={5}
+              placeholder="e.g. Make the tone more casual and conversational, lead with the 2026 stats, shorten the intro, and end with a stronger call to action."
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={handleRewrite}
+                disabled={!rewriteFeedback.trim() || rewriting}
+                className="px-3 py-1.5 text-sm rounded-md bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 transition-colors inline-flex items-center gap-1.5"
+              >
+                {rewriting ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="size-3.5" />
+                )}
+                {rewriting ? "Rewriting…" : "Rewrite"}
+              </button>
+              <button
+                onClick={() => setRewriteOpen(false)}
+                disabled={rewriting}
+                className="px-3 py-1.5 text-sm border rounded-md hover:bg-muted"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

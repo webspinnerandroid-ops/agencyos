@@ -43,17 +43,24 @@ export function buildNavSections(isSuperAdmin: boolean): NavSection[] {
         { href: "/dashboard/settings", label: "Settings" },
         { href: "/dashboard/billing", label: "Billing" },
         { href: "/help", label: "Help" },
-        ...(isSuperAdmin
-          ? [
-              { href: "/dashboard/admin", label: "Admin" },
-              { href: "/dashboard/admin/apis", label: "APIs & Models" },
-              { href: "/dashboard/admin/coupons", label: "Coupons" },
-              { href: "/dashboard/admin/nav-builder", label: "Menu Builder" },
-              { href: "/dashboard/admin/subscriptions", label: "Subscriptions" },
-              { href: "/dashboard/admin/deploy", label: "Deploy" },
-            ]
-          : []),
       ],
     },
+    // Super-admin-only platform controls — hidden entirely for other roles.
+    ...(isSuperAdmin
+      ? [
+          {
+            label: "Admin",
+            items: [
+              { href: "/dashboard/admin", label: "Super Admin" },
+              { href: "/dashboard/admin/page-builder", label: "Page Builder" },
+              { href: "/dashboard/admin/nav-builder", label: "Menu Builder" },
+              { href: "/dashboard/admin/apis", label: "APIs & Models" },
+              { href: "/dashboard/admin/coupons", label: "Coupons" },
+              { href: "/dashboard/admin/subscriptions", label: "Subscriptions" },
+              { href: "/dashboard/admin/deploy", label: "Deploy" },
+            ],
+          },
+        ]
+      : []),
   ];
 }

@@ -5,7 +5,7 @@ import MobileNav from "@/components/MobileNav";
 import ThemeToggle from "@/components/ThemeToggle";
 import ScreenshotSlideshow from "@/components/ScreenshotSlideshow";
 import { Check, ArrowRight, Zap, Users, Globe, Shield, Brain, Calendar } from "lucide-react";
-import { getLandingContent } from "@/lib/landing-content";
+import { getLandingContent } from "@/lib/landing-content-server";
 
 export const dynamic = "force-dynamic";
 

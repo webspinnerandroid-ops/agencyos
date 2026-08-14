@@ -1,5 +1,3 @@
-import { createServiceClient } from "@/lib/supabase/server";
-
 // ============================================================================
 // Landing page content model
 //
@@ -277,20 +275,3 @@ export function mergeLandingContent(raw: unknown): LandingContent {
   };
 }
 
-/**
- * Server-side loader for the public landing page. Never throws — on any error
- * it returns the compiled defaults so the marketing site always renders.
- */
-export async function getLandingContent(): Promise<LandingContent> {
-  try {
-    const supabase = await createServiceClient();
-    const { data } = await supabase
-      .from("site_settings")
-      .select("landing_content")
-      .eq("id", 1)
-      .maybeSingle();
-    return mergeLandingContent(data?.landing_content);
-  } catch {
-    return DEFAULT_LANDING_CONTENT;
-  }
-}

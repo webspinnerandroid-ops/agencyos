@@ -5,6 +5,7 @@ import MobileNav from "@/components/MobileNav";
 import NavDropdown, { type NavSection } from "@/components/NavDropdown";
 import { getNavSections } from "@/lib/nav-config";
 import ThemeToggle from "@/components/ThemeToggle";
+import NotificationBell from "@/components/NotificationBell";
 import { getRole, getTenantId } from "@/lib/auth";
 
 /**
@@ -83,6 +84,7 @@ export default async function DashboardLayout({
             <div className="lg:hidden">
               <MobileNav sections={navSections} />
             </div>
+            <NotificationBell />
             <ThemeToggle />
             <AccountMenu email={userEmail || "Account"} />
           </div>

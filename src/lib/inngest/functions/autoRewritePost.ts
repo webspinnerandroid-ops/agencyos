@@ -1,6 +1,7 @@
 import { inngest } from "@/lib/inngest/client";
 import { createServiceClient } from "@/lib/supabase/server";
 import { regenerateBlogPost } from "@/lib/ai/team-task";
+import { createNotification } from "@/lib/in-app-notifications";
 
 /**
  * AI Team — auto-rewrite a below-threshold blog post (background).
@@ -42,6 +43,15 @@ export const autoRewritePost = inngest.createFunction(
       .eq("tenant_id", tenantId)
       .maybeSingle();
 
+    // Progress ping so the owner knows the background rewrite is running.
+    void createNotification({
+      tenantId,
+      kind: "progress",
+      title: "Rewriting your post…",
+      body: "A post scored below the publish threshold, so Cheryl is regenerating it in the background. You can retry publishing once it lands.",
+      link: `/dashboard/posts?post=${postId}`,
+    });
+
     const result = await regenerateBlogPost(
       tenantId,
       postId,
@@ -51,6 +61,13 @@ export const autoRewritePost = inngest.createFunction(
     console.log(
       `[autoRewritePost] Rewrote post ${postId} (${result.title}) for tenant ${tenantId}`
     );
+    void createNotification({
+      tenantId,
+      kind: "info",
+      title: "Post rewritten",
+      body: `"${result.title}" was regenerated and is ready for you to review and publish.`,
+      link: `/dashboard/posts?post=${postId}`,
+    });
     return { status: "completed", postId, title: result.title };
   }
 );

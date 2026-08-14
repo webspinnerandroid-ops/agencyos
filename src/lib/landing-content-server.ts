@@ -4,6 +4,7 @@ import {
   mergeLandingContent,
   type LandingContent,
 } from "@/lib/landing-content";
+import { withLivePrices } from "@/lib/stripe-pricing";
 
 /**
  * Server-side loader for the public landing page. Never throws — on any error
@@ -21,7 +22,15 @@ export async function getLandingContent(): Promise<LandingContent> {
       .select("landing_content")
       .eq("id", 1)
       .maybeSingle();
-    return mergeLandingContent(data?.landing_content);
+    const merged = mergeLandingContent(data?.landing_content);
+    // Prices come from Stripe's live price objects so the marketing page can
+    // never drift from what checkout actually charges. Falls back to the
+    // stored copy when Stripe is unreachable or a product is missing.
+    try {
+      return await withLivePrices(merged);
+    } catch {
+      return merged;
+    }
   } catch {
     return DEFAULT_LANDING_CONTENT;
   }

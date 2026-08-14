@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getRole } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import { mergeLandingContent } from "@/lib/landing-content";
+import { getPricingStatus, withLivePrices } from "@/lib/stripe-pricing";
 
 /**
  * GET  /api/admin/page-builder — the current (sanitized) landing content.
@@ -40,9 +41,14 @@ export async function GET() {
       .maybeSingle();
     if (error) throw new Error(error.message);
 
-    return NextResponse.json({
-      content: mergeLandingContent(data?.landing_content),
-    });
+    const merged = mergeLandingContent(data?.landing_content);
+    // Live Stripe prices + drift flags for the builder's price fields.
+    const [content, pricing] = await Promise.all([
+      withLivePrices(merged),
+      getPricingStatus(merged),
+    ]);
+
+    return NextResponse.json({ content, pricing });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Failed to load content" },

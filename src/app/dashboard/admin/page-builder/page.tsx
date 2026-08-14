@@ -30,6 +30,7 @@ import {
   type LandingPlan,
   type LandingHub,
 } from "@/lib/landing-content";
+import type { PlanPriceStatus, HubPriceStatus } from "@/lib/stripe-pricing";
 import { renderBlogBody } from "@/lib/blog-render";
 
 // ---------------------------------------------------------------------------
@@ -80,6 +81,44 @@ function AreaField({
   );
 }
 
+/** Inline status chip showing whether a plan/hub price is synced to Stripe. */
+function PriceStatusBadge({
+  live,
+  drift,
+}: {
+  live: { price: string } | null;
+  drift: boolean;
+}) {
+  if (!live) {
+    return (
+      <span
+        className="inline-flex items-center rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 border border-amber-200"
+        title="No active Stripe monthly price found for this id"
+      >
+        No Stripe price
+      </span>
+    );
+  }
+  if (drift) {
+    return (
+      <span
+        className="inline-flex items-center rounded bg-red-50 px-1.5 py-0.5 text-[10px] font-medium text-red-700 border border-red-200"
+        title={`Stored price differs from the active Stripe price ($${live.price})`}
+      >
+        Drift — Stripe ${live.price}
+      </span>
+    );
+  }
+  return (
+    <span
+      className="inline-flex items-center rounded bg-green-50 px-1.5 py-0.5 text-[10px] font-medium text-green-700 border border-green-200"
+      title={`Synced to Stripe — $${live.price}/mo`}
+    >
+      Synced — ${live.price}/mo
+    </span>
+  );
+}
+
 /** Renders the engineer's markdown reply, with fenced code blocks as <pre>. */
 function renderChatReply(markdown: string): React.ReactNode {
   const parts = markdown.split(/```/);
@@ -113,6 +152,23 @@ export default function PageBuilderPage() {
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
 
+  // Live Stripe price status for each plan/hub (drift + missing detection).
+  const [pricing, setPricing] = useState<{
+    plans: PlanPriceStatus[];
+    hubs: HubPriceStatus[];
+  }>({ plans: [], hubs: [] });
+
+  // "Add plan / hub" forms — create the Stripe product + price in the same save.
+  const [newPlan, setNewPlan] = useState({
+    name: "",
+    price: "",
+    description: "",
+    features: "",
+    popular: false,
+  });
+  const [newHub, setNewHub] = useState({ name: "", price: "", blurb: "" });
+  const [creating, setCreating] = useState(false);
+
   // Builder AI chat state.
   const [chatOpen, setChatOpen] = useState(false);
   const [chatInput, setChatInput] = useState("");
@@ -130,6 +186,7 @@ export default function PageBuilderPage() {
         setContent(DEFAULT_LANDING_CONTENT);
       } else {
         setContent(data.content ?? DEFAULT_LANDING_CONTENT);
+        setPricing(data.pricing ?? { plans: [], hubs: [] });
       }
     } catch {
       setFeedback({ type: "error", message: "Failed to load content" });
@@ -178,6 +235,83 @@ export default function PageBuilderPage() {
     if (!confirm("Reset every field to the compiled defaults?")) return;
     setContent(DEFAULT_LANDING_CONTENT);
     setFeedback({ type: "success", message: "Defaults restored — press Save to publish." });
+  };
+
+  const planStatus = (planId: string) => pricing.plans.find((p) => p.planId === planId);
+  const hubStatus = (hubId: string) => pricing.hubs.find((h) => h.hubId === hubId);
+
+  const addPlan = async () => {
+    const priceCents = Math.round(parseFloat(newPlan.price) * 100);
+    if (!newPlan.name.trim() || !Number.isFinite(priceCents) || priceCents <= 0) {
+      setFeedback({ type: "error", message: "Plan name and a positive monthly price are required." });
+      return;
+    }
+    setCreating(true);
+    try {
+      const res = await fetch("/api/admin/page-builder/pricing", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kind: "plan",
+          name: newPlan.name.trim(),
+          priceCents,
+          description: newPlan.description,
+          features: newPlan.features.split("\n").map((f) => f.trim()).filter(Boolean),
+          popular: newPlan.popular,
+          content,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setFeedback({ type: "error", message: data.error ?? "Failed to create plan" });
+      } else {
+        setContent(data.content ?? content);
+        setPricing(data.pricing ?? pricing);
+        setNewPlan({ name: "", price: "", description: "", features: "", popular: false });
+        setFeedback({ type: "success", message: "Plan created — Stripe product + monthly price live, and it's on the landing page." });
+      }
+    } catch {
+      setFeedback({ type: "error", message: "Failed to create plan" });
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const addHub = async () => {
+    const priceCents = Math.round(parseFloat(newHub.price) * 100);
+    if (!newHub.name.trim() || !Number.isFinite(priceCents) || priceCents <= 0) {
+      setFeedback({ type: "error", message: "Hub name and a positive monthly price are required." });
+      return;
+    }
+    setCreating(true);
+    try {
+      const res = await fetch("/api/admin/page-builder/pricing", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kind: "hub",
+          name: newHub.name.trim(),
+          priceCents,
+          blurb: newHub.blurb,
+          content,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setFeedback({ type: "error", message: data.error ?? "Failed to create hub" });
+      } else {
+        setContent(data.content ?? content);
+        setPricing(data.pricing ?? pricing);
+        setNewHub({ name: "", price: "", blurb: "" });
+        setFeedback({ type: "success", message: "Hub created — Stripe product + monthly price live, and it's on the landing page." });
+      }
+    } catch {
+      setFeedback({ type: "error", message: "Failed to create hub" });
+    } finally {
+      setCreating(false);
+    }
   };
 
   const sendChat = async () => {
@@ -394,9 +528,10 @@ export default function PageBuilderPage() {
         <CardHeader>
           <CardTitle className="text-base">Pricing plans</CardTitle>
           <CardDescription>
-            Display copy for the all-in-one tiers. The Stripe plan ID is the sync key
-            (matched to the product&apos;s <code>plan_id</code> metadata at checkout) — it&apos;s
-            locked so checkout keeps working. Reprice in Stripe, then mirror the number here.
+            Display copy for the all-in-one tiers. Prices are read live from Stripe&apos;s
+            active monthly price (read-only) — reprice in Stripe and the site follows
+            automatically. The plan ID is the sync key matched to product{" "}
+            <code>plan_id</code> metadata at checkout.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -415,11 +550,18 @@ export default function PageBuilderPage() {
                   <Button variant="ghost" size="sm" className="text-destructive" onClick={() => patch("plans", content.plans.filter((_, j) => j !== i))} title="Remove from page"><Trash2 className="size-3.5" /></Button>
                 </div>
               </div>
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <PriceStatusBadge
+                  live={planStatus(p.planId)?.live ?? null}
+                  drift={planStatus(p.planId)?.drift ?? false}
+                />
+                <span>Price is driven by Stripe — edit the amount in Stripe.</span>
+              </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <Input value={p.name} onChange={(e) => patch("plans", content.plans.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} placeholder="Plan name" />
                 <div className="relative">
                   <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">$</span>
-                  <Input value={p.price} onChange={(e) => patch("plans", content.plans.map((x, j) => (j === i ? { ...x, price: e.target.value } : x)))} placeholder="99" className="pl-7" />
+                  <Input value={p.price} readOnly className="pl-7 bg-muted/50" title="Live Stripe price (read-only)" />
                 </div>
               </div>
               <Input value={p.description} onChange={(e) => patch("plans", content.plans.map((x, j) => (j === i ? { ...x, description: e.target.value } : x)))} placeholder="Short description" />
@@ -441,6 +583,31 @@ export default function PageBuilderPage() {
               </label>
             </div>
           ))}
+
+          {/* Create a new plan (creates the Stripe product + price too) */}
+          <div className="rounded-md border border-dashed p-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <Plus className="size-3.5 text-muted-foreground" />
+              <span className="text-xs font-medium text-muted-foreground">Add a new plan</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <Input value={newPlan.name} onChange={(e) => setNewPlan((s) => ({ ...s, name: e.target.value }))} placeholder="Plan name (e.g. Enterprise)" />
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">$</span>
+                <Input value={newPlan.price} onChange={(e) => setNewPlan((s) => ({ ...s, price: e.target.value }))} placeholder="199 /mo" className="pl-7" inputMode="decimal" />
+              </div>
+            </div>
+            <Input value={newPlan.description} onChange={(e) => setNewPlan((s) => ({ ...s, description: e.target.value }))} placeholder="Short description" />
+            <textarea value={newPlan.features} onChange={(e) => setNewPlan((s) => ({ ...s, features: e.target.value }))} rows={3} placeholder="One feature per line" className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring resize-y" />
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={newPlan.popular} onChange={(e) => setNewPlan((s) => ({ ...s, popular: e.target.checked }))} className="size-4 rounded border-input" />
+              Mark as &ldquo;Most Popular&rdquo;
+            </label>
+            <Button size="sm" onClick={addPlan} disabled={creating}>
+              {creating ? <Loader2 className="size-3.5 animate-spin mr-1.5" /> : <Plus className="size-3.5 mr-1.5" />}
+              Create plan in Stripe
+            </Button>
+          </div>
         </CardContent>
       </Card>
 
@@ -449,8 +616,9 @@ export default function PageBuilderPage() {
         <CardHeader>
           <CardTitle className="text-base">Hub add-ons</CardTitle>
           <CardDescription>
-            The a-la-carte hub cards. Hub IDs are Stripe sync keys (product metadata
-            <code>hub_id</code>) and are locked so hub checkout keeps working.
+            The a-la-carte hub cards. Prices are read live from Stripe&apos;s active monthly
+            price (read-only). Hub IDs are the sync keys matched to product{" "}
+            <code>hub_id</code> metadata at checkout.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -469,16 +637,43 @@ export default function PageBuilderPage() {
                   <Button variant="ghost" size="sm" className="text-destructive" onClick={() => patch("hubs", content.hubs.filter((_, j) => j !== i))} title="Remove from page"><Trash2 className="size-3.5" /></Button>
                 </div>
               </div>
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <PriceStatusBadge
+                  live={hubStatus(h.hubId)?.live ?? null}
+                  drift={hubStatus(h.hubId)?.drift ?? false}
+                />
+                <span>Price is driven by Stripe — edit the amount in Stripe.</span>
+              </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <Input value={h.name} onChange={(e) => patch("hubs", content.hubs.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} placeholder="Hub name" />
                 <div className="relative">
                   <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">$</span>
-                  <Input value={h.price} onChange={(e) => patch("hubs", content.hubs.map((x, j) => (j === i ? { ...x, price: e.target.value } : x)))} placeholder="29" className="pl-7" />
+                  <Input value={h.price} readOnly className="pl-7 bg-muted/50" title="Live Stripe price (read-only)" />
                 </div>
               </div>
               <Input value={h.blurb} onChange={(e) => patch("hubs", content.hubs.map((x, j) => (j === i ? { ...x, blurb: e.target.value } : x)))} placeholder="One-line blurb" />
             </div>
           ))}
+
+          {/* Create a new hub (creates the Stripe product + price too) */}
+          <div className="rounded-md border border-dashed p-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <Plus className="size-3.5 text-muted-foreground" />
+              <span className="text-xs font-medium text-muted-foreground">Add a new hub add-on</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <Input value={newHub.name} onChange={(e) => setNewHub((s) => ({ ...s, name: e.target.value }))} placeholder="Hub name (e.g. SEO Audits)" />
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-sm text-muted-foreground">$</span>
+                <Input value={newHub.price} onChange={(e) => setNewHub((s) => ({ ...s, price: e.target.value }))} placeholder="29 /mo" className="pl-7" inputMode="decimal" />
+              </div>
+            </div>
+            <Input value={newHub.blurb} onChange={(e) => setNewHub((s) => ({ ...s, blurb: e.target.value }))} placeholder="One-line blurb" />
+            <Button size="sm" onClick={addHub} disabled={creating}>
+              {creating ? <Loader2 className="size-3.5 animate-spin mr-1.5" /> : <Plus className="size-3.5 mr-1.5" />}
+              Create hub in Stripe
+            </Button>
+          </div>
         </CardContent>
       </Card>
 

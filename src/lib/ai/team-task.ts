@@ -361,7 +361,8 @@ async function cherylGenerateBlog(
   workspaceId: string | null,
   chatContext: string,
   keywords: string[] = [],
-  shouldCancel?: () => Promise<boolean>
+  shouldCancel?: () => Promise<boolean>,
+  revisionFeedback?: string
 ): Promise<BlogDraft> {
   const supabase = await createServiceClient();
 
@@ -391,6 +392,9 @@ async function cherylGenerateBlog(
   const userPrompt = `Write a comprehensive, publish-ready blog post about: "${topic}".` +
     (keywords.length > 0
       ? ` Target these keywords in the title, meta description, slug, and body: ${keywords.join(", ")}.`
+      : "") +
+    (revisionFeedback
+      ? `\n\n## Revision guidance from the owner\nRewrite this post addressing the following feedback. Keep it on-topic and preserve the target keywords:\n${revisionFeedback}`
       : "");
 
   const blogPost = await generateStructuredOutput<{
@@ -657,7 +661,8 @@ export async function generateApprovedCampaignItem(
 export async function regenerateBlogPost(
   tenantId: string,
   postId: string,
-  workspaceId: string | null
+  workspaceId: string | null,
+  revisionFeedback?: string
 ): Promise<{ postId: string; title: string }> {
   const supabase = tenantScopedClient(await createServiceClient(), tenantId);
   const { data: existing } = await supabase
@@ -688,7 +693,9 @@ export async function regenerateBlogPost(
     workspaceContext,
     workspaceId,
     "",
-    Array.isArray(content.keywords) ? content.keywords : []
+    Array.isArray(content.keywords) ? content.keywords : [],
+    undefined,
+    revisionFeedback
   );
 
   // Copy the fresh content into the existing row (status/links preserved),

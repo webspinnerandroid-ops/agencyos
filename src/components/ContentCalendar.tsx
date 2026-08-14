@@ -231,6 +231,22 @@ function isBrokenBlogPost(post: CalendarPost): boolean {
   return typeof body !== "string" || body.trim().length === 0;
 }
 
+/** True when the post is a generated blog (rewriteable via Cheryl's pipeline). */
+function isBlogPost(post: CalendarPost): boolean {
+  if (!post.content) return false;
+  let parsed: Record<string, unknown> | null = null;
+  if (typeof post.content === "string") {
+    try {
+      parsed = JSON.parse(post.content);
+    } catch {
+      return false;
+    }
+  } else if (typeof post.content === "object") {
+    parsed = post.content as Record<string, unknown>;
+  }
+  return parsed?.type === "blog";
+}
+
 function getPlatformsForPost(post: CalendarPost): string[] {
   if (!post.post_platforms || post.post_platforms.length === 0) return [];
   const platforms: string[] = [];
@@ -314,6 +330,8 @@ export default function ContentCalendar({
   >([]);
   const [attemptsLoading, setAttemptsLoading] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
+  const [rewritePost, setRewritePost] = useState<CalendarPost | null>(null);
+  const [rewriteFeedback, setRewriteFeedback] = useState("");
   const [retrying, setRetrying] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
 
@@ -366,28 +384,50 @@ export default function ContentCalendar({
     }
   }, [selectedPost, retrying, postAttempts]);
 
-  // Regenerate a broken/empty blog through Cheryl's pipeline.
-  const regeneratePost = useCallback(async () => {
-    if (!selectedPost || regenerating) return;
-    setRegenerating(true);
-    setPublishError(null);
-    try {
-      const res = await fetch(`/api/posts/${selectedPost.id}/regenerate`, {
-        method: "POST",
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        setPublishError(data?.error ?? "Regeneration failed.");
-        return;
+  // Regenerate a blog through Cheryl's pipeline. An optional `feedback` string
+  // (the owner's "why") guides the rewrite to their preferred style/result.
+  const regeneratePost = useCallback(
+    async (feedback?: string): Promise<boolean> => {
+      if (!selectedPost || regenerating) return false;
+      setRegenerating(true);
+      setPublishError(null);
+      try {
+        const res = await fetch(`/api/posts/${selectedPost.id}/regenerate`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ feedback: feedback?.trim() || undefined }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setPublishError(data?.error ?? "Regeneration failed.");
+          return false;
+        }
+        await onPostUpdate(selectedPost.id, {}); // refresh list
+        setSelectedPost(null);
+        return true;
+      } catch {
+        setPublishError("Regeneration failed — please try again.");
+        return false;
+      } finally {
+        setRegenerating(false);
       }
-      await onPostUpdate(selectedPost.id, {}); // refresh list
-      setSelectedPost(null);
-    } catch {
-      setPublishError("Regeneration failed — please try again.");
-    } finally {
-      setRegenerating(false);
-    }
-  }, [selectedPost, regenerating, onPostUpdate]);
+    },
+    [selectedPost, regenerating, onPostUpdate]
+  );
+
+  // Rewrite-with-feedback: open the dialog, collect the "why", then regenerate.
+  const openRewriteDialog = useCallback(() => {
+    if (!selectedPost) return;
+    setRewritePost(selectedPost);
+    setRewriteFeedback("");
+    setPublishError(null);
+  }, [selectedPost]);
+
+  const submitRewrite = useCallback(async () => {
+    if (!rewritePost || !rewriteFeedback.trim()) return;
+    const ok = await regeneratePost(rewriteFeedback.trim());
+    if (ok) setRewritePost(null);
+  }, [rewritePost, rewriteFeedback, regeneratePost]);
 
   // Render the SEO checklist stored on the post (seo_checks JSONB).
   const renderSeoChecks = useCallback(() => {
@@ -1168,6 +1208,16 @@ export default function ContentCalendar({
                 Approve
               </Button>
             )}
+            {selectedPost &&
+              isBlogPost(selectedPost) &&
+              (selectedPost.status === "draft" ||
+                selectedPost.status === "pending_approval" ||
+                selectedPost.status === "revision_requested") && (
+                <Button variant="outline" onClick={openRewriteDialog}>
+                  <RefreshCw className="size-4 mr-1" />
+                  Rewrite with AI
+                </Button>
+              )}
             {(selectedPost?.status === "pending_approval" ||
               selectedPost?.status === "approved" ||
               selectedPost?.status === "draft" ||
@@ -1194,7 +1244,7 @@ export default function ContentCalendar({
                 </Button>
                 <Button
                   variant="outline"
-                  onClick={regeneratePost}
+                  onClick={() => void regeneratePost()}
                   disabled={regenerating}
                 >
                   {regenerating ? (
@@ -1210,7 +1260,7 @@ export default function ContentCalendar({
               isBrokenBlogPost(selectedPost) && (
                 <Button
                   variant="outline"
-                  onClick={regeneratePost}
+                  onClick={() => void regeneratePost()}
                   disabled={regenerating}
                 >
                   {regenerating ? (
@@ -1325,6 +1375,47 @@ export default function ContentCalendar({
               Send Back for Revision
             </Button>
             <Button variant="ghost" onClick={() => setRevisionPost(null)}>
+              Cancel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Rewrite with AI — ask WHY so the rewrite is guided to the preferred
+          style/result. */}
+      <Dialog
+        open={!!rewritePost}
+        onOpenChange={(open) => !open && setRewritePost(null)}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Rewrite with AI</DialogTitle>
+            <DialogDescription>
+              Describe what you want changed and Cheryl will regenerate the
+              post to match.
+            </DialogDescription>
+          </DialogHeader>
+          <textarea
+            value={rewriteFeedback}
+            onChange={(e) => setRewriteFeedback(e.target.value)}
+            rows={5}
+            placeholder="e.g. Make the tone more casual and conversational, lead with the 2026 stats, shorten the intro, and end with a stronger call to action."
+            className="w-full rounded-md border bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+          <DialogFooter className="gap-2">
+            <Button
+              variant="default"
+              disabled={!rewriteFeedback.trim() || regenerating}
+              onClick={submitRewrite}
+            >
+              {regenerating ? (
+                <Loader2 className="size-4 animate-spin mr-1" />
+              ) : (
+                <RefreshCw className="size-4 mr-1" />
+              )}
+              Rewrite
+            </Button>
+            <Button variant="ghost" onClick={() => setRewritePost(null)}>
               Cancel
             </Button>
           </DialogFooter>

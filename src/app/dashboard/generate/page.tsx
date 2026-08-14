@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useState, type ChangeEvent } from "react";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { generateContentSchema, type GenerateContentInput } from "@/lib/validations";
@@ -23,7 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Loader2, Copy, Check, Sparkles, FileText, Search, AlertTriangle } from "lucide-react";
+import { Loader2, Copy, Check, Sparkles, FileText, Search, AlertTriangle, Upload, X, ImagePlus } from "lucide-react";
 import PostContent from "@/components/BlogContent";
 import ScoreBadge from "@/components/ScoreBadge";
 
@@ -120,6 +120,10 @@ export default function GeneratePage() {
   const [error, setError] = useState<string | null>(null);
   const [keywordsText, setKeywordsText] = useState("");
   const [imageCount, setImageCount] = useState(1);
+  const [imageSource, setImageSource] = useState<"generate" | "upload">("generate");
+  const [uploadedFiles, setUploadedFiles] = useState<
+    { file: File; preview: string }[]
+  >([]);
   const { copied, copy } = useCopy();
 
   const {
@@ -158,6 +162,29 @@ export default function GeneratePage() {
     }
   }, [clients.length, loadClients]);
 
+  // ------------------------------------------------------------------
+  // Uploaded images (when the user picks "Upload my own")
+  // ------------------------------------------------------------------
+  const handleFileSelect = (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []).slice(0, 3);
+    // Release previous preview URLs before replacing the selection.
+    uploadedFiles.forEach((f) => URL.revokeObjectURL(f.preview));
+    setUploadedFiles(
+      files.map((file) => ({ file, preview: URL.createObjectURL(file) }))
+    );
+    // Allow re-selecting the same file next time.
+    e.target.value = "";
+  };
+
+  const removeUploadedFile = (index: number) => {
+    setUploadedFiles((prev) => {
+      const next = [...prev];
+      URL.revokeObjectURL(next[index].preview);
+      next.splice(index, 1);
+      return next;
+    });
+  };
+
   const onSubmit = async (data: GenerateContentInput) => {
     const keywords = keywordsText
       .split(",")
@@ -172,11 +199,38 @@ export default function GeneratePage() {
     setResult(null);
 
     try {
+      // Upload the user's images first (multipart), then hand the CDN URLs
+      // to generate-content so they replace the AI-generated images.
+      let uploadedImages:
+        | { url: string; placement: "featured" | "inline"; description: string }[]
+        | undefined;
+
+      if (imageSource === "upload" && uploadedFiles.length > 0) {
+        const fd = new FormData();
+        uploadedFiles.forEach((f) => fd.append("files", f.file));
+        const upRes = await fetch("/api/generate-content/upload", {
+          method: "POST",
+          credentials: "include",
+          body: fd,
+        });
+        const upJson = await upRes.json();
+        if (!upRes.ok) {
+          setError(upJson.error ?? "Image upload failed");
+          return;
+        }
+        const images: { url: string; name: string }[] = upJson.images ?? [];
+        uploadedImages = images.map((img, i) => ({
+          url: img.url,
+          placement: i === 0 ? "featured" : "inline",
+          description: img.name,
+        }));
+      }
+
       const res = await fetch("/api/generate-content", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...data, keywords, imageCount }),
+        body: JSON.stringify({ ...data, keywords, imageCount, uploadedImages }),
       });
 
       const json = await res.json();
@@ -271,24 +325,113 @@ export default function GeneratePage() {
               />
             </div>
 
-            {/* Images per blog */}
-            <div className="space-y-2">
-              <Label htmlFor="imageCount">Images in the post</Label>
-              <select
-                id="imageCount"
-                value={imageCount}
-                onChange={(e) => setImageCount(Number(e.target.value))}
-                disabled={loading}
-                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
-              >
-                <option value={0}>None (text only)</option>
-                <option value={1}>1 — featured image</option>
-                <option value={2}>2 — featured + 1 inline</option>
-                <option value={3}>3 — featured + 2 inline</option>
-              </select>
-              <p className="text-xs text-muted-foreground">
-                Fewer images generates faster and costs less.
-              </p>
+            {/* Images: generate with AI, or upload your own */}
+            <div className="space-y-3">
+              <Label>Images in the post</Label>
+
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setImageSource("generate")}
+                  disabled={loading}
+                  className={`flex items-center justify-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors ${
+                    imageSource === "generate"
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-input hover:bg-muted"
+                  }`}
+                >
+                  <Sparkles className="size-4" />
+                  Generate with AI
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setImageSource("upload")}
+                  disabled={loading}
+                  className={`flex items-center justify-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors ${
+                    imageSource === "upload"
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-input hover:bg-muted"
+                  }`}
+                >
+                  <Upload className="size-4" />
+                  Upload my own
+                </button>
+              </div>
+
+              {imageSource === "generate" ? (
+                <div className="space-y-2">
+                  <select
+                    id="imageCount"
+                    value={imageCount}
+                    onChange={(e) => setImageCount(Number(e.target.value))}
+                    disabled={loading}
+                    className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  >
+                    <option value={0}>None (text only)</option>
+                    <option value={1}>1 — featured image</option>
+                    <option value={2}>2 — featured + 1 inline</option>
+                    <option value={3}>3 — featured + 2 inline</option>
+                  </select>
+                  <p className="text-xs text-muted-foreground">
+                    Fewer images generates faster and costs less.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  <label className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-md border border-dashed border-input bg-muted/30 px-3 py-6 text-center text-sm text-muted-foreground hover:bg-muted/50">
+                    <ImagePlus className="size-6" />
+                    <span className="font-medium">
+                      {uploadedFiles.length > 0
+                        ? `${uploadedFiles.length} image${uploadedFiles.length > 1 ? "s" : ""} selected`
+                        : "Click to choose images"}
+                    </span>
+                    <span className="text-xs">
+                      First image is the featured hero; the rest are inline.
+                      Up to 3 images, 10 MB each.
+                    </span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      disabled={loading}
+                      onChange={handleFileSelect}
+                      className="hidden"
+                    />
+                  </label>
+
+                  {uploadedFiles.length > 0 && (
+                    <div className="grid grid-cols-3 gap-2">
+                      {uploadedFiles.map((f, i) => (
+                        <div
+                          key={`${f.file.name}-${i}`}
+                          className="relative rounded-md border overflow-hidden group"
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={f.preview}
+                            alt={f.file.name}
+                            className="h-20 w-full object-cover"
+                          />
+                          {i === 0 && (
+                            <span className="absolute left-1 top-1 rounded bg-primary px-1.5 py-0.5 text-[10px] font-medium text-primary-foreground">
+                              Featured
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => removeUploadedFile(i)}
+                            disabled={loading}
+                            className="absolute right-1 top-1 rounded bg-background/80 p-0.5 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100"
+                            aria-label={`Remove ${f.file.name}`}
+                          >
+                            <X className="size-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Client Selector (agency only) */}

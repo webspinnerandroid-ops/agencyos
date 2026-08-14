@@ -12,6 +12,18 @@ export const generateContentSchema = z
     // How many images to generate for the blog: 0 = none, 1 = featured only,
     // 2 = featured + 1 inline, 3 = featured + 2 inline.
     imageCount: z.number().int().min(0).max(3).optional(),
+    // User-uploaded images (already persisted to storage) that replace the
+    // AI-generated ones. First entry is the featured image, the rest inline.
+    uploadedImages: z
+      .array(
+        z.object({
+          url: z.string().url(),
+          placement: z.enum(["featured", "inline"]),
+          description: z.string().optional(),
+        })
+      )
+      .max(3)
+      .optional(),
     // Social platforms are OPTIONAL — a blog-only generation (no social
     // captions) is a supported and common case, so an empty/absent list must
     // not fail validation. The blog post is always generated.

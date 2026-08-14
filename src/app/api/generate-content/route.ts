@@ -211,6 +211,82 @@ async function generateBlogImages(
   );
 }
 
+/**
+ * Maps user-uploaded images onto the model's image specs so they land in the
+ * same spots AI images would (featured hero first, then per-section inline).
+ * When the model returned no specs (e.g. truncated JSON), placement is derived
+ * from the upload order: first upload is featured, the rest inline.
+ */
+function attachUploadedImages(
+  uploaded: { url: string; placement: "featured" | "inline"; description?: string }[],
+  modelSpecs: BlogImageSpec[]
+): GeneratedBlogImage[] {
+  const specs = selectBlogImageSpecs(modelSpecs, uploaded.length);
+  return uploaded.map((img, i) => {
+    const fallback: BlogImageSpec = {
+      prompt: "",
+      placement: img.placement === "featured" || i === 0 ? "featured" : "inline",
+      sectionTitle: "",
+      description: img.description?.trim() || `Uploaded image ${i + 1}`,
+    };
+    const spec = specs[i] ?? fallback;
+    return {
+      spec: {
+        ...spec,
+        prompt: "",
+        description: img.description?.trim() || spec.description,
+      },
+      url: img.url,
+    };
+  });
+}
+
+/**
+ * Saves user-uploaded images to media_assets so they also appear in the
+ * images page history, matching the generated-image path.
+ */
+async function persistUploadedImages(
+  tenantId: string,
+  clientId: string | null | undefined,
+  images: GeneratedBlogImage[],
+  postTitle: string
+): Promise<void> {
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { auth: { autoRefreshToken: false, persistSession: false } }
+  );
+  const workspaceId = await getCurrentWorkspaceId().catch(() => null);
+
+  for (const img of images) {
+    const altText =
+      img.spec.description && img.spec.description.trim().length > 0
+        ? img.spec.description.trim()
+        : `${postTitle}: ${img.spec.placement === "featured" ? "featured image" : "inline image"}`;
+    const { error } = await supabase.from("media_assets").insert({
+      tenant_id: tenantId,
+      client_id: clientId ?? null,
+      workspace_id: workspaceId,
+      type: "image",
+      prompt: "",
+      url: img.url,
+      alt_text: altText,
+      metadata: {
+        placement: img.spec.placement,
+        sectionTitle: img.spec.sectionTitle,
+        source: "upload",
+      },
+      status: "completed",
+    });
+    if (error) {
+      console.warn(
+        "[generate-content] Failed to save uploaded image to media_assets:",
+        error.message
+      );
+    }
+  }
+}
+
 interface SocialCaptionResult {
   caption: string;
   hashtags: string[];
@@ -270,6 +346,7 @@ export async function POST(request: NextRequest) {
       title,
       keywords = [],
       imageCount = MAX_BLOG_IMAGES,
+      uploadedImages,
     } = parsed.data;
 
     // The user may supply a title, keywords/topics, or both. "topic" is the
@@ -514,13 +591,28 @@ export async function POST(request: NextRequest) {
       ];
     }
 
-    const generatedImages = await generateBlogImages(
-      tenantId,
-      clientId,
-      imageSpecs,
-      blogPost.title,
-      imageCount
-    );
+    const generatedImages: GeneratedBlogImage[] =
+      uploadedImages && uploadedImages.length > 0
+        ? await (async () => {
+            // User supplied their own images — skip AI generation and use the
+            // uploaded URLs, mapped onto the model's placements so they sit in
+            // the same spots (featured hero + per-section inline).
+            const attached = attachUploadedImages(uploadedImages, imageSpecs);
+            await persistUploadedImages(
+              tenantId,
+              clientId,
+              attached,
+              blogPost.title
+            );
+            return attached;
+          })()
+        : await generateBlogImages(
+            tenantId,
+            clientId,
+            imageSpecs,
+            blogPost.title,
+            imageCount
+          );
 
     // Resolve internal-link markers, then guarantee at least one internal
     // link (related-reading section) when the body has none — automatic

@@ -58,6 +58,9 @@ export async function POST(request: NextRequest) {
         ],
         max_tokens: 500,
         temperature: 0.8,
+        // DeepSeek V4 defaults to thinking mode, which eats the whole 500-token
+        // budget on reasoning and returns empty content.
+        thinking: { type: "disabled" },
       }),
     });
 

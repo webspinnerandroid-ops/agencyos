@@ -619,6 +619,16 @@ async function callOpenAICompatibleAPI(
     max_tokens: options?.maxTokens ?? 4096,
   };
 
+  // DeepSeek V4 defaults to "thinking mode" (effort high), which spends the
+  // whole token budget on chain-of-thought and returns EMPTY content — the
+  // cause of enhance-prompt coming back blank and blog generation returning
+  // empty + slow (the 16k → 32k token retries in prod logs). Disable it for
+  // the OpenAI-compatible path; these are structured/text tasks that don't
+  // need hidden reasoning.
+  if (/deepseek-v4/i.test(model)) {
+    body.thinking = { type: "disabled" };
+  }
+
   if (options?.responseFormat) {
     body.response_format = options.responseFormat;
   }

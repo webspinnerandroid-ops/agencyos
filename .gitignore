@@ -70,3 +70,7 @@ next-env.d.ts
 # screenshot capture session cookies (contains the logged-in dev session)
 scripts/.session-cookies.json
 .edge-profile-*/
+
+# esbuild bundles of the one-off .ts scripts in /scripts — rebuildable, and
+# they bloat the repo (multi-MB each). Keep only the TypeScript source.
+scripts/*.cjs

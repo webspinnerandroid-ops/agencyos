@@ -1,5 +1,6 @@
 import { inngest } from "@/lib/inngest/client";
 import { scanOpportunitiesForTenant, createScanSupabase, currentWeekStart } from "@/lib/opportunity-scan";
+import { createNotification } from "@/lib/in-app-notifications";
 
 /**
  * Weekly opportunity scan — every Monday at 08:00 UTC.
@@ -44,6 +45,16 @@ export const weeklyOpportunityScan = inngest.createFunction(
         return (data?.id as string | undefined) ?? null;
       });
 
+      // Progress ping before the scan, so the owner knows the weekly run is
+      // happening in the background.
+      void createNotification({
+        tenantId: t.tenant_id,
+        kind: "progress",
+        title: "Scanning for content opportunities…",
+        body: "The weekly scan is looking for Reddit/LinkedIn/Quora conversations to turn into content.",
+        link: "/dashboard/seo/opportunities",
+      });
+
       const result = await step.run(`scan-${t.tenant_id}`, async () => {
         // No topics configured for the batch — the model works from the
         // workspace context available to it in the prompt.
@@ -55,6 +66,20 @@ export const weeklyOpportunityScan = inngest.createFunction(
         );
       });
       total += result.inserted;
+
+      void createNotification({
+        tenantId: t.tenant_id,
+        kind: "info",
+        title:
+          result.inserted > 0
+            ? `${result.inserted} new content opportunities found`
+            : "Opportunity scan finished",
+        body:
+          result.inserted > 0
+            ? "Review and approve the fresh content ideas from this week's scan."
+            : "No new conversations matched this week — check again next Monday.",
+        link: "/dashboard/seo/opportunities",
+      });
     }
 
     return { weekStart, tenants: tenants.length, inserted: total };

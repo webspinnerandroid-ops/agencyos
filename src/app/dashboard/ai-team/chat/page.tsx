@@ -18,6 +18,7 @@ import {
   ChevronDown,
   CalendarRange,
   Check,
+  Square,
 } from "lucide-react";
 import { EMPLOYEE_PERSONAS } from "@/lib/ai/employee-personas";
 import { EmployeeAvatar } from "@/components/EmployeeAvatar";
@@ -29,6 +30,8 @@ import {
   moveChatToWorkspace,
   getTenantWorkspaces,
   createChatRoom,
+  cancelTeamTask,
+  inviteEmployeeToChat,
   type TeamChat,
   type TeamMessage,
 } from "@/lib/ai-team-chat";
@@ -310,6 +313,39 @@ export default function AiTeamChatPage() {
   // Show all employees in the sidebar; existing DMs are marked.
   const dmKeys = new Set(dms.map((d) => d.employee_key));
 
+  // Employees currently in the active chat (a DM has one; a group room has N).
+  const activeParticipants: string[] = activeChat
+    ? activeChat.kind === "employee" && activeChat.employee_key
+      ? [activeChat.employee_key]
+      : Array.isArray(activeChat.participants)
+        ? (activeChat.participants as string[])
+        : []
+    : [];
+
+  const stopTasks = useCallback(async () => {
+    if (!activeChatId) return;
+    const ids = [...pendingTasks];
+    setPendingTasks([]);
+    for (const taskId of ids) {
+      await cancelTeamTask(activeChatId, taskId);
+    }
+    const res = await getMessages(activeChatId);
+    if (res.success && res.data) setMessages(res.data);
+  }, [activeChatId, pendingTasks]);
+
+  const inviteToChat = async (employeeKey: string) => {
+    if (!activeChatId) return;
+    setError(null);
+    const res = await inviteEmployeeToChat(activeChatId, employeeKey);
+    if (!res.success || !res.data) {
+      setError(res.error ?? "Failed to invite employee.");
+      return;
+    }
+    setChats((prev) =>
+      prev.map((c) => (c.id === res.data!.id ? res.data! : c))
+    );
+  };
+
   if (loading) {
     return (
       <div className="flex items-center gap-2 text-muted-foreground py-10">
@@ -527,7 +563,11 @@ export default function AiTeamChatPage() {
                     {activeChat.title}
                   </p>
                   <p className="text-[11px] text-muted-foreground leading-tight">
-                    Team chat — Malory dispatches here too
+                    {activeParticipants.length > 0
+                      ? `Group chat: ${activeParticipants
+                          .map((k) => EMPLOYEE_PERSONAS[k]?.name ?? k)
+                          .join(", ")}`
+                      : "Team chat — Malory dispatches here too"}
                   </p>
                 </div>
               </>
@@ -552,7 +592,13 @@ export default function AiTeamChatPage() {
                   <>
                     Say hello to <span className="font-medium">{employeeName(activeChat.employee_key)}</span>.
                     <br />
-                    Try: &ldquo;write a blog post about small business SEO&rdquo; to get a draft generated.
+                    {activeChat.employee_key === "penny" ? (
+                      <>Try: &ldquo;write a blog post about small business SEO&rdquo; to get a draft generated.</>
+                    ) : activeChat.employee_key === "nina" ? (
+                      <>Try: &ldquo;plan a campaign for our spring launch&rdquo; to get a dated content plan.</>
+                    ) : (
+                      <>Ask me anything about {employeeRole(activeChat.employee_key)} — I&apos;ll point you to the right teammate if it&apos;s outside my lane.</>
+                    )}
                   </>
                 ) : (
                   <>
@@ -698,6 +744,41 @@ export default function AiTeamChatPage() {
           </div>
 
           <div className="p-3 border-t">
+            {(pendingTasks.length > 0 ||
+              activeChat?.kind === "employee" ||
+              (activeChat?.kind === "room" && activeParticipants.length > 0)) && (
+              <div className="flex items-center gap-2 mb-2">
+                {pendingTasks.length > 0 && (
+                  <button
+                    onClick={() => void stopTasks()}
+                    className="inline-flex items-center gap-1.5 rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-1.5 text-xs font-medium text-destructive hover:bg-destructive/20 transition-colors"
+                  >
+                    <Square className="size-3" />
+                    Stop {pendingTasks.length > 1 ? `(${pendingTasks.length})` : ""}
+                  </button>
+                )}
+                {(activeChat?.kind === "employee" ||
+                  (activeChat?.kind === "room" && activeParticipants.length > 0)) && (
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      if (e.target.value) void inviteToChat(e.target.value);
+                    }}
+                    className="rounded-md border border-input bg-background px-2 py-1.5 text-xs text-muted-foreground"
+                    aria-label="Invite an employee"
+                  >
+                    <option value="" disabled>
+                      Invite an employee…
+                    </option>
+                    {EMPLOYEE_KEYS.filter((k) => !activeParticipants.includes(k)).map((k) => (
+                      <option key={k} value={k}>
+                        {EMPLOYEE_PERSONAS[k]?.name ?? k}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            )}
             <div className="flex items-end gap-2">
               <textarea
                 value={input}

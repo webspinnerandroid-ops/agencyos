@@ -25,6 +25,7 @@ import {
 } from "@/lib/supabase/tenant-scope";
 import { getCurrentWorkspaceId } from "@/lib/workspace";
 import { EMPLOYEE_KEYS } from "@/lib/ai/employee-keys";
+import { EMPLOYEE_PERSONAS } from "@/lib/ai/employee-personas";
 import { inngest } from "@/lib/inngest/client";
 import {
   enqueueOrRun,
@@ -44,6 +45,8 @@ export interface TeamChat {
   title: string;
   kind: "team" | "employee" | "room";
   employee_key: string | null;
+  /** Group rooms: the employee keys currently in the chat. */
+  participants?: string[] | null;
   created_at: string;
 }
 
@@ -396,6 +399,102 @@ export async function sendChatMessage(
         taskId: result.taskId ?? "",
       },
     };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+/**
+ * Stop an in-flight chat task. Inserts a cancellation signal the worker checks
+ * between stages (and per image) — the task then stops without posting a reply
+ * and the "Stopped by you." status resolves in the UI.
+ */
+export async function cancelTeamTask(
+  chatId: string,
+  taskId: string
+): Promise<ActionResponse<void>> {
+  try {
+    const tenantId = await getTenantId();
+    const supabase = tenantScopedClient(await createServiceClient(), tenantId);
+
+    const { data: chat } = await supabase
+      .from("team_chats")
+      .select("*")
+      .eq("id", chatId)
+      .maybeSingle();
+    assertTenantOwner(chat as TeamChat | null, tenantId, "chat");
+
+    const { error } = await supabase.from("team_messages").insert({
+      chat_id: chatId,
+      role: "system",
+      employee_key: null,
+      content: "Stopped by you.",
+      metadata: { status: true, stage: "cancelled", taskId, cancel: true },
+    });
+    if (error) throw new Error(error.message);
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+/**
+ * Invite an employee into a chat. A DM becomes a group room (kind 'room')
+ * with both employees as participants; further invites append to the room.
+ */
+export async function inviteEmployeeToChat(
+  chatId: string,
+  employeeKey: string
+): Promise<ActionResponse<TeamChat>> {
+  try {
+    const tenantId = await getTenantId();
+    await requireRole("agency_editor");
+    const supabase = tenantScopedClient(await createServiceClient(), tenantId);
+
+    if (!(EMPLOYEE_KEYS as readonly string[]).includes(employeeKey)) {
+      return { success: false, error: `Unknown AI employee: ${employeeKey}` };
+    }
+
+    const { data: chat } = await supabase
+      .from("team_chats")
+      .select("*")
+      .eq("id", chatId)
+      .maybeSingle();
+    assertTenantOwner(chat as TeamChat | null, tenantId, "chat");
+    const room = chat as TeamChat;
+
+    const current: string[] = Array.isArray(room.participants)
+      ? (room.participants as string[])
+      : room.kind === "employee" && room.employee_key
+        ? [room.employee_key]
+        : [];
+    if (current.includes(employeeKey)) {
+      return { success: false, error: "That employee is already in this chat." };
+    }
+
+    const participants = [...current, employeeKey];
+    const nameOf = (k: string) =>
+      EMPLOYEE_PERSONAS[k as keyof typeof EMPLOYEE_PERSONAS]?.name ?? k;
+    // A DM converted to a group takes a descriptive title; a room keeps its
+    // title.
+    const title =
+      room.kind === "employee"
+        ? participants.map(nameOf).join(" + ")
+        : room.title;
+
+    const { data, error } = await supabase
+      .from("team_chats")
+      .update({
+        kind: "room",
+        employee_key: null,
+        participants,
+        title,
+      })
+      .eq("id", chatId)
+      .select("*")
+      .single();
+    if (error) throw new Error(error.message);
+    return { success: true, data: data as TeamChat };
   } catch (err) {
     return { success: false, error: (err as Error).message };
   }

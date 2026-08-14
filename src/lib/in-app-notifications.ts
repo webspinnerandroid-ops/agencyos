@@ -31,6 +31,7 @@ export interface NotificationRow {
   title: string;
   body: string | null;
   link: string | null;
+  group_key: string | null;
   read_at: string | null;
   created_at: string;
 }
@@ -43,6 +44,11 @@ export interface CreateNotificationInput {
   title: string;
   body?: string;
   link?: string;
+  /**
+   * Groups related notifications (e.g. `post:<id>` or `chat:<id>`) so the
+   * notifications center collapses a burst of updates into one entry.
+   */
+  groupKey?: string;
 }
 
 export interface ListNotificationsOptions {
@@ -67,6 +73,7 @@ export async function createNotification(
       title: input.title,
       body: input.body ?? null,
       link: input.link ?? null,
+      group_key: input.groupKey ?? null,
     });
     if (error) {
       console.warn("[in-app-notifications] insert failed:", error.message);
@@ -169,6 +176,37 @@ export async function countNotifications(
   }
 }
 
+/** Unread counts per kind (for the notifications center filter tabs). */
+export async function getUnreadCountsByKind(
+  tenantId: string
+): Promise<Record<NotificationKind, number>> {
+  const counts: Record<NotificationKind, number> = {
+    info: 0,
+    progress: 0,
+    approval: 0,
+    alert: 0,
+  };
+  try {
+    const supabase = await createServiceClient();
+    const { data, error } = await supabase
+      .from("notifications")
+      .select("kind")
+      .eq("tenant_id", tenantId)
+      .is("read_at", null);
+    if (error) {
+      console.warn("[in-app-notifications] unread-by-kind failed:", error.message);
+      return counts;
+    }
+    for (const row of data ?? []) {
+      const k = row.kind as NotificationKind;
+      if (k in counts) counts[k] += 1;
+    }
+  } catch (err) {
+    console.warn("[in-app-notifications] unread-by-kind failed:", err);
+  }
+  return counts;
+}
+
 /** Count of unread notifications for the red dot. */
 export async function getUnreadNotificationCount(
   tenantId: string
@@ -217,6 +255,32 @@ export async function markNotificationsRead(
     }
   } catch (err) {
     console.warn("[in-app-notifications] mark-read failed:", err);
+  }
+}
+
+/**
+ * Mark every notification pointing at a given in-app link as read. Used when
+ * the user opens the linked page directly (not via the bell), so the dot
+ * clears once they've seen the work.
+ */
+export async function markNotificationsReadByLink(
+  tenantId: string,
+  link: string
+): Promise<void> {
+  try {
+    if (!link || !link.startsWith("/")) return;
+    const supabase = await createServiceClient();
+    const { error } = await supabase
+      .from("notifications")
+      .update({ read_at: new Date().toISOString() })
+      .eq("tenant_id", tenantId)
+      .eq("link", link)
+      .is("read_at", null);
+    if (error) {
+      console.warn("[in-app-notifications] read-by-link failed:", error.message);
+    }
+  } catch (err) {
+    console.warn("[in-app-notifications] read-by-link failed:", err);
   }
 }
 

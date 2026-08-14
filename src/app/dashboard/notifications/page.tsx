@@ -1,7 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { Bell, CheckCheck, Trash2, Loader2, ChevronLeft, ChevronRight } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Bell,
+  CheckCheck,
+  Trash2,
+  Loader2,
+  ChevronLeft,
+  ChevronRight,
+  ChevronDown,
+  ChevronUp,
+} from "lucide-react";
 import { KIND_META } from "@/components/NotificationBell";
 import type { NotificationKind, NotificationRow } from "@/lib/in-app-notifications";
 
@@ -31,14 +40,26 @@ function relativeTime(iso: string): string {
   }
 }
 
+interface Group {
+  key: string;
+  items: NotificationRow[];
+}
+
 export default function NotificationsCenterPage() {
   const [items, setItems] = useState<NotificationRow[]>([]);
   const [total, setTotal] = useState(0);
   const [unread, setUnread] = useState(0);
+  const [unreadByKind, setUnreadByKind] = useState<Record<NotificationKind, number>>({
+    info: 0,
+    progress: 0,
+    approval: 0,
+    alert: 0,
+  });
   const [loading, setLoading] = useState(true);
   const [kind, setKind] = useState<NotificationKind | null>(null);
   const [offset, setOffset] = useState(0);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -55,11 +76,16 @@ export default function NotificationsCenterPage() {
         notifications: NotificationRow[];
         total: number;
         unread: number;
+        unreadByKind: Record<NotificationKind, number>;
       };
       setItems(data.notifications ?? []);
       setTotal(data.total ?? 0);
       setUnread(data.unread ?? 0);
+      setUnreadByKind(
+        data.unreadByKind ?? { info: 0, progress: 0, approval: 0, alert: 0 }
+      );
       setSelected(new Set());
+      setExpanded(new Set());
     } catch {
       // leave last state
     } finally {
@@ -71,6 +97,21 @@ export default function NotificationsCenterPage() {
     load();
   }, [load]);
 
+  // Group the page's notifications by their group_key (chat/task), collapsing
+  // a burst of updates about one piece of work into a single entry.
+  const groups = useMemo<Group[]>(() => {
+    const byKey = new Map<string, NotificationRow[]>();
+    for (const n of items) {
+      const key = n.group_key ?? `id:${n.id}`;
+      const list = byKey.get(key);
+      if (list) list.push(n);
+      else byKey.set(key, [n]);
+    }
+    return [...byKey.entries()].map(([key, list]) => ({ key, items: list }));
+  }, [items]);
+
+  const allIds = useMemo(() => items.map((i) => i.id), [items]);
+
   const toggle = (id: string) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -80,10 +121,32 @@ export default function NotificationsCenterPage() {
     });
   };
 
+  const toggleGroup = (group: Group) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      const ids = group.items.map((i) => i.id);
+      const allOn = ids.every((id) => next.has(id));
+      for (const id of ids) {
+        if (allOn) next.delete(id);
+        else next.add(id);
+      }
+      return next;
+    });
+  };
+
   const toggleAll = () => {
     setSelected((prev) =>
-      prev.size === items.length ? new Set() : new Set(items.map((i) => i.id))
+      prev.size === allIds.length ? new Set() : new Set(allIds)
     );
+  };
+
+  const toggleExpanded = (key: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   };
 
   const markSelectedRead = async () => {
@@ -134,6 +197,57 @@ export default function NotificationsCenterPage() {
   const page = Math.floor(offset / PAGE_SIZE) + 1;
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
+  const markOneRead = (id: string) => {
+    void fetch("/api/notifications", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: [id] }),
+    });
+  };
+
+  const renderItem = (n: NotificationRow, showCheckbox: boolean) => {
+    const meta = KIND_META[n.kind] ?? KIND_META.info;
+    const unreadItem = !n.read_at;
+    return (
+      <div className="flex items-start gap-3 py-2.5 px-3">
+        {showCheckbox && (
+          <input
+            type="checkbox"
+            checked={selected.has(n.id)}
+            onChange={() => toggle(n.id)}
+            className="mt-1 size-4 shrink-0"
+            onClick={(e) => e.stopPropagation()}
+          />
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-2">
+            <span
+              className={`text-sm font-medium leading-snug ${
+                unreadItem ? "text-foreground" : "text-muted-foreground"
+              }`}
+            >
+              {n.title}
+            </span>
+            <span
+              className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${meta.className}`}
+            >
+              {meta.label}
+            </span>
+          </div>
+          {n.body && (
+            <p className="mt-0.5 text-xs text-muted-foreground">{n.body}</p>
+          )}
+          <span className="mt-1 block text-[11px] text-muted-foreground/70">
+            {relativeTime(n.created_at)}
+            {unreadItem && (
+              <span className="ml-2 inline-flex size-1.5 rounded-full bg-red-500 align-middle" />
+            )}
+          </span>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -162,24 +276,38 @@ export default function NotificationsCenterPage() {
         </div>
       </div>
 
-      {/* Kind filters */}
+      {/* Kind filters with per-kind unread counts */}
       <div className="flex flex-wrap gap-1.5">
-        {FILTERS.map((f) => (
-          <button
-            key={f.key ?? "all"}
-            onClick={() => {
-              setOffset(0);
-              setKind(f.key);
-            }}
-            className={`rounded-full border px-3 py-1 text-sm transition-colors ${
-              kind === f.key
-                ? "bg-primary text-primary-foreground border-primary"
-                : "bg-background border-input hover:bg-muted"
-            }`}
-          >
-            {f.label}
-          </button>
-        ))}
+        {FILTERS.map((f) => {
+          const count = f.key === null ? unread : unreadByKind[f.key];
+          return (
+            <button
+              key={f.key ?? "all"}
+              onClick={() => {
+                setOffset(0);
+                setKind(f.key);
+              }}
+              className={`rounded-full border px-3 py-1 text-sm transition-colors ${
+                kind === f.key
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "bg-background border-input hover:bg-muted"
+              }`}
+            >
+              {f.label}
+              {count > 0 && (
+                <span
+                  className={`ml-1.5 rounded-full px-1.5 text-xs font-semibold ${
+                    kind === f.key
+                      ? "bg-primary-foreground/20 text-primary-foreground"
+                      : "bg-red-100 text-red-700"
+                  }`}
+                >
+                  {count}
+                </span>
+              )}
+            </button>
+          );
+        })}
       </div>
 
       {/* Bulk actions */}
@@ -187,7 +315,7 @@ export default function NotificationsCenterPage() {
         <label className="flex items-center gap-2 text-sm text-muted-foreground cursor-pointer">
           <input
             type="checkbox"
-            checked={items.length > 0 && selected.size === items.length}
+            checked={allIds.length > 0 && selected.size === allIds.length}
             onChange={toggleAll}
             className="size-4"
           />
@@ -220,67 +348,111 @@ export default function NotificationsCenterPage() {
         </div>
       ) : (
         <div className="rounded-lg border divide-y">
-          {items.map((n) => {
-            const meta = KIND_META[n.kind] ?? KIND_META.info;
-            const unreadItem = !n.read_at;
-            const body = (
-              <div className="flex items-start gap-3 py-3 px-4">
-                <input
-                  type="checkbox"
-                  checked={selected.has(n.id)}
-                  onChange={() => toggle(n.id)}
-                  className="mt-1 size-4 shrink-0"
-                  onClick={(e) => e.stopPropagation()}
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-start justify-between gap-2">
-                    <span
-                      className={`text-sm font-medium leading-snug ${
-                        unreadItem ? "text-foreground" : "text-muted-foreground"
-                      }`}
-                    >
-                      {n.title}
-                    </span>
-                    <span
-                      className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${meta.className}`}
-                    >
-                      {meta.label}
+          {groups.map((group) => {
+            const latest = group.items[0];
+            const meta = KIND_META[latest.kind] ?? KIND_META.info;
+            const unreadInGroup = group.items.filter((i) => !i.read_at).length;
+            const isExpanded = expanded.has(group.key);
+
+            // Single-item group → render flat.
+            if (group.items.length === 1) {
+              const n = group.items[0];
+              const row = (
+                <div className="hover:bg-muted/50 transition-colors">
+                  {renderItem(n, true)}
+                </div>
+              );
+              return n.link ? (
+                <a
+                  key={group.key}
+                  href={n.link}
+                  onClick={() => {
+                    if (!n.read_at) markOneRead(n.id);
+                  }}
+                  className="block"
+                >
+                  {row}
+                </a>
+              ) : (
+                <div key={group.key}>{row}</div>
+              );
+            }
+
+            // Multi-item group → collapsible header with a count.
+            const groupIds = group.items.map((i) => i.id);
+            const allOn = groupIds.every((id) => selected.has(id));
+            return (
+              <div key={group.key}>
+                <div
+                  className="flex items-center gap-3 py-3 px-4 cursor-pointer hover:bg-muted/50 transition-colors"
+                  onClick={() => toggleExpanded(group.key)}
+                >
+                  <input
+                    type="checkbox"
+                    checked={allOn}
+                    onChange={() => toggleGroup(group)}
+                    className="size-4 shrink-0"
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className={`text-sm font-medium leading-snug truncate ${
+                          unreadInGroup > 0
+                            ? "text-foreground"
+                            : "text-muted-foreground"
+                        }`}
+                      >
+                        {latest.title}
+                      </span>
+                      <span
+                        className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${meta.className}`}
+                      >
+                        {meta.label}
+                      </span>
+                    </div>
+                    <span className="mt-0.5 block text-[11px] text-muted-foreground/70">
+                      {group.items.length} updates
+                      {unreadInGroup > 0 && (
+                        <span className="ml-1.5 rounded-full bg-red-100 px-1.5 text-[10px] font-semibold text-red-700">
+                          {unreadInGroup} new
+                        </span>
+                      )}{" "}
+                      · {relativeTime(latest.created_at)}
                     </span>
                   </div>
-                  {n.body && (
-                    <p className="mt-0.5 text-xs text-muted-foreground">
-                      {n.body}
-                    </p>
+                  {isExpanded ? (
+                    <ChevronUp className="size-4 shrink-0 text-muted-foreground" />
+                  ) : (
+                    <ChevronDown className="size-4 shrink-0 text-muted-foreground" />
                   )}
-                  <span className="mt-1 block text-[11px] text-muted-foreground/70">
-                    {relativeTime(n.created_at)}
-                    {unreadItem && (
-                      <span className="ml-2 inline-flex size-1.5 rounded-full bg-red-500 align-middle" />
-                    )}
-                  </span>
                 </div>
-              </div>
-            );
-            return n.link ? (
-              <a
-                key={n.id}
-                href={n.link}
-                onClick={() => {
-                  if (unreadItem) {
-                    void fetch("/api/notifications", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ ids: [n.id] }),
-                    });
-                  }
-                }}
-                className="block hover:bg-muted/50 transition-colors"
-              >
-                {body}
-              </a>
-            ) : (
-              <div key={n.id} className="block hover:bg-muted/50 transition-colors">
-                {body}
+                {isExpanded && (
+                  <div className="border-t divide-y bg-muted/20">
+                    {group.items.map((n) => {
+                      const row = renderItem(n, true);
+                      return n.link ? (
+                        <a
+                          key={n.id}
+                          href={n.link}
+                          onClick={() => {
+                            if (!n.read_at) markOneRead(n.id);
+                          }}
+                          className="block hover:bg-muted/50 transition-colors"
+                        >
+                          {row}
+                        </a>
+                      ) : (
+                        <div
+                          key={n.id}
+                          className="hover:bg-muted/50 transition-colors"
+                        >
+                          {row}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
             );
           })}

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { usePathname, useSearchParams } from "next/navigation";
 import { Bell, CheckCheck, Loader2 } from "lucide-react";
 import { createBrowserClient } from "@supabase/ssr";
 import type { NotificationKind, NotificationRow } from "@/lib/in-app-notifications";
@@ -58,6 +59,9 @@ export default function NotificationBell() {
   const [markingRead, setMarkingRead] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const realtimeRef = useRef<{ client: ReturnType<typeof createBrowserClient>; channel: ReturnType<ReturnType<typeof createBrowserClient>["channel"]> } | null>(null);
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const currentLink = `${pathname}${searchParams.toString() ? `?${searchParams.toString()}` : ""}`;
 
   const load = useCallback(async () => {
     try {
@@ -75,6 +79,19 @@ export default function NotificationBell() {
       setLoading(false);
     }
   }, []);
+
+  // Mark the current page's notifications read the moment it's opened (not
+  // just when the bell itself is clicked). Fires on mount + every navigation.
+  useEffect(() => {
+    if (!currentLink.startsWith("/dashboard")) return;
+    void fetch("/api/notifications/read-link", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ link: currentLink }),
+    })
+      .catch(() => {})
+      .then(() => load());
+  }, [currentLink, load]);
 
   useEffect(() => {
     load();

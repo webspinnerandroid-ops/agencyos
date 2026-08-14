@@ -50,6 +50,7 @@ export const autoRewritePost = inngest.createFunction(
       title: "Rewriting your post…",
       body: "A post scored below the publish threshold, so Cheryl is regenerating it in the background. You can retry publishing once it lands.",
       link: `/dashboard/posts?post=${postId}`,
+      groupKey: `post:${postId}`,
     });
 
     const result = await regenerateBlogPost(
@@ -67,6 +68,7 @@ export const autoRewritePost = inngest.createFunction(
       title: "Post rewritten",
       body: `"${result.title}" was regenerated and is ready for you to review and publish.`,
       link: `/dashboard/posts?post=${postId}`,
+      groupKey: `post:${postId}`,
     });
     return { status: "completed", postId, title: result.title };
   }

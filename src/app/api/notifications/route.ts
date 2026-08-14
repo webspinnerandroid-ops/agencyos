@@ -4,6 +4,7 @@ import {
   listNotifications,
   countNotifications,
   getUnreadNotificationCount,
+  getUnreadCountsByKind,
   markNotificationsRead,
   deleteNotifications,
   type NotificationKind,
@@ -38,12 +39,13 @@ export async function GET(request: NextRequest) {
     const limit = Math.min(Math.max(Number(searchParams.get("limit")) || 30, 1), 50);
     const offset = Math.max(Number(searchParams.get("offset")) || 0, 0);
 
-    const [notifications, unread, total] = await Promise.all([
+    const [notifications, unread, unreadByKind, total] = await Promise.all([
       listNotifications(tenantId, { limit, offset, kind }),
       getUnreadNotificationCount(tenantId),
+      getUnreadCountsByKind(tenantId),
       countNotifications(tenantId, kind),
     ]);
-    return NextResponse.json({ notifications, unread, total });
+    return NextResponse.json({ notifications, unread, unreadByKind, total });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Internal server error";

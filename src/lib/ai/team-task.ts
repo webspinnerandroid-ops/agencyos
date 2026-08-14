@@ -634,6 +634,7 @@ export async function generateApprovedCampaignItem(
           item.kind === "blog" ? "a blog draft" : "a social post"
         } for "${item.topic}". Review and approve it before it goes live.`,
         link: `/dashboard/posts?post=${postId}`,
+        groupKey: `post:${postId}`,
       });
     }
   } catch (err) {
@@ -1203,11 +1204,12 @@ async function isTaskCancelled(
  */
 async function notifyTaskResult(params: {
   tenantId: string;
+  chatId: string;
   employeeName: string;
   replyContent: string;
   replyMeta: Record<string, unknown>;
 }): Promise<void> {
-  const { tenantId, employeeName, replyContent, replyMeta } = params;
+  const { tenantId, chatId, employeeName, replyContent, replyMeta } = params;
   const action = typeof replyMeta.action === "string" ? replyMeta.action : "";
   const chatUrl = "/dashboard/ai-team/chat";
   const excerpt = (replyContent || "").replace(/\s+/g, " ").trim();
@@ -1221,12 +1223,15 @@ async function notifyTaskResult(params: {
         : "new draft";
     const link =
       typeof replyMeta.postUrl === "string" ? replyMeta.postUrl : chatUrl;
+    const postId =
+      typeof replyMeta.postId === "string" ? replyMeta.postId : undefined;
     await createNotification({
       tenantId,
       kind: "approval",
       title: `Draft ready for review: ${title}`,
       body: `${employeeName} finished the post and it's waiting for your approval before it can be published.`,
       link,
+      groupKey: postId ? `post:${postId}` : `chat:${chatId}`,
     });
     return;
   }
@@ -1240,12 +1245,15 @@ async function notifyTaskResult(params: {
       typeof replyMeta.planUrl === "string"
         ? replyMeta.planUrl
         : "/dashboard/calendar";
+    const planId =
+      typeof replyMeta.planId === "string" ? replyMeta.planId : undefined;
     await createNotification({
       tenantId,
       kind: "info",
       title: `Campaign planned: ${title}`,
       body: `${employeeName} mapped the campaign. Review the calendar and approve items to start generating content.`,
       link,
+      groupKey: planId ? `plan:${planId}` : `chat:${chatId}`,
     });
     return;
   }
@@ -1263,6 +1271,7 @@ async function notifyTaskResult(params: {
       title: "AI team hit a snag",
       body: `${employeeName}: ${err}`,
       link: chatUrl,
+      groupKey: `chat:${chatId}`,
     });
     return;
   }
@@ -1274,6 +1283,7 @@ async function notifyTaskResult(params: {
     title: `${employeeName} replied`,
     body: shortExcerpt || "See the chat for the full reply.",
     link: chatUrl,
+    groupKey: `chat:${chatId}`,
   });
 }
 
@@ -1568,6 +1578,7 @@ export async function processTeamTask(payload: TeamTaskPayload): Promise<void> {
     // Surface the finished work in the top-nav bell (approval / update / alert).
     void notifyTaskResult({
       tenantId,
+      chatId,
       employeeName: employeeDisplayName,
       replyContent,
       replyMeta,
@@ -1587,6 +1598,7 @@ export async function processTeamTask(payload: TeamTaskPayload): Promise<void> {
       title: "AI team task failed",
       body: err instanceof Error ? err.message : "Unknown error",
       link: "/dashboard/ai-team/chat",
+      groupKey: `chat:${chatId}`,
     });
     try {
       await supabase.from("team_messages").insert({

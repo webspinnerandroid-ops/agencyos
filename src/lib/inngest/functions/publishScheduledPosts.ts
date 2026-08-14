@@ -110,6 +110,7 @@ export const publishScheduledPosts = inngest.createFunction(
               title: "Publishing scheduled post…",
               body: `"${title}" is going live on the connected platforms.`,
               link: `/dashboard/posts?post=${post.id}`,
+              groupKey: `post:${post.id}`,
             });
 
             const { allSucceeded, results: platformResults } =
@@ -130,6 +131,7 @@ export const publishScheduledPosts = inngest.createFunction(
                 title: "Post published",
                 body: `"${title}" went live on the connected platforms.`,
                 link: `/dashboard/posts?post=${post.id}`,
+                groupKey: `post:${post.id}`,
               });
 
               // Auto-indexer: fire-and-forget IndexNow + sitemap ping.
@@ -192,6 +194,7 @@ export const publishScheduledPosts = inngest.createFunction(
                 title: "Post failed to publish",
                 body: `"${title}" hit an error: ${errorMessages}`,
                 link: `/dashboard/posts?post=${post.id}`,
+                groupKey: `post:${post.id}`,
               });
             }
 
@@ -222,6 +225,7 @@ export const publishScheduledPosts = inngest.createFunction(
               title: "Post failed to publish",
               body: message,
               link: `/dashboard/posts?post=${post.id}`,
+              groupKey: `post:${post.id}`,
             });
 
             return {

@@ -38,30 +38,33 @@ export async function POST(
       ? owned.competitors_json
       : [];
 
+    const audit = (owned.audit_json ?? {}) as any;
+    const context = {
+      url: audit.url ?? owned.url ?? "",
+      homepageTitle: audit.homepage?.title ?? undefined,
+      metaDescription: audit.homepage?.metaDescription ?? undefined,
+      overallScore: audit.overallScore ?? undefined,
+      location: owned.location ?? audit.location ?? null,
+    };
+    const host = (() => {
+      try {
+        return new URL(owned.url).hostname;
+      } catch {
+        return (owned.url ?? "").replace(/^https?:\/\//, "").split("/")[0] ?? "";
+      }
+    })();
+
     // If the campaign has no competitors yet, discover them first (industry +
     // location research), so "Re-run audit" also fills the benchmark — not just
     // refreshes scores for competitors that already exist.
     let discovered = 0;
     if (competitors.length === 0) {
       try {
-        const audit = (owned.audit_json ?? {}) as any;
-        const context = {
-          url: audit.url ?? owned.url ?? "",
-          homepageTitle: audit.homepage?.title ?? undefined,
-          metaDescription: audit.homepage?.metaDescription ?? undefined,
-          overallScore: audit.overallScore ?? undefined,
-          location: owned.location ?? audit.location ?? null,
-        };
-        const host = (() => {
-          try {
-            return new URL(owned.url).hostname;
-          } catch {
-            return (owned.url ?? "").replace(/^https?:\/\//, "").split("/")[0] ?? "";
-          }
-        })();
         const urls = await discoverCompetitors(host, owned.tenant_id, context);
         if (urls.length > 0) {
-          competitors = await toCompetitorData(urls.slice(0, 5), context);
+          // Full pool — uncrawlable anchors are kept as notes, scored slots
+          // are filled from crawlable backups.
+          competitors = await toCompetitorData(urls, context);
           discovered = urls.length;
         }
       } catch (err: any) {
@@ -72,6 +75,41 @@ export async function POST(
     const { entries, scored, unreachable } = await rescoreCompetitorEntries(
       competitors
     );
+
+    // Top-up: if the benchmark still has fewer than 5 measured competitors,
+    // discover fresh candidates and append only the crawlable ones, so a
+    // campaign never stays stuck at one score + a wall of dead domains.
+    let added = 0;
+    const scoredCount = entries.filter(
+      (c) => c && typeof c.seoScore === "number"
+    ).length;
+    if (scoredCount < 5) {
+      try {
+        const fresh = await discoverCompetitors(host, owned.tenant_id, context);
+        const existing = new Set(
+          entries
+            .map((c: any) => c.competitorUrl)
+            .filter(Boolean)
+            .map((u: string) => u.replace(/\/$/, "").toLowerCase())
+        );
+        const pool = fresh.filter(
+          (u) => !existing.has(u.replace(/\/$/, "").toLowerCase())
+        );
+        if (pool.length > 0) {
+          const additions = await toCompetitorData(pool, context, {
+            maxScored: 5 - scoredCount,
+            maxBackups: 10,
+            keepNotes: false,
+          });
+          if (additions.length > 0) {
+            entries.push(...(additions as unknown as typeof entries));
+            added = additions.length;
+          }
+        }
+      } catch (err: any) {
+        console.warn("[re-run-audit] Top-up failed:", err?.message);
+      }
+    }
 
     const { error } = await scoped
       .from("seo_campaigns")
@@ -85,6 +123,7 @@ export async function POST(
       scored,
       unreachable,
       discovered,
+      added,
     });
   } catch (err: any) {
     const status = /not found|No rows|Campaign/i.test(err?.message ?? "") ? 404 : 500;

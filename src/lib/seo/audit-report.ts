@@ -81,6 +81,77 @@ import * as cheerio from "cheerio";
 import { scoreContent, type RankMathResult } from "@/lib/rankmath";
 import { scoreAeoGeo, type AeoGeoResult } from "@/lib/aeo-geo";
 
+// ---------------------------------------------------------------------------
+// Shared client content-score computation (dashboard + public report)
+// ---------------------------------------------------------------------------
+
+export interface AuditContentScores {
+  seoContent: RankMathResult | null;
+  aeoGeo: AeoGeoResult | null;
+  brandKeyword: string;
+  hasContentScores: boolean;
+}
+
+/**
+ * Compute the SEO + AEO/GEO content scores for a stored audit from its
+ * homepage crawl — the single source of truth used by both the dashboard
+ * and the public audit report, so they can never disagree.
+ */
+export function computeContentScores(
+  audit:
+    | {
+        url?: string;
+        homepage?: PageAuditShape;
+        internalPages?: PageAuditShape[];
+      }
+    | undefined,
+  fallbackUrl?: string
+): AuditContentScores {
+  const homepage = audit?.homepage;
+  const body = homepageMarkdown(homepage);
+  const url = audit?.url ?? fallbackUrl ?? "";
+  const keyword = brandKeyword(url);
+  const internalUrls = (audit?.internalPages ?? [])
+    .map((p) => p.url)
+    .filter((u): u is string => Boolean(u))
+    .concat(homepage?.url ? [homepage.url] : []);
+
+  let seo: RankMathResult | null = null;
+  let aeo: AeoGeoResult | null = null;
+  if (body.trim().length > 0 && homepage?.title) {
+    seo = scoreContent({
+      title: homepage.title ?? "",
+      metaDescription: homepage.metaDescription ?? "",
+      slug: (() => {
+        try {
+          return (
+            new URL(homepage.url ?? url).pathname.replace(/\/$/, "") || "/home"
+          );
+        } catch {
+          return "/home";
+        }
+      })(),
+      body,
+      keyword,
+      internalUrls,
+    });
+    aeo = scoreAeoGeo({
+      title: homepage.title ?? "",
+      metaDescription: homepage.metaDescription ?? "",
+      body,
+      keyword,
+      entities: [keyword, homepage.title ?? ""],
+    });
+  }
+
+  return {
+    seoContent: seo,
+    aeoGeo: aeo,
+    brandKeyword: keyword,
+    hasContentScores: seo !== null,
+  };
+}
+
 export interface CompetitorScores {
   competitorUrl: string;
   title: string;

@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
-import { scoreContent, type RankMathResult } from "@/lib/rankmath";
-import { scoreAeoGeo, type AeoGeoResult } from "@/lib/aeo-geo";
-import { brandKeyword, homepageMarkdown, type PageAuditShape } from "@/lib/seo/audit-report";
+import {
+  computeContentScores,
+  type PageAuditShape,
+} from "@/lib/seo/audit-report";
 
 /**
  * GET /api/seo/public-audit/[id]
@@ -108,38 +109,7 @@ export async function GET(
 
     const audit = (data.audit_json ?? {}) as AuditShape;
     const homepage = audit.homepage;
-    const body = homepageMarkdown(homepage);
-    const keyword = brandKeyword(audit.url ?? data.url ?? "");
-    const internalUrls = (audit.internalPages ?? [])
-      .map((p) => p.url)
-      .filter((u): u is string => Boolean(u))
-      .concat(homepage?.url ? [homepage.url] : []);
-
-    let seo: RankMathResult | null = null;
-    let aeo: AeoGeoResult | null = null;
-    if (body.trim().length > 0 && homepage?.title) {
-      seo = scoreContent({
-        title: homepage.title ?? "",
-        metaDescription: homepage.metaDescription ?? "",
-        slug: (() => {
-          try {
-            return new URL(homepage.url ?? data.url).pathname.replace(/\/$/, "") || "/home";
-          } catch {
-            return "/home";
-          }
-        })(),
-        body,
-        keyword,
-        internalUrls,
-      });
-      aeo = scoreAeoGeo({
-        title: homepage.title ?? "",
-        metaDescription: homepage.metaDescription ?? "",
-        body,
-        keyword,
-        entities: [keyword, homepage.title ?? ""],
-      });
-    }
+    const contentScores = computeContentScores(audit, data.url);
 
     const severityOrder: Record<string, number> = { high: 0, medium: 1, low: 2 };
     const allIssues = [
@@ -179,10 +149,10 @@ export async function GET(
       onPageIssues: audit.onPageIssues ?? [],
       contentGaps: audit.contentGaps ?? [],
       issues: allIssues,
-      seoContent: seo,
-      aeoGeo: aeo,
-      brandKeyword: keyword,
-      hasContentScores: seo !== null,
+      seoContent: contentScores.seoContent,
+      aeoGeo: contentScores.aeoGeo,
+      brandKeyword: contentScores.brandKeyword,
+      hasContentScores: contentScores.hasContentScores,
       competitors,
     });
   } catch (err) {

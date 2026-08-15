@@ -65,6 +65,7 @@ interface AuditReport {
     geoScore?: number | null;
     competitorWordCount?: number | null;
     crawled?: boolean;
+    crawlNote?: string;
   }[];
 }
 
@@ -389,6 +390,11 @@ export default function PublicAuditReportPage() {
                     <tr key={i} className="border-b last:border-0">
                       <td className="py-2 pr-4 font-medium break-all">
                         {c.competitorUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")}
+                        {c.crawled === false && (
+                          <span className="block text-[10px] font-normal text-amber-600 dark:text-amber-500 mt-0.5 italic">
+                            Not crawlable — {c.crawlNote ?? "could not be crawled"}
+                          </span>
+                        )}
                       </td>
                       <td className={`py-2 pr-4 text-right font-bold ${gradeColor(c.seoScore)}`}>{c.seoScore ?? "—"}</td>
                       <td className={`py-2 pr-4 text-right font-bold ${gradeColor(c.aeoScore)}`}>{c.aeoScore ?? "—"}</td>
@@ -401,9 +407,11 @@ export default function PublicAuditReportPage() {
                 </tbody>
               </table>
             </div>
-            {report.competitors.every((c) => c.crawled === false) && (
-              <p className="text-xs text-muted-foreground mt-3 italic">
-                Competitor pages couldn't be crawled — scores are blank.
+            {report.competitors.some((c) => c.crawled === false) && (
+              <p className="text-xs text-amber-600 dark:text-amber-500 mt-3 italic">
+                {report.competitors.filter((c) => c.crawled === false).length} competitor(s) could
+                not be fully crawled ({report.competitors.filter((c) => c.crawled === false).map((c) => c.competitorUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")).join(", ")})
+                — scores shown are for the fully-crawled competitors.
               </p>
             )}
             {report.competitors.some((c) => c.seoScore == null && c.crawled !== false) && (

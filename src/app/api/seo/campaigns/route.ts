@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantId } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
+import { computeContentScores } from "@/lib/seo/audit-report";
 
 /**
  * GET /api/seo/campaigns
@@ -42,7 +43,20 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    return NextResponse.json({ campaigns: campaigns ?? [] });
+    // Attach the client's SEO/AEO/GEO content scores, computed from the
+    // stored homepage crawl with the same engines as the public report — so
+    // the dashboard shows the client's scores without a second crawl.
+    const withScores = (campaigns ?? []).map((c: Record<string, unknown>) => {
+      const scores = computeContentScores(
+        (c.audit_json ?? undefined) as unknown as Parameters<
+          typeof computeContentScores
+        >[0],
+        (c.url as string) ?? undefined
+      );
+      return { ...c, contentScores: scores };
+    });
+
+    return NextResponse.json({ campaigns: withScores });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Internal server error";

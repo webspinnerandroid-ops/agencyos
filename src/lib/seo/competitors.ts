@@ -335,133 +335,213 @@ function extractLocationHints(html: string): { hasAddress: boolean; hasPhone: bo
 // Conversion helper (with real crawling)
 // ============================================================================
 
+export interface CompetitorCrawlOptions {
+  /** Target number of fully-scored (crawled) competitors. Default 5. */
+  maxScored?: number;
+  /** How many backup candidates to try to fill empty scored slots. Default 10. */
+  maxBackups?: number;
+  /**
+   * Keep failed anchors as noted entries (default true). When false, failed
+   * candidates are dropped entirely and only crawled (scored) entries are
+   * returned — used by top-up flows that append replacements.
+   */
+  keepNotes?: boolean;
+}
+
+/**
+ * Build the clearly-labeled note entry for a competitor that could not be
+ * crawled. The domain is kept (so it's mentioned and reviewable) but it
+ * carries no measured scores — `crawled:false` + `crawlNote` explain why.
+ */
+function noteEntry(
+  url: string,
+  note: string,
+  auditContext?: { url?: string; homepageTitle?: string; metaDescription?: string; overallScore?: number }
+): CompetitorData {
+  return {
+    competitorUrl: url,
+    crawled: false,
+    crawlNote: note,
+    strengths: ["Site could not be fully crawled — review manually"],
+    weaknesses: [
+      "Competitor data is derived from the domain name only, NOT from a live crawl.",
+    ],
+    topKeywords: getDefaultIndustryKeywords(url, auditContext),
+    contentStrategy:
+      "Not crawled. Confirm this competitor manually before quoting their strategy to a client.",
+  };
+}
+
+/**
+ * Crawl a single competitor and return a scored entry — or a `crawled:false`
+ * note entry when the site is unreachable/bot-blocked or loads with no
+ * readable content (JS-rendered shells). Never throws.
+ */
+async function crawlCompetitor(
+  url: string,
+  auditContext?: { url?: string; homepageTitle?: string; metaDescription?: string; overallScore?: number }
+): Promise<CompetitorData> {
+  try {
+    const page = await fetchCompetitorPage(url);
+    if (!page || !page.html) {
+      return noteEntry(
+        url,
+        "Site unreachable or bot-blocked — could not be crawled.",
+        auditContext
+      );
+    }
+
+    const meta = extractPageMeta(page.html, url);
+    const location = extractLocationHints(page.html);
+
+    // Same-engine benchmark scores (SEO + AEO/GEO) — computed from this
+    // same crawl, so the proposal can compare the client against each
+    // competitor on equal terms.
+    const scores = scoreCompetitorHtml(page.html, url);
+    if (scores.crawled === false) {
+      return noteEntry(
+        url,
+        "Page loaded but no readable content (likely JavaScript-rendered) — could not be fully crawled.",
+        auditContext
+      );
+    }
+
+    // Build real strengths/weaknesses from crawled data
+    const strengths: string[] = [];
+    const weaknesses: string[] = [];
+
+    if (meta.title.length >= 30 && meta.title.length <= 60) {
+      strengths.push("Well-optimized page title length");
+    } else if (meta.title.length > 0) {
+      weaknesses.push(meta.title.length < 30
+        ? "Page title is too short"
+        : "Page title is too long (may get truncated)");
+    } else {
+      weaknesses.push("Missing page title tag");
+    }
+
+    if (meta.description.length >= 120 && meta.description.length <= 160) {
+      strengths.push("Well-crafted meta description");
+    } else if (meta.description.length > 0) {
+      weaknesses.push("Meta description needs improvement");
+    } else {
+      weaknesses.push("Missing meta description");
+    }
+
+    if (meta.hasH1) {
+      strengths.push("Uses H1 heading tag");
+    } else {
+      weaknesses.push("No H1 heading found");
+    }
+
+    if (meta.hasSchema) {
+      strengths.push("Implements schema/structured data markup");
+    } else {
+      weaknesses.push("No structured data markup detected");
+    }
+
+    if (meta.wordCount > 500) {
+      strengths.push(`Strong content depth (${meta.wordCount.toLocaleString()} words)`);
+    } else if (meta.wordCount > 0) {
+      weaknesses.push(`Thin content (only ${meta.wordCount} words on page)`);
+    }
+
+    if (page.loadTimeMs < 2000) {
+      strengths.push("Fast page load time");
+    } else if (page.loadTimeMs >= 5000) {
+      weaknesses.push("Slow page load speed");
+    }
+
+    // GBP / local SEO hints
+    if (meta.hasGbpReference) {
+      strengths.push("Active Google Business Profile presence");
+    }
+    if (location.hasAddress && location.hasPhone) {
+      strengths.push("Local business signals present (address + phone)");
+    }
+
+    // Industry context from key phrases
+    const industryPhrases = meta.keyPhrases.length > 0
+      ? meta.keyPhrases.slice(0, 5)
+      : getDefaultIndustryKeywords(url, auditContext);
+
+    let contentStrategy = "Content strategy unknown (page not analyzed)";
+    if (meta.wordCount > 300) {
+      contentStrategy = "Publishes substantive page content targeting relevant search queries";
+    }
+    if (meta.hasSchema) {
+      contentStrategy += "; uses structured data for rich results";
+    }
+    if (meta.hasGbpReference || location.hasAddress) {
+      contentStrategy += "; maintains local Google Business Profile presence";
+    }
+
+    return {
+      competitorUrl: url,
+      strengths: strengths.length > 0 ? strengths : ["Active web presence", "Established domain"],
+      weaknesses: weaknesses.length > 0 ? weaknesses : ["Potential gaps in on-page optimization"],
+      topKeywords: industryPhrases,
+      contentStrategy,
+      seoScore: scores.seoScore,
+      aeoScore: scores.aeoScore,
+      geoScore: scores.geoScore,
+      competitorWordCount: scores.wordCount,
+      crawled: scores.crawled,
+    };
+  } catch {
+    return noteEntry(
+      url,
+      "Site unreachable or bot-blocked — could not be crawled.",
+      auditContext
+    );
+  }
+}
+
 /**
  * Crawls each competitor URL and extracts real page data (meta, headings,
- * word count, schema, GBP references, location hints). Falls back to
- * AI-generated placeholder data if a competitor can't be reached.
+ * word count, schema, GBP references, location hints) plus same-engine
+ * SEO/AEO/GEO scores.
  *
- * Converts a list of competitor URLs into the CompetitorData format
- * expected by the SEO campaign prompt generator.
+ * Replacement policy: the first `maxScored` candidates are "anchors" (the
+ * selected/discovered primary competitors) and are ALWAYS kept — scored when
+ * they crawl, noted by domain when they don't. Any remaining candidates are
+ * a backup pool: they are tried in order and appended ONLY when fully
+ * crawled, until the benchmark has `maxScored` scored competitors. So a
+ * benchmark always surfaces crawlable competitors with real metrics and
+ * simply mentions the ones that couldn't be crawled, instead of showing a
+ * wall of blank cells.
  */
 export async function toCompetitorData(
   urls: string[],
-  auditContext?: { url: string; homepageTitle?: string; metaDescription?: string; overallScore?: number }
+  auditContext?: { url?: string; homepageTitle?: string; metaDescription?: string; overallScore?: number },
+  opts?: CompetitorCrawlOptions
 ): Promise<CompetitorData[]> {
+  const { maxScored = 5, maxBackups = 10, keepNotes = true } = opts ?? {};
+  const anchors = urls.slice(0, maxScored);
+  const backups = urls.slice(maxScored, maxScored + maxBackups);
+
   const results: CompetitorData[] = [];
+  let scored = 0;
 
-  for (const url of urls) {
-    try {
-      const page = await fetchCompetitorPage(url);
-      if (page && page.html) {
-        const meta = extractPageMeta(page.html, url);
-        const location = extractLocationHints(page.html);
-
-        // Build real strengths/weaknesses from crawled data
-        const strengths: string[] = [];
-        const weaknesses: string[] = [];
-
-        if (meta.title.length >= 30 && meta.title.length <= 60) {
-          strengths.push("Well-optimized page title length");
-        } else if (meta.title.length > 0) {
-          weaknesses.push(meta.title.length < 30
-            ? "Page title is too short"
-            : "Page title is too long (may get truncated)");
-        } else {
-          weaknesses.push("Missing page title tag");
-        }
-
-        if (meta.description.length >= 120 && meta.description.length <= 160) {
-          strengths.push("Well-crafted meta description");
-        } else if (meta.description.length > 0) {
-          weaknesses.push("Meta description needs improvement");
-        } else {
-          weaknesses.push("Missing meta description");
-        }
-
-        if (meta.hasH1) {
-          strengths.push("Uses H1 heading tag");
-        } else {
-          weaknesses.push("No H1 heading found");
-        }
-
-        if (meta.hasSchema) {
-          strengths.push("Implements schema/structured data markup");
-        } else {
-          weaknesses.push("No structured data markup detected");
-        }
-
-        if (meta.wordCount > 500) {
-          strengths.push(`Strong content depth (${meta.wordCount.toLocaleString()} words)`);
-        } else if (meta.wordCount > 0) {
-          weaknesses.push(`Thin content (only ${meta.wordCount} words on page)`);
-        }
-
-        if (page.loadTimeMs < 2000) {
-          strengths.push("Fast page load time");
-        } else if (page.loadTimeMs >= 5000) {
-          weaknesses.push("Slow page load speed");
-        }
-
-        // GBP / local SEO hints
-        if (meta.hasGbpReference) {
-          strengths.push("Active Google Business Profile presence");
-        }
-        if (location.hasAddress && location.hasPhone) {
-          strengths.push("Local business signals present (address + phone)");
-        }
-
-        // Same-engine benchmark scores (SEO + AEO/GEO) — computed from this
-        // same crawl, so the proposal can compare the client against each
-        // competitor on equal terms.
-        const scores = scoreCompetitorHtml(page.html, url);
-
-        // Industry context from key phrases
-        const industryPhrases = meta.keyPhrases.length > 0
-          ? meta.keyPhrases.slice(0, 5)
-          : getDefaultIndustryKeywords(url, auditContext);
-
-        let contentStrategy = "Content strategy unknown (page not analyzed)";
-        if (meta.wordCount > 300) {
-          contentStrategy = "Publishes substantive page content targeting relevant search queries";
-        }
-        if (meta.hasSchema) {
-          contentStrategy += "; uses structured data for rich results";
-        }
-        if (meta.hasGbpReference || location.hasAddress) {
-          contentStrategy += "; maintains local Google Business Profile presence";
-        }
-
-        results.push({
-          competitorUrl: url,
-          strengths: strengths.length > 0 ? strengths : ["Active web presence", "Established domain"],
-          weaknesses: weaknesses.length > 0 ? weaknesses : ["Potential gaps in on-page optimization"],
-          topKeywords: industryPhrases,
-          contentStrategy,
-          seoScore: scores.seoScore,
-          aeoScore: scores.aeoScore,
-          geoScore: scores.geoScore,
-          competitorWordCount: scores.wordCount,
-          crawled: scores.crawled,
-        });
-        continue;
-      }
-    } catch {
-      // Fall through to AI placeholder below
+  for (const url of anchors) {
+    const entry = await crawlCompetitor(url, auditContext);
+    if (entry.crawled !== false) {
+      scored++;
+      results.push(entry);
+    } else if (keepNotes) {
+      results.push(entry);
     }
+  }
 
-    // Fallback: honest placeholder — clearly labeled, never fabricated
-    // as measured findings (see SEO Tool Review: "no structured data
-    // detected on competitor sites" was previously presented as fact).
-    results.push({
-      competitorUrl: url,
-      strengths: ["Site could not be fully crawled — review manually"],
-      weaknesses: [
-        "Competitor data below is AI-generated from the domain name only, NOT from a live crawl.",
-      ],
-      topKeywords: getDefaultIndustryKeywords(url, auditContext),
-      contentStrategy:
-        "Not crawled. Confirm this competitor manually before quoting their strategy to a client.",
-    });
+  // Backups fill the empty scored slots with crawlable candidates; failures
+  // here are dropped silently (no point listing a dozen dead domains).
+  for (const url of backups) {
+    if (scored >= maxScored) break;
+    const entry = await crawlCompetitor(url, auditContext);
+    if (entry.crawled !== false) {
+      scored++;
+      results.push(entry);
+    }
   }
 
   return results;
@@ -474,7 +554,7 @@ export async function toCompetitorData(
  */
 function getDefaultCompetitorData(
   url: string,
-  auditContext?: { url: string; homepageTitle?: string; metaDescription?: string; overallScore?: number }
+  auditContext?: { url?: string; homepageTitle?: string; metaDescription?: string; overallScore?: number }
 ): CompetitorData {
   const domain = url.replace(/^https?:\/\//, "").replace(/^www\./, "").split(".")[0] ?? "competitor";
 
@@ -501,7 +581,7 @@ function getDefaultCompetitorData(
  */
 function getDefaultIndustryKeywords(
   url: string,
-  auditContext?: { url: string; homepageTitle?: string; metaDescription?: string; overallScore?: number }
+  auditContext?: { url?: string; homepageTitle?: string; metaDescription?: string; overallScore?: number }
 ): string[] {
   const domain = url.replace(/^https?:\/\//, "").replace(/^www\./, "");
   const parts = domain.replace(/\.com|\.org|\.net|\.co|\.io/gi, "").split(/[-.]/).filter((p) => p.length > 2);

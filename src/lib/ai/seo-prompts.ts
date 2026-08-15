@@ -56,6 +56,10 @@ export interface CompetitorData {
   geoScore?: number | null;
   competitorWordCount?: number | null;
   crawled?: boolean;
+  /** Why a competitor could not be crawled (shown in the benchmark UI). */
+  crawlNote?: string;
+  /** When this competitor's scores were last measured (ISO). */
+  scoredAt?: string | null;
 }
 
 export interface CampaignTier {

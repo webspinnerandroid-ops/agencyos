@@ -67,7 +67,9 @@ export const refreshCompetitorBenchmarks = inngest.createFunction(
             })();
             const urls = await discoverCompetitors(host, row.tenant_id, context);
             if (urls.length > 0) {
-              comps = await toCompetitorData(urls.slice(0, 5), context);
+              // Full pool — uncrawlable anchors become notes, scored slots
+              // are filled from crawlable backups.
+              comps = await toCompetitorData(urls, context);
               discovered++;
             }
           } catch (err: any) {

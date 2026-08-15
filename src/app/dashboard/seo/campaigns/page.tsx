@@ -65,7 +65,15 @@ interface CompetitorData {
   geoScore?: number | null;
   competitorWordCount?: number | null;
   crawled?: boolean;
+  crawlNote?: string;
   scoredAt?: string | null;
+}
+
+interface ContentScores {
+  hasContentScores: boolean;
+  brandKeyword: string;
+  seoContent: { total: number } | null;
+  aeoGeo: { aeoScore: number; geoSscore: number } | null;
 }
 
 interface KeywordRank {
@@ -86,6 +94,7 @@ interface StoredCampaign {
   campaign_json: CampaignJson;
   audit_json: AuditJson;
   competitors_json: CompetitorData[];
+  contentScores?: ContentScores;
   created_at: string;
   created_by: string | null;
   location?: string | null;
@@ -186,6 +195,15 @@ const severityColors: Record<string, string> = {
   medium: "text-yellow-600 bg-yellow-50 dark:text-yellow-400 dark:bg-yellow-950",
   low: "text-blue-600 bg-blue-50 dark:text-blue-400 dark:bg-blue-950",
 };
+
+function scoreColor(v: number | null | undefined): string {
+  if (v == null) return "text-muted-foreground";
+  return v >= 80 ? "text-green-500" : v >= 50 ? "text-yellow-500" : "text-red-500";
+}
+
+function displayDomain(url: string | undefined): string {
+  return (url ?? "").replace(/^https?:\/\//, "").replace(/\/$/, "");
+}
 
 const difficultyLabels: Record<string, string> = {
   low: "Easy",
@@ -508,7 +526,9 @@ export default function SeoCampaignsPage() {
       setCampaigns(apply);
       setPastCampaigns(apply);
       setAuditNotice(
-        `Competitor benchmark refreshed — ${data.scored} scored, ${data.unreachable} unreachable.`
+        data.added
+          ? `Competitor benchmark refreshed — ${data.scored} scored, ${data.unreachable} unreachable, ${data.added} crawlable replacement(s) added.`
+          : `Competitor benchmark refreshed — ${data.scored} scored, ${data.unreachable} unreachable.`
       );
     } catch {
       setAuditNotice("Network error while re-running audit");
@@ -804,7 +824,7 @@ export default function SeoCampaignsPage() {
               {expandedAudit ? "Collapse" : "View Full Audit"}
             </Button>
           </div>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+          <div className="grid grid-cols-2 md:grid-cols-6 gap-4 text-sm">
             <div>
               <span className="text-muted-foreground">URL:</span>{" "}
               <span className="font-medium">{audit.url}</span>
@@ -837,6 +857,28 @@ export default function SeoCampaignsPage() {
               <span className="text-muted-foreground">On-Page Issues:</span>{" "}
               <span className="font-medium">{audit.onPageIssues}</span>
             </div>
+            {campaigns[0]?.contentScores?.hasContentScores && (
+              <>
+                <div>
+                  <span className="text-muted-foreground">SEO Content:</span>{" "}
+                  <span className={`font-bold ${scoreColor(campaigns[0].contentScores.seoContent?.total)}`}>
+                    {campaigns[0].contentScores.seoContent?.total ?? "—"}/100
+                  </span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">AEO:</span>{" "}
+                  <span className={`font-bold ${scoreColor(campaigns[0].contentScores.aeoGeo?.aeoScore)}`}>
+                    {campaigns[0].contentScores.aeoGeo?.aeoScore ?? "—"}/100
+                  </span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">GEO:</span>{" "}
+                  <span className={`font-bold ${scoreColor(campaigns[0].contentScores.aeoGeo?.geoSscore)}`}>
+                    {campaigns[0].contentScores.aeoGeo?.geoSscore ?? "—"}/100
+                  </span>
+                </div>
+              </>
+            )}
           </div>
           {competitors.length > 0 && (
             <div className="mt-3 text-sm">
@@ -852,7 +894,11 @@ export default function SeoCampaignsPage() {
 
           {/* Expanded audit details from the first campaign's audit_json */}
           {expandedAudit && campaigns.length > 0 && campaigns[0].audit_json && (
-            <AuditDetails audit={campaigns[0].audit_json} competitors={campaigns[0].competitors_json} />
+            <AuditDetails
+              audit={campaigns[0].audit_json}
+              competitors={campaigns[0].competitors_json}
+              scores={campaigns[0].contentScores}
+            />
           )}
         </Card>
       )}
@@ -1254,6 +1300,7 @@ export default function SeoCampaignsPage() {
                           <AuditDetails
                             audit={campaign.audit_json}
                             competitors={campaign.competitors_json ?? []}
+                            scores={campaign.contentScores}
                           />
                         </div>
                       )}
@@ -1566,18 +1613,21 @@ function CompetitorBenchmarkTable({ competitors }: { competitors: CompetitorData
               {competitors.map((c, i) => (
                 <tr key={i} className="border-b last:border-0">
                   <td className="py-2 pr-4 font-medium">
-                    {c.competitorUrl?.replace(/^https?:\/\//, "").replace(/\/$/, "")}
+                    {displayDomain(c.competitorUrl)}
+                    {c.crawled === false && (
+                      <span className="block text-[10px] font-normal text-amber-600 dark:text-amber-500 mt-0.5 italic">
+                        Not crawlable — {c.crawlNote ?? "could not be crawled"}
+                      </span>
+                    )}
                   </td>
                   {["seoScore", "aeoScore", "geoScore"].map((k) => {
                     const v = c[k as keyof CompetitorData] as number | null | undefined;
                     return (
                       <td key={k} className="py-2 pr-4">
-                        {c.crawled === false ? (
-                          <span className="text-muted-foreground">—</span>
-                        ) : v == null ? (
+                        {c.crawled === false || v == null ? (
                           <span className="text-muted-foreground">—</span>
                         ) : (
-                          <span className={`font-bold ${v >= 81 ? "text-green-600" : v >= 50 ? "text-yellow-600" : "text-red-600"}`}>
+                          <span className={`font-bold ${scoreColor(v)}`}>
                             {v}
                           </span>
                         )}
@@ -1592,6 +1642,13 @@ function CompetitorBenchmarkTable({ competitors }: { competitors: CompetitorData
             </tbody>
           </table>
         </div>
+      )}
+      {competitors.some((c) => c.crawled === false) && (
+        <p className="text-[11px] text-amber-600 dark:text-amber-500 mt-2 italic">
+          {competitors.filter((c) => c.crawled === false).length} competitor(s) could not be
+          fully crawled ({competitors.filter((c) => c.crawled === false).map((c) => displayDomain(c.competitorUrl)).join(", ")})
+          — scores shown are for the fully-crawled competitors.
+        </p>
       )}
       {competitors.length > 0 && (
         <p className="text-[11px] text-muted-foreground mt-2 italic">
@@ -1608,7 +1665,7 @@ function CompetitorBenchmarkTable({ competitors }: { competitors: CompetitorData
 // Audit Details Component
 // ============================================================================
 
-function AuditDetails({ audit, competitors }: { audit: AuditJson; competitors: CompetitorData[] }) {
+function AuditDetails({ audit, competitors, scores }: { audit: AuditJson; competitors: CompetitorData[]; scores?: ContentScores }) {
   return (
     <div className="mt-6 space-y-6 border-t pt-4">
       {/* Score breakdown */}
@@ -1639,6 +1696,28 @@ function AuditDetails({ audit, competitors }: { audit: AuditJson; competitors: C
                 <span className="text-muted-foreground">Pages Crawled</span>
                 <span className="block text-lg font-bold">
                   {(audit.internalPages?.length ?? 0) + 1}
+                </span>
+              </div>
+            </>
+          )}
+          {scores?.hasContentScores && (
+            <>
+              <div className="p-3 rounded-lg bg-muted">
+                <span className="text-muted-foreground">SEO Content</span>
+                <span className={`block text-lg font-bold ${scoreColor(scores.seoContent?.total)}`}>
+                  {scores.seoContent?.total ?? "—"}/100
+                </span>
+              </div>
+              <div className="p-3 rounded-lg bg-muted">
+                <span className="text-muted-foreground">AEO</span>
+                <span className={`block text-lg font-bold ${scoreColor(scores.aeoGeo?.aeoScore)}`}>
+                  {scores.aeoGeo?.aeoScore ?? "—"}/100
+                </span>
+              </div>
+              <div className="p-3 rounded-lg bg-muted">
+                <span className="text-muted-foreground">GEO</span>
+                <span className={`block text-lg font-bold ${scoreColor(scores.aeoGeo?.geoSscore)}`}>
+                  {scores.aeoGeo?.geoSscore ?? "—"}/100
                 </span>
               </div>
             </>
@@ -1725,7 +1804,9 @@ function AuditDetails({ audit, competitors }: { audit: AuditJson; competitors: C
                   </div>
                 )}
                 {comp.crawled === false && (
-                  <div className="mb-2 text-xs text-muted-foreground italic">Not crawlable — benchmark unavailable.</div>
+                  <div className="mb-2 text-xs text-amber-600 dark:text-amber-500 italic">
+                    Not crawlable — {comp.crawlNote ?? "benchmark unavailable."}
+                  </div>
                 )}
                 {comp.strengths?.length > 0 && (
                   <div className="mb-2">

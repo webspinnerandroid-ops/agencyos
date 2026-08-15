@@ -33,11 +33,14 @@ interface CompetitorEntry {
   geoScore?: number | null;
   competitorWordCount?: number | null;
   crawled?: boolean;
+  crawlNote?: string;
   scoredAt?: string | null;
   [key: string]: unknown;
 }
 
 const POLITE_DELAY_MS = 250;
+/** Benchmark aims for this many fully-scored competitors per campaign. */
+const TARGET_SCORED = 5;
 
 function normalizeUrl(u: string): string {
   let s = (u || "").trim().replace(/\\/g, "/");
@@ -217,7 +220,9 @@ export async function discoverAndBackfillCompetitors(
     }
 
     // Convert + score with the same engines the crawl uses (SEO + AEO/GEO).
-    const entries = await toCompetitorData(discovered.slice(0, 5), context);
+    // Pass the full pool — toCompetitorData keeps selected anchors as notes
+    // when uncrawlable and fills the scored slots from crawlable backups.
+    const entries = await toCompetitorData(discovered, context);
 
     stats.rowsTouched++;
     if (!apply) {
@@ -248,7 +253,7 @@ export async function backfillCompetitorScores(
 
   const { data: rows, error } = await supabase
     .from("seo_campaigns")
-    .select("id, tenant_id, url, competitors_json")
+    .select("id, tenant_id, url, location, audit_json, competitors_json")
     .order("created_at", { ascending: false })
     .limit(limit);
 
@@ -293,6 +298,8 @@ export async function backfillCompetitorScores(
         c.geoScore = null;
         c.competitorWordCount = null;
         c.crawled = false;
+        c.crawlNote =
+          "Site unreachable or bot-blocked — could not be crawled.";
         c.scoredAt = new Date().toISOString();
         dirty = true;
         continue;
@@ -303,10 +310,63 @@ export async function backfillCompetitorScores(
       c.geoScore = s.geoScore;
       c.competitorWordCount = s.wordCount;
       c.crawled = s.crawled;
+      if (s.crawled === false) {
+        c.crawlNote =
+          "Page loaded but no readable content (likely JavaScript-rendered) — could not be fully crawled.";
+      } else {
+        delete c.crawlNote;
+      }
       c.scoredAt = new Date().toISOString();
       stats.scored++;
       dirty = true;
       await sleep(POLITE_DELAY_MS);
+    }
+
+    // Top-up: if the campaign still has fewer than TARGET_SCORED measured
+    // competitors, discover fresh candidates and append only crawlable ones
+    // (failed top-up candidates are dropped, not noted). Runs only when this
+    // pass actually processed gaps, so fully-scored campaigns never trigger
+    // discovery and a stuck note is not re-researched every day.
+    const scoredCount = comps.filter(
+      (c) => c && typeof c.seoScore === "number"
+    ).length;
+    if (dirty && scoredCount < TARGET_SCORED) {
+      try {
+        const audit = (row.audit_json ?? {}) as any;
+        const context = {
+          url: audit.url ?? row.url ?? "",
+          homepageTitle: audit.homepage?.title ?? undefined,
+          metaDescription: audit.homepage?.metaDescription ?? undefined,
+          overallScore: audit.overallScore ?? undefined,
+          location: row.location ?? audit.location ?? null,
+        };
+        const fresh = await discoverCompetitors(
+          hostnameOf(row.url),
+          row.tenant_id,
+          context
+        );
+        const existing = new Set(
+          comps
+            .map((c) => c.competitorUrl)
+            .filter(Boolean)
+            .map((u) => normalizeUrl(u as string))
+        );
+        const pool = fresh.filter((u) => !existing.has(normalizeUrl(u)));
+        if (pool.length > 0) {
+          const additions = await toCompetitorData(pool, context, {
+            maxScored: TARGET_SCORED - scoredCount,
+            maxBackups: 10,
+            keepNotes: false,
+          });
+          if (additions.length > 0) {
+            comps.push(...(additions as unknown as CompetitorEntry[]));
+            stats.scored += additions.length;
+            log(`[topup] ${row.id} (${row.url}) → +${additions.length} crawlable competitor(s)`);
+          }
+        }
+      } catch (err: any) {
+        log(`[topup-fail] ${row.id}: ${err?.message ?? "discovery failed"}`);
+      }
     }
 
     if (!dirty) continue;

@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Fragment } from "react";
 import { useParams } from "next/navigation";
 import { Card } from "@/components/ui/card";
-import { Loader2 } from "lucide-react";
+import { Loader2, ChevronDown, ChevronRight } from "lucide-react";
+import { ScoreBreakdown } from "@/components/seo/score-breakdown";
 
 // ============================================================================
 // Types
@@ -66,6 +67,8 @@ interface AuditReport {
     competitorWordCount?: number | null;
     crawled?: boolean;
     crawlNote?: string;
+    seoChecks?: EngineCheck[];
+    aeoGeoChecks?: EngineCheck[];
   }[];
 }
 
@@ -166,6 +169,8 @@ export default function PublicAuditReportPage() {
   const [report, setReport] = useState<AuditReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Competitor URLs whose per-check score breakdowns are expanded.
+  const [expandedComps, setExpandedComps] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!id) return;
@@ -300,6 +305,41 @@ export default function PublicAuditReportPage() {
           </div>
         </Card>
 
+        {/* How the scores are made — per-check breakdowns */}
+        {report.hasContentScores && (
+          <Card className="p-6 print:break-inside-avoid">
+            <div className="flex items-center justify-between gap-2 mb-4">
+              <div>
+                <h2 className="text-lg font-semibold">How the scores are made</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Every point behind each score — tap a score to expand its check-by-check breakdown.
+                </p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <ScoreBreakdown
+                title="SEO Content"
+                score={report.seoContent?.total ?? null}
+                subtitle={report.brandKeyword ? `vs “${report.brandKeyword}”` : undefined}
+                seoChecks={report.seoContent?.checks ?? []}
+                defaultCollapsed={false}
+              />
+              <ScoreBreakdown
+                title="AEO"
+                score={report.aeoGeo?.aeoScore ?? null}
+                subtitle="answer-engine ready"
+                aeoGeoChecks={report.aeoGeo?.checks ?? []}
+              />
+              <ScoreBreakdown
+                title="GEO"
+                score={report.aeoGeo?.geoSscore ?? null}
+                subtitle="generative-engine ready"
+                aeoGeoChecks={report.aeoGeo?.checks ?? []}
+              />
+            </div>
+          </Card>
+        )}
+
         {/* What to fix */}
         {fixes.length > 0 && (
           <Card className="p-6 border-amber-300 dark:border-amber-800 print:break-inside-avoid">
@@ -386,24 +426,75 @@ export default function PublicAuditReportPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {report.competitors.map((c, i) => (
-                    <tr key={i} className="border-b last:border-0">
-                      <td className="py-2 pr-4 font-medium break-all">
-                        {c.competitorUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")}
-                        {c.crawled === false && (
-                          <span className="block text-[10px] font-normal text-amber-600 dark:text-amber-500 mt-0.5 italic">
-                            Not crawlable — {c.crawlNote ?? "could not be crawled"}
-                          </span>
+                  {report.competitors.map((c, i) => {
+                    const hasBreakdown =
+                      (c.seoChecks?.length ?? 0) + (c.aeoGeoChecks?.length ?? 0) > 0;
+                    const isExpanded = expandedComps.has(c.competitorUrl);
+                    const toggle = () => {
+                      setExpandedComps((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(c.competitorUrl)) next.delete(c.competitorUrl);
+                        else next.add(c.competitorUrl);
+                        return next;
+                      });
+                    };
+                    return (
+                      <Fragment key={i}>
+                        <tr className="border-b last:border-0">
+                          <td className="py-2 pr-4 font-medium break-all">
+                            <span className="inline-flex items-center gap-1">
+                              {hasBreakdown && (
+                                <button
+                                  type="button"
+                                  onClick={toggle}
+                                  className="text-muted-foreground hover:text-foreground shrink-0"
+                                  title="Show how this score was made"
+                                >
+                                  {isExpanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+                                </button>
+                              )}
+                              {c.competitorUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")}
+                            </span>
+                            {c.crawled === false && (
+                              <span className="block text-[10px] font-normal text-amber-600 dark:text-amber-500 mt-0.5 italic">
+                                Not crawlable — {c.crawlNote ?? "could not be crawled"}
+                              </span>
+                            )}
+                          </td>
+                          <td className={`py-2 pr-4 text-right font-bold ${gradeColor(c.seoScore)}`}>{c.seoScore ?? "—"}</td>
+                          <td className={`py-2 pr-4 text-right font-bold ${gradeColor(c.aeoScore)}`}>{c.aeoScore ?? "—"}</td>
+                          <td className={`py-2 pr-4 text-right font-bold ${gradeColor(c.geoScore)}`}>{c.geoScore ?? "—"}</td>
+                          <td className="py-2 text-right text-muted-foreground">
+                            {c.competitorWordCount != null ? c.competitorWordCount.toLocaleString() : "—"}
+                          </td>
+                        </tr>
+                        {isExpanded && hasBreakdown && (
+                          <tr className="border-b bg-muted/30">
+                            <td colSpan={5} className="py-3 px-2">
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <ScoreBreakdown
+                                  title="SEO"
+                                  score={c.seoScore ?? null}
+                                  seoChecks={c.seoChecks ?? []}
+                                  defaultCollapsed={false}
+                                />
+                                <ScoreBreakdown
+                                  title="AEO + GEO"
+                                  score={
+                                    c.aeoScore != null && c.geoScore != null
+                                      ? Math.round((c.aeoScore + c.geoScore) / 2)
+                                      : null
+                                  }
+                                  aeoGeoChecks={c.aeoGeoChecks ?? []}
+                                  defaultCollapsed={false}
+                                />
+                              </div>
+                            </td>
+                          </tr>
                         )}
-                      </td>
-                      <td className={`py-2 pr-4 text-right font-bold ${gradeColor(c.seoScore)}`}>{c.seoScore ?? "—"}</td>
-                      <td className={`py-2 pr-4 text-right font-bold ${gradeColor(c.aeoScore)}`}>{c.aeoScore ?? "—"}</td>
-                      <td className={`py-2 pr-4 text-right font-bold ${gradeColor(c.geoScore)}`}>{c.geoScore ?? "—"}</td>
-                      <td className="py-2 text-right text-muted-foreground">
-                        {c.competitorWordCount != null ? c.competitorWordCount.toLocaleString() : "—"}
-                      </td>
-                    </tr>
-                  ))}
+                      </Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

@@ -60,6 +60,26 @@ export interface CompetitorData {
   crawlNote?: string;
   /** When this competitor's scores were last measured (ISO). */
   scoredAt?: string | null;
+  /** Per-check SEO breakdown — how the SEO score was built. */
+  seoChecks?: {
+    id: string;
+    label: string;
+    category: "Basic SEO" | "Links" | "Images & Readability";
+    maxPoints: number;
+    earned: number;
+    passed: boolean;
+    detail: string;
+  }[];
+  /** Per-check AEO/GEO breakdown — how the AEO and GEO scores were built. */
+  aeoGeoChecks?: {
+    id: string;
+    label: string;
+    pillar: "AEO" | "GEO";
+    maxPoints: number;
+    earned: number;
+    passed: boolean;
+    detail: string;
+  }[];
 }
 
 export interface CampaignTier {

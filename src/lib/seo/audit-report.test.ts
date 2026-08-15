@@ -105,6 +105,39 @@ describe("homepageMarkdown", () => {
     expect(scores.wordCount).toBeGreaterThan(20);
   });
 
+  it("includes per-check breakdowns for crawled competitors", () => {
+    const html = `
+      <html><head>
+        <title>GiantByte Software — Custom Web Apps</title>
+        <meta name="description" content="GiantByte Software builds custom web applications, APIs, and automation for growing companies." />
+      </head><body>
+        <h1>GiantByte Software</h1>
+        <p>GiantByte Software is a development studio that builds custom web applications.</p>
+        <h2>Services</h2>
+        <p>Custom web apps, APIs, and automation for growing companies since 2016.</p>
+        <img src="https://giantbyte.com/img/team.jpg" alt="GiantByte team" />
+      </body></html>
+    `;
+    const scores = scoreCompetitorHtml(html, "https://giantbyte.com/");
+    expect(scores.crawled).toBe(true);
+    expect(Array.isArray(scores.seoChecks)).toBe(true);
+    expect(scores.seoChecks!.length).toBeGreaterThan(0);
+    // Every SEO check carries the fields the UI renders.
+    for (const c of scores.seoChecks!) {
+      expect(c.label).toBeTruthy();
+      expect(typeof c.maxPoints).toBe("number");
+      expect(typeof c.earned).toBe("number");
+      expect(typeof c.passed).toBe("boolean");
+    }
+    expect(Array.isArray(scores.aeoGeoChecks)).toBe(true);
+    expect(scores.aeoGeoChecks!.length).toBeGreaterThan(0);
+    // AEO/GEO checks must be tagged with their pillar so the UI can split them.
+    const pillars = new Set(scores.aeoGeoChecks!.map((c) => c.pillar));
+    expect(pillars.has("AEO") || pillars.has("GEO")).toBe(true);
+    const seoTotal = scores.seoChecks!.reduce((s, c) => s + c.earned, 0);
+    expect(Math.min(seoTotal, 100)).toBe(scores.seoScore);
+  });
+
   it("reports not-crawled for unusable HTML", () => {
     const scores = scoreCompetitorHtml("<html><body></body></html>", "https://empty.example.com/");
     expect(scores.crawled).toBe(false);

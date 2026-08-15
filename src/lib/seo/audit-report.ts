@@ -160,6 +160,10 @@ export interface CompetitorScores {
   geoScore: number | null;
   wordCount: number | null;
   crawled: boolean;
+  /** Per-check SEO breakdown — how the SEO score was built. */
+  seoChecks?: RankMathResult["checks"];
+  /** Per-check AEO/GEO breakdown — how the AEO and GEO scores were built. */
+  aeoGeoChecks?: AeoGeoResult["checks"];
 }
 
 /**
@@ -282,6 +286,8 @@ export function scoreCompetitorHtml(
       geoScore: aeo?.geoSscore ?? null,
       wordCount: seo?.wordCount ?? null,
       crawled: true,
+      seoChecks: seo?.checks,
+      aeoGeoChecks: aeo?.checks,
     };
   } catch {
     return empty;

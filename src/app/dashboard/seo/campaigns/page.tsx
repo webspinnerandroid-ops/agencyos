@@ -12,8 +12,9 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Trash2, Rocket, Loader2, Globe, FolderPlus, FileText, Puzzle, Wrench, FileSearch, RefreshCw } from "lucide-react";
+import { Trash2, Rocket, Loader2, Globe, FolderPlus, FileText, Puzzle, Wrench, FileSearch, RefreshCw, ChevronDown, ChevronRight } from "lucide-react";
 import { WEBSITE_PLAN } from "@/lib/website-plan";
+import { ScoreBreakdown } from "@/components/seo/score-breakdown";
 
 // ============================================================================
 // Types
@@ -54,6 +55,16 @@ interface AuditJson {
   siteStructure?: { pages: { url: string; title: string; depth: number }[]; totalInternalLinks: number; maxDepth: number };
 }
 
+interface EngineCheck {
+  id: string;
+  label: string;
+  category: string;
+  maxPoints: number;
+  earned: number;
+  passed: boolean;
+  detail: string;
+}
+
 interface CompetitorData {
   competitorUrl: string;
   strengths: string[];
@@ -67,13 +78,24 @@ interface CompetitorData {
   crawled?: boolean;
   crawlNote?: string;
   scoredAt?: string | null;
+  seoChecks?: EngineCheck[];
+  aeoGeoChecks?: EngineCheck[];
 }
 
 interface ContentScores {
   hasContentScores: boolean;
   brandKeyword: string;
-  seoContent: { total: number } | null;
-  aeoGeo: { aeoScore: number; geoSscore: number } | null;
+  seoContent: {
+    total: number;
+    keyword: string;
+    wordCount: number;
+    checks: EngineCheck[];
+  } | null;
+  aeoGeo: {
+    aeoScore: number;
+    geoSscore: number;
+    checks: EngineCheck[];
+  } | null;
 }
 
 interface KeywordRank {
@@ -1665,6 +1687,95 @@ function CompetitorBenchmarkTable({ competitors }: { competitors: CompetitorData
 // Audit Details Component
 // ============================================================================
 
+/** Competitor card with expandable per-check score breakdowns. */
+function CompetitorCard({ comp }: { comp: CompetitorData }) {
+  const [open, setOpen] = useState(false);
+  const hasBreakdown =
+    (comp.seoChecks?.length ?? 0) + (comp.aeoGeoChecks?.length ?? 0) > 0;
+  const compScores = [
+    { label: "SEO", v: comp.seoScore },
+    { label: "AEO", v: comp.aeoScore },
+    { label: "GEO", v: comp.geoScore },
+  ];
+
+  return (
+    <div className="p-4 rounded-lg border">
+      <h4 className="font-medium text-sm mb-2 text-primary flex items-center justify-between gap-2">
+        <span className="truncate">{comp.competitorUrl?.replace(/^https?:\/\//, "")}</span>
+        {hasBreakdown && (
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className="shrink-0 text-muted-foreground hover:text-foreground"
+            title="Show how this score was made"
+          >
+            {open ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
+          </button>
+        )}
+      </h4>
+      {comp.crawled !== false && compScores.some((s) => s.v != null) && (
+        <div className="mb-2 flex flex-wrap items-center gap-3 text-xs">
+          {compScores.map((s) => (
+            <span key={s.label} className="flex items-baseline gap-1">
+              <span className="text-muted-foreground uppercase tracking-wide">{s.label}</span>
+              <span className={`font-bold ${s.v == null ? "text-muted-foreground" : s.v >= 81 ? "text-green-600" : s.v >= 50 ? "text-yellow-600" : "text-red-600"}`}>
+                {s.v ?? "—"}
+              </span>
+            </span>
+          ))}
+          {comp.competitorWordCount != null && (
+            <span className="text-muted-foreground">· {comp.competitorWordCount.toLocaleString()} words</span>
+          )}
+        </div>
+      )}
+      {comp.crawled === false && (
+        <div className="mb-2 text-xs text-amber-600 dark:text-amber-500 italic">
+          Not crawlable — {comp.crawlNote ?? "benchmark unavailable."}
+        </div>
+      )}
+      {open && hasBreakdown && (
+        <div className="mt-3 space-y-2">
+          <ScoreBreakdown title="SEO" score={comp.seoScore ?? null} seoChecks={comp.seoChecks ?? []} defaultCollapsed={false} />
+          <ScoreBreakdown
+            title="AEO + GEO"
+            score={
+              comp.aeoScore != null && comp.geoScore != null
+                ? Math.round((comp.aeoScore + comp.geoScore) / 2)
+                : null
+            }
+            aeoGeoChecks={comp.aeoGeoChecks ?? []}
+            defaultCollapsed={false}
+          />
+        </div>
+      )}
+      {comp.strengths?.length > 0 && (
+        <div className="mb-2">
+          <span className="text-xs font-semibold text-green-600">Strengths</span>
+          <ul className="mt-1 space-y-0.5">
+            {comp.strengths.slice(0, 3).map((s, j) => (
+              <li key={j} className="text-xs text-muted-foreground flex gap-1">
+                <span className="text-green-500">+</span> {s}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {comp.weaknesses?.length > 0 && (
+        <div>
+          <span className="text-xs font-semibold text-red-600">Weaknesses</span>
+          <ul className="mt-1 space-y-0.5">
+            {comp.weaknesses.slice(0, 3).map((w, j) => (
+              <li key={j} className="text-xs text-muted-foreground flex gap-1">
+                <span className="text-red-500">-</span> {w}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AuditDetails({ audit, competitors, scores }: { audit: AuditJson; competitors: CompetitorData[]; scores?: ContentScores }) {
   return (
     <div className="mt-6 space-y-6 border-t pt-4">
@@ -1723,6 +1834,36 @@ function AuditDetails({ audit, competitors, scores }: { audit: AuditJson; compet
             </>
           )}
         </div>
+
+        {/* How the scores are made — per-check breakdowns */}
+        {scores?.hasContentScores && (
+          <div className="mt-4">
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <h3 className="text-sm font-semibold">How the scores are made</h3>
+              <span className="text-[11px] text-muted-foreground">
+                {scores.brandKeyword ? `scored vs “${scores.brandKeyword}”` : ""}
+              </span>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <ScoreBreakdown
+                title="SEO Content"
+                score={scores.seoContent?.total ?? null}
+                seoChecks={scores.seoContent?.checks ?? []}
+                defaultCollapsed={false}
+              />
+              <ScoreBreakdown
+                title="AEO"
+                score={scores.aeoGeo?.aeoScore ?? null}
+                aeoGeoChecks={scores.aeoGeo?.checks ?? []}
+              />
+              <ScoreBreakdown
+                title="GEO"
+                score={scores.aeoGeo?.geoSscore ?? null}
+                aeoGeoChecks={scores.aeoGeo?.checks ?? []}
+              />
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Technical Issues */}
@@ -1779,62 +1920,9 @@ function AuditDetails({ audit, competitors, scores }: { audit: AuditJson; compet
         <div>
           <h3 className="text-md font-semibold mb-2">Competitor Analysis</h3>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {competitors.map((comp, i) => {
-              const compScores = [
-                { label: "SEO", v: comp.seoScore },
-                { label: "AEO", v: comp.aeoScore },
-                { label: "GEO", v: comp.geoScore },
-              ];
-              return (
-              <div key={i} className="p-4 rounded-lg border">
-                <h4 className="font-medium text-sm mb-2 text-primary">{comp.competitorUrl?.replace(/^https?:\/\//, "")}</h4>
-                {comp.crawled !== false && compScores.some((s) => s.v != null) && (
-                  <div className="mb-2 flex flex-wrap items-center gap-3 text-xs">
-                    {compScores.map((s) => (
-                      <span key={s.label} className="flex items-baseline gap-1">
-                        <span className="text-muted-foreground uppercase tracking-wide">{s.label}</span>
-                        <span className={`font-bold ${s.v == null ? "text-muted-foreground" : s.v >= 81 ? "text-green-600" : s.v >= 50 ? "text-yellow-600" : "text-red-600"}`}>
-                          {s.v ?? "—"}
-                        </span>
-                      </span>
-                    ))}
-                    {comp.competitorWordCount != null && (
-                      <span className="text-muted-foreground">· {comp.competitorWordCount.toLocaleString()} words</span>
-                    )}
-                  </div>
-                )}
-                {comp.crawled === false && (
-                  <div className="mb-2 text-xs text-amber-600 dark:text-amber-500 italic">
-                    Not crawlable — {comp.crawlNote ?? "benchmark unavailable."}
-                  </div>
-                )}
-                {comp.strengths?.length > 0 && (
-                  <div className="mb-2">
-                    <span className="text-xs font-semibold text-green-600">Strengths</span>
-                    <ul className="mt-1 space-y-0.5">
-                      {comp.strengths.slice(0, 3).map((s, j) => (
-                        <li key={j} className="text-xs text-muted-foreground flex gap-1">
-                          <span className="text-green-500">+</span> {s}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-                {comp.weaknesses?.length > 0 && (
-                  <div>
-                    <span className="text-xs font-semibold text-red-600">Weaknesses</span>
-                    <ul className="mt-1 space-y-0.5">
-                      {comp.weaknesses.slice(0, 3).map((w, j) => (
-                        <li key={j} className="text-xs text-muted-foreground flex gap-1">
-                          <span className="text-red-500">-</span> {w}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
-              );
-            })}
+            {competitors.map((comp, i) => (
+              <CompetitorCard key={i} comp={comp} />
+            ))}
           </div>
         </div>
       )}

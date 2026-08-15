@@ -35,6 +35,8 @@ interface CompetitorEntry {
   crawled?: boolean;
   crawlNote?: string;
   scoredAt?: string | null;
+  seoChecks?: unknown[];
+  aeoGeoChecks?: unknown[];
   [key: string]: unknown;
 }
 
@@ -53,10 +55,14 @@ function isScored(c: CompetitorEntry): boolean {
   // crawled === false means we already tried and the site is dead/blocked —
   // don't re-fetch it every run (each attempt costs a 15s timeout).
   if (c.crawled === false) return true;
+  // Entries scored before per-check breakdowns existed (no seoChecks) are
+  // re-scored once so the UI can show how the score was made.
+  const hasChecks = Array.isArray(c.seoChecks) && c.seoChecks.length > 0;
   return (
-    typeof c.seoScore === "number" ||
-    typeof c.aeoScore === "number" ||
-    typeof c.geoScore === "number"
+    hasChecks &&
+    (typeof c.seoScore === "number" ||
+      typeof c.aeoScore === "number" ||
+      typeof c.geoScore === "number")
   );
 }
 
@@ -106,6 +112,8 @@ export async function rescoreCompetitorEntries(
     c.geoScore = s.geoScore;
     c.competitorWordCount = s.wordCount;
     c.crawled = s.crawled;
+    c.seoChecks = s.seoChecks;
+    c.aeoGeoChecks = s.aeoGeoChecks;
     c.scoredAt = now;
     scored++;
     await sleep(POLITE_DELAY_MS);
@@ -310,6 +318,8 @@ export async function backfillCompetitorScores(
       c.geoScore = s.geoScore;
       c.competitorWordCount = s.wordCount;
       c.crawled = s.crawled;
+      c.seoChecks = s.seoChecks;
+      c.aeoGeoChecks = s.aeoGeoChecks;
       if (s.crawled === false) {
         c.crawlNote =
           "Page loaded but no readable content (likely JavaScript-rendered) — could not be fully crawled.";

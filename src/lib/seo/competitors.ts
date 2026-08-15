@@ -487,6 +487,8 @@ async function crawlCompetitor(
       geoScore: scores.geoScore,
       competitorWordCount: scores.wordCount,
       crawled: scores.crawled,
+      seoChecks: scores.seoChecks,
+      aeoGeoChecks: scores.aeoGeoChecks,
     };
   } catch {
     return noteEntry(

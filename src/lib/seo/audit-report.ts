@@ -78,7 +78,7 @@ export function homepageMarkdown(page: PageAuditShape | undefined): string {
 // ---------------------------------------------------------------------------
 
 import * as cheerio from "cheerio";
-import { scoreContent, type RankMathResult } from "@/lib/rankmath";
+import { scoreContent, type SeoScoreResult } from "@/lib/seo-scorer";
 import { scoreAeoGeo, type AeoGeoResult } from "@/lib/aeo-geo";
 
 // ---------------------------------------------------------------------------
@@ -86,7 +86,7 @@ import { scoreAeoGeo, type AeoGeoResult } from "@/lib/aeo-geo";
 // ---------------------------------------------------------------------------
 
 export interface AuditContentScores {
-  seoContent: RankMathResult | null;
+  seoContent: SeoScoreResult | null;
   aeoGeo: AeoGeoResult | null;
   brandKeyword: string;
   hasContentScores: boolean;
@@ -116,7 +116,7 @@ export function computeContentScores(
     .filter((u): u is string => Boolean(u))
     .concat(homepage?.url ? [homepage.url] : []);
 
-  let seo: RankMathResult | null = null;
+  let seo: SeoScoreResult | null = null;
   let aeo: AeoGeoResult | null = null;
   if (body.trim().length > 0 && homepage?.title) {
     seo = scoreContent({
@@ -161,7 +161,7 @@ export interface CompetitorScores {
   wordCount: number | null;
   crawled: boolean;
   /** Per-check SEO breakdown — how the SEO score was built. */
-  seoChecks?: RankMathResult["checks"];
+  seoChecks?: SeoScoreResult["checks"];
   /** Per-check AEO/GEO breakdown — how the AEO and GEO scores were built. */
   aeoGeoChecks?: AeoGeoResult["checks"];
 }
@@ -252,7 +252,7 @@ export function scoreCompetitorHtml(
     const keyword = brandKeyword(url);
     const internalUrls = internalLinks.map((l) => l.href);
 
-    let seo: RankMathResult | null = null;
+    let seo: SeoScoreResult | null = null;
     let aeo: AeoGeoResult | null = null;
     if (body.trim().length > 0 && title) {
       seo = scoreContent({

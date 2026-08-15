@@ -1,9 +1,8 @@
 // scripts/test-wp-publish.ts
-// One-off end-to-end test of the WordPress publisher's Rank Math handling:
-//   1. Inserts a draft blog post with a full rankMath payload (Article +
+// One-off end-to-end test of the WordPress publisher's SEO-meta handling:
+//   1. Inserts a draft blog post with a full SEO-meta payload (Article +
 //      FAQPage + social) into the DB.
-//   2. Calls the REAL publishToWordPress path against the connected
-//      mcptester site.
+//   2. Calls the REAL publishToWordPress path against the connected test site.
 //   3. Reads the created WP post back and verifies the embedded JSON-LD
 //      script landed in its content.
 //   4. Deletes the DB test post + the WP test post.
@@ -13,7 +12,7 @@
 
 import { createClient } from "@supabase/supabase-js";
 import { publishToWordPress } from "../src/lib/publishing/wordpressPublisher";
-import { buildRankMathMeta } from "../src/lib/seo/rank-math-meta";
+import { buildWpSeoMeta } from "../src/lib/seo/wp-seo-meta";
 import { decrypt } from "../src/lib/encryption";
 
 const platformId = process.argv[2];
@@ -37,7 +36,7 @@ async function main() {
   if (!platform) throw new Error("platform not found");
   const tenantId = platform.tenant_id as string;
 
-  const rankMath = buildRankMathMeta({
+  const seoMeta = buildWpSeoMeta({
     title: "Seasonal Coffee Menus Build Loyalty — E2E Test",
     metaDescription: "Seasonal coffee menus keep customers coming back. Here's why, plus a launch plan.",
     focusKeyword: "seasonal coffee menu",
@@ -60,11 +59,11 @@ async function main() {
         type: "blog",
         title: "Seasonal Coffee Menus Build Loyalty — E2E Test",
         slug: "seasonal-coffee-menus-loyalty-e2e",
-        metaDescription: rankMath.meta.rank_math_description,
+        metaDescription: seoMeta.meta.seo_description,
         headings: [{ level: 1, text: "Seasonal Coffee Menus" }],
         body: "## Seasonal Coffee Menus\n\nSeasonal coffee menus refer to limited-time drinks tied to the season.\n\n1. Pick three seasonal flavors.\n2. Price them as limited-time offers.\n3. Market them on social.\n\n## FAQ\n\n**What is a seasonal coffee menu?**\nA rotating menu of limited-time drinks tied to the season.\n\n**How do seasonal menus build loyalty?**\nScarcity and anticipation create repeat visits.\n",
         images: [],
-        rankMath: rankMath.meta,
+        seoMeta: seoMeta.meta,
       },
       status: "draft",
       ai_generated: false,

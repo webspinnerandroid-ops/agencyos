@@ -40,35 +40,60 @@ function browserHeaders(): Record<string, string> {
   };
 }
 
+interface FetchOutcome {
+  html: string;
+  finalUrl: string;
+  /** True when the requested page bounced to the site's bare homepage. */
+  redirectedHome?: boolean;
+}
+
+/**
+ * Fetch with manual redirect handling so we never silently score a DIFFERENT
+ * page than the one requested. Same-host redirects to a real page are
+ * followed; a redirect to the bare homepage (the classic subdirectory-install
+ * trap — e.g. /blog/post bouncing to /) is reported instead of followed.
+ */
 async function rawFetch(
   url: string,
   headers: Record<string, string>,
   timeoutMs = TIMEOUT_MS
-): Promise<string | null> {
+): Promise<FetchOutcome | null> {
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(url, {
       headers,
       signal: controller.signal,
-      redirect: "follow",
+      redirect: "manual",
     });
-    return res.ok ? await res.text() : null;
+
+    if (res.status >= 300 && res.status < 400) {
+      const loc = res.headers.get("location");
+      if (!loc) return null;
+      const next = new URL(loc, url).href;
+      const a = new URL(url);
+      const b = new URL(next);
+      const sameHost =
+        b.hostname.replace(/^www\./, "").toLowerCase() ===
+        a.hostname.replace(/^www\./, "").toLowerCase();
+      // Cross-host redirects are bot-block traps — never chase them.
+      if (!sameHost) return null;
+      const targetIsHome = b.pathname === "/" || b.pathname === "";
+      const fromHome = a.pathname === "/" || a.pathname === "";
+      if (targetIsHome && !fromHome) {
+        // Subdirectory-install trap: the page bounced to the homepage.
+        return { html: "", finalUrl: next, redirectedHome: true };
+      }
+      return rawFetch(next, headers, timeoutMs);
+    }
+
+    if (!res.ok) return null;
+    return { html: await res.text(), finalUrl: res.url };
   } catch {
     return null;
   } finally {
     clearTimeout(t);
   }
-}
-
-/** Stage 1 — plain fetch with the legacy bot UA (unchanged behavior). */
-async function plainFetch(url: string): Promise<string | null> {
-  return rawFetch(url, { "User-Agent": BOT_UA });
-}
-
-/** Stage 2 — full browser-like headers; defeats UA-only / naive blocks. */
-async function browserLikeFetch(url: string): Promise<string | null> {
-  return rawFetch(url, browserHeaders());
 }
 
 function findChromeExecutable(): string | null {
@@ -155,18 +180,45 @@ export async function fetchCompetitorHtml(
   url: string,
   options: { headless?: boolean } = {}
 ): Promise<string | null> {
+  const out = await fetchCompetitorHtmlDetailed(url, options);
+  return out.html;
+}
+
+/**
+ * Same ladder as `fetchCompetitorHtml`, but reports WHY a fetch failed so
+ * callers can distinguish a subdirectory-install homepage redirect from a
+ * plain crawl failure.
+ */
+export async function fetchCompetitorHtmlDetailed(
+  url: string,
+  options: { headless?: boolean } = {}
+): Promise<{
+  html: string | null;
+  finalUrl?: string;
+  redirectedHome?: boolean;
+}> {
   const { headless = true } = options;
 
-  let html = await plainFetch(url);
-  if (html) return html;
-
-  html = await browserLikeFetch(url);
-  if (html) return html;
-
-  if (headless) {
-    html = await headlessFetch(url);
-    if (html) return html;
+  const plain = await rawFetch(url, { "User-Agent": BOT_UA });
+  if (plain?.html) {
+    return { html: plain.html, finalUrl: plain.finalUrl, redirectedHome: plain.redirectedHome };
+  }
+  if (plain?.redirectedHome) {
+    return { html: null, finalUrl: plain.finalUrl, redirectedHome: true };
   }
 
-  return null;
+  const browser = await rawFetch(url, browserHeaders());
+  if (browser?.html) {
+    return { html: browser.html, finalUrl: browser.finalUrl, redirectedHome: browser.redirectedHome };
+  }
+  if (browser?.redirectedHome) {
+    return { html: null, finalUrl: browser.finalUrl, redirectedHome: true };
+  }
+
+  if (headless) {
+    const html = await headlessFetch(url);
+    if (html) return { html, finalUrl: url };
+  }
+
+  return { html: null };
 }

@@ -1,12 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
-  buildRankMathMeta,
+  buildWpSeoMeta,
   buildArticleSchema,
   buildFaqSchema,
   schemaPreview,
-} from "./rank-math-meta";
+} from "./wp-seo-meta";
 
-describe("buildRankMathMeta", () => {
+describe("buildWpSeoMeta", () => {
   const base = {
     title: "Why Seasonal Coffee Menus Build Loyalty",
     metaDescription: "Seasonal coffee menus keep customers coming back. Here's why, plus a launch plan.",
@@ -19,68 +19,86 @@ describe("buildRankMathMeta", () => {
     siteName: "Blue Frog Coffee",
   };
 
-  it("produces the core Rank Math keys", () => {
-    const { meta, summary } = buildRankMathMeta(base);
-    expect(meta.rank_math_title).toBe(base.title);
-    expect(meta.rank_math_description).toBe(base.metaDescription);
-    expect(meta.rank_math_focus_keyword).toBe("seasonal coffee menu");
-    expect(meta.rank_math_schema_Article).toContain("Article");
-    expect(meta.rank_math_schema_FAQPage).toContain("FAQPage");
+  it("produces the core WordPress SEO keys", () => {
+    const { meta, summary } = buildWpSeoMeta(base);
+    expect(meta.seo_title).toBe(base.title);
+    expect(meta.seo_description).toBe(base.metaDescription);
+    expect(meta.focus_keyword).toBe("seasonal coffee menu");
+    expect(meta.schema_Article).toContain("Article");
+    expect(meta.schema_FAQPage).toContain("FAQPage");
+    // Combined JSON-LD array for guaranteed in-content delivery.
+    expect(Array.isArray(JSON.parse(meta.schema_jsonld as string))).toBe(true);
     expect(summary.schemaTypes).toEqual(["Article", "FAQPage"]);
     expect(summary.faqCount).toBe(2);
   });
 
   it("omits FAQPage schema when no Q&A pairs exist", () => {
-    const { meta, summary } = buildRankMathMeta({ ...base, qaPairs: [] });
-    expect(meta.rank_math_schema_FAQPage).toBeUndefined();
+    const { meta, summary } = buildWpSeoMeta({ ...base, qaPairs: [] });
+    expect(meta.schema_FAQPage).toBeUndefined();
     expect(summary.schemaTypes).not.toContain("FAQPage");
   });
 
   it("adds OpenGraph + Twitter social meta from the featured image", () => {
-    const { meta } = buildRankMathMeta({
+    const { meta } = buildWpSeoMeta({
       ...base,
       featuredImageUrl: "https://cdn.example.com/og.png",
     });
-    expect(meta.rank_math_facebook_image).toBe("https://cdn.example.com/og.png");
-    expect(meta.rank_math_twitter_image).toBe("https://cdn.example.com/og.png");
-    expect(meta.rank_math_facebook_title).toBe(base.title);
-    expect(meta.rank_math_twitter_description).toBe(base.metaDescription);
+    expect(meta.og_image).toBe("https://cdn.example.com/og.png");
+    expect(meta.twitter_image).toBe("https://cdn.example.com/og.png");
+    expect(meta.og_title).toBe(base.title);
+    expect(meta.twitter_description).toBe(base.metaDescription);
   });
 
   it("emits only the explicitly chosen schema types (Article always kept)", () => {
-    const { meta, summary } = buildRankMathMeta({ ...base, schemaTypes: ["HowTo"] });
-    expect(meta.rank_math_schema_Article).toBeDefined();
-    expect(meta.rank_math_schema_FAQPage).toBeUndefined();
+    const { meta, summary } = buildWpSeoMeta({ ...base, schemaTypes: ["HowTo"] });
+    expect(meta.schema_Article).toBeDefined();
+    expect(meta.schema_FAQPage).toBeUndefined();
     expect(summary.schemaTypes).toContain("HowTo");
+  });
+
+  it("builds the extra schema types when requested", () => {
+    const { meta, summary } = buildWpSeoMeta({
+      ...base,
+      schemaTypes: ["Product", "Service", "Organization", "Event", "Course", "SoftwareApplication", "VideoObject", "Person"],
+    });
+    expect(meta.schema_Product).toContain("Product");
+    expect(meta.schema_Service).toContain("Service");
+    expect(meta.schema_Organization).toContain("Organization");
+    expect(meta.schema_Event).toContain("Event");
+    expect(meta.schema_Course).toContain("Course");
+    expect(meta.schema_SoftwareApplication).toContain("SoftwareApplication");
+    expect(meta.schema_VideoObject).toContain("VideoObject");
+    expect(meta.schema_Person).toContain("Person");
+    expect(summary.schemaTypes).toContain("Product");
   });
 
   it("auto-detects HowTo from numbered steps in the body", () => {
     const body = "1. Grind the beans.\n2. Heat the water.\n3. Pour slowly.";
-    const { meta, summary } = buildRankMathMeta({ ...base, body });
-    expect(meta.rank_math_schema_HowTo).toBeDefined();
+    const { meta, summary } = buildWpSeoMeta({ ...base, body });
+    expect(meta.schema_HowTo).toBeDefined();
     expect(summary.schemaTypes).toContain("HowTo");
     expect(summary.stepCount).toBeGreaterThanOrEqual(2);
   });
 
   it("omits HowTo when the body has no steps", () => {
-    const { meta } = buildRankMathMeta({ ...base, body: "No numbered steps here." });
-    expect(meta.rank_math_schema_HowTo).toBeUndefined();
+    const { meta } = buildWpSeoMeta({ ...base, body: "No numbered steps here." });
+    expect(meta.schema_HowTo).toBeUndefined();
   });
 
   it("drops empty optional values", () => {
-    const { meta } = buildRankMathMeta({
+    const { meta } = buildWpSeoMeta({
       title: "T",
       metaDescription: "",
       focusKeyword: "",
       qaPairs: [],
     });
-    expect(meta.rank_math_title).toBe("T");
-    expect(meta.rank_math_description).toBeUndefined();
-    expect(meta.rank_math_focus_keyword).toBeUndefined();
+    expect(meta.seo_title).toBe("T");
+    expect(meta.seo_description).toBeUndefined();
+    expect(meta.focus_keyword).toBeUndefined();
     // Schema blocks still ship for the article.
-    expect(meta.rank_math_schema_Article).toBeDefined();
+    expect(meta.schema_Article).toBeDefined();
     // No social blocks without a title-length description or image.
-    expect(meta.rank_math_facebook_image).toBeUndefined();
+    expect(meta.og_image).toBeUndefined();
   });
 });
 

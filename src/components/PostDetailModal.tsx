@@ -251,7 +251,7 @@ export default function PostDetailModal({
             </div>
           </div>
 
-          {/* On-page SEO checklist (Rank Math-style) */}
+          {/* On-page SEO checklist */}
           {seoChecks.length > 0 && (
             <details open={seoChecks.some((chk) => !chk.passed)}>
               <summary className="text-sm font-semibold cursor-pointer mb-2">

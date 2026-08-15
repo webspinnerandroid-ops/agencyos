@@ -18,7 +18,7 @@ import {
   injectImagesIntoBody,
 } from "../src/lib/blog-images";
 import { persistImageToStorage } from "../src/lib/media/storage";
-import { scoreContent } from "../src/lib/rankmath";
+import { scoreContent } from "../src/lib/seo-scorer";
 import { scoreAeoGeo } from "../src/lib/aeo-geo";
 
 const TENANT_ID = process.env.TENANT_ID ?? "";

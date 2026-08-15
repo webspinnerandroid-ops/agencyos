@@ -63,7 +63,7 @@ export async function GET(request: NextRequest) {
       if (p.cms_published_at) publishedOnSite += 1;
     }
 
-    // Score bands (Rank Math style traffic lights).
+    // Score bands (on-page score traffic lights).
     const bands = { green: 0, yellow: 0, red: 0 };
     for (const p of scored) {
       const s = p.seo_score as number;

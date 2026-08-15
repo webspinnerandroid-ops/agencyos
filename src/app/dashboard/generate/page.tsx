@@ -26,6 +26,7 @@ import {
 import { Loader2, Copy, Check, Sparkles, FileText, Search, AlertTriangle, Upload, X, ImagePlus } from "lucide-react";
 import PostContent from "@/components/BlogContent";
 import ScoreBadge from "@/components/ScoreBadge";
+import { type SchemaType } from "@/lib/seo/wp-seo-meta";
 
 // ------------------------------------------------------------------
 // Types
@@ -78,16 +79,16 @@ interface GenerateResponse {
       checks: { id: string; label: string; category: string; maxPoints: number; earned: number; passed: boolean; detail: string }[];
     };
     schemaTypes?: string[];
-    rankMath?: Record<string, string | string[]>;
-    rankMathSummary?: {
+    seoMeta?: Record<string, string | string[]>;
+    seoMetaSummary?: {
       title: string;
       description: string;
       focusKeyword: string;
-      hasArticleSchema: boolean;
-      hasFaqSchema: boolean;
+      schemaTypes: string[];
       faqCount: number;
     };
     schemaPreview?: string;
+    autoSelectedTopic?: string | null;
     research?: { questions: string[]; trends: string[]; source: "web" | "model" };
   };
   socialPosts: SocialPost[];
@@ -202,10 +203,9 @@ export default function GeneratePage() {
       .split(",")
       .map((k) => k.trim())
       .filter(Boolean);
-    if (!data.title && !data.topic && keywords.length === 0) {
-      setError("Provide a title, keywords, or a topic to generate from.");
-      return;
-    }
+    // Topic/title/keywords are ALL optional — with none provided, the backend
+    // auto-selects a topic from the questions people are asking (trends) so
+    // the user never has to guess.
     setLoading(true);
     setError(null);
     setResult(null);
@@ -248,7 +248,7 @@ export default function GeneratePage() {
           imageCount,
           uploadedImages,
           schemaTypes:
-            schemaTypes === "auto" ? "auto" : (schemaTypes.split(",") as ("Article" | "FAQPage" | "HowTo" | "Recipe")[]),
+            schemaTypes === "auto" ? "auto" : (schemaTypes.split(",") as SchemaType[]),
         }),
       });
 
@@ -284,7 +284,8 @@ export default function GeneratePage() {
             New Blog Post
           </CardTitle>
           <CardDescription>
-            Give a title, keywords, or a topic — we research what people are asking first, then write the post to answer it.
+            Give a title, keywords, or a topic — or leave everything blank and we&apos;ll pick a topic
+            from the questions people are actually asking. Research runs first either way.
           </CardDescription>
         </CardHeader>
         <form onSubmit={handleSubmit(onSubmit)}>
@@ -335,7 +336,7 @@ export default function GeneratePage() {
 
             {/* Schema markup selection — auto-detect is the default */}
             <div className="space-y-2">
-              <Label htmlFor="schemaTypes">WordPress Schema (Rank Math)</Label>
+              <Label htmlFor="schemaTypes">WordPress Schema</Label>
               <select
                 id="schemaTypes"
                 value={schemaTypes}
@@ -350,10 +351,22 @@ export default function GeneratePage() {
                 <option value="Article,Recipe">Article + Recipe</option>
                 <option value="Article,FAQPage,HowTo">Article + FAQPage + HowTo</option>
                 <option value="Article,FAQPage,Recipe">Article + FAQPage + Recipe</option>
+                <option value="Article,Product">Article + Product (e-commerce)</option>
+                <option value="Article,Service">Article + Service (service business)</option>
+                <option value="Article,Organization">Article + Organization</option>
+                <option value="Article,LocalBusiness">Article + LocalBusiness (storefront)</option>
+                <option value="Article,Event">Article + Event (webinar / launch)</option>
+                <option value="Article,Course">Article + Course (training)</option>
+                <option value="Article,SoftwareApplication">Article + SoftwareApplication (SaaS / app)</option>
+                <option value="Article,VideoObject">Article + VideoObject</option>
+                <option value="Article,Person">Article + Person (author)</option>
+                <option value="Article,FAQPage,HowTo,Recipe,Product,Service,Organization,LocalBusiness,Event,Course,SoftwareApplication,VideoObject,Person">All schema types</option>
               </select>
               <p className="text-xs text-muted-foreground">
                 Auto-detect adds FAQPage when the post has Q&amp;A pairs, and HowTo / Recipe when it has numbered steps.
-                Schema author defaults to the client&apos;s company name.
+                Pick a combo that matches the page type — Product for shop pages, LocalBusiness for a storefront,
+                Event for webinars, Course for training, SoftwareApplication for an app. Schema author defaults to the
+                client&apos;s company name.
               </p>
             </div>
 
@@ -593,6 +606,15 @@ export default function GeneratePage() {
       {/* ---- Results ---- */}
       {result && (
         <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
+          {result.blogPost.autoSelectedTopic && (
+            <div className="p-4 rounded-md bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 text-sm flex items-start gap-2">
+              <Sparkles className="size-4 text-blue-500 mt-0.5 shrink-0" />
+              <span>
+                <span className="font-semibold">No topic entered — auto-selected from trending questions: </span>
+                <span className="text-blue-700 dark:text-blue-300">“{result.blogPost.autoSelectedTopic}”</span>
+              </span>
+            </div>
+          )}
           <h2 className="text-2xl font-semibold tracking-tight">Generated Content</h2>
 
           {/* Blog Post Preview */}
@@ -726,18 +748,15 @@ export default function GeneratePage() {
                 </p>
               </div>
 
-              {/* Rank Math meta + schema — generated with every post */}
-              {result.blogPost.rankMath && (
+              {/* WordPress SEO meta + schema — generated with every post */}
+              {result.blogPost.seoMeta && (
                 <details className="rounded-md border p-3">
                   <summary className="text-xs font-semibold cursor-pointer flex items-center gap-2">
                     <Sparkles className="size-3.5 text-primary" />
-                    WordPress Rank Math meta
+                    WordPress SEO meta
                     <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded-full bg-muted">
-                      {result.blogPost.schemaTypes
-                        ? result.blogPost.schemaTypes.join(" + ")
-                        : result.blogPost.rankMathSummary?.hasFaqSchema
-                          ? `Article + FAQPage (${result.blogPost.rankMathSummary.faqCount} Q&As)`
-                          : "Article schema"}
+                      {(result.blogPost.schemaTypes ?? result.blogPost.seoMetaSummary?.schemaTypes)
+                        ?.join(" + ") ?? "Article schema"}
                     </span>
                   </summary>
                   <div className="mt-3 space-y-3">
@@ -745,21 +764,21 @@ export default function GeneratePage() {
                       <div className="rounded-md bg-muted/40 p-2.5">
                         <Label className="text-[10px]">Focus keyword</Label>
                         <p className="text-sm font-medium mt-0.5">
-                          {result.blogPost.rankMathSummary?.focusKeyword || "—"}
+                          {result.blogPost.seoMetaSummary?.focusKeyword || "—"}
                         </p>
                       </div>
                       <div className="rounded-md bg-muted/40 p-2.5">
                         <Label className="text-[10px]">SEO title</Label>
                         <p className="text-sm mt-0.5">
-                          {result.blogPost.rankMathSummary?.title || result.blogPost.title}
+                          {result.blogPost.seoMetaSummary?.title || result.blogPost.title}
                         </p>
                       </div>
                     </div>
-                    {result.blogPost.rankMathSummary?.description && (
+                    {result.blogPost.seoMetaSummary?.description && (
                       <div className="rounded-md bg-muted/40 p-2.5">
                         <Label className="text-[10px]">Meta description</Label>
                         <p className="text-sm text-muted-foreground mt-0.5">
-                          {result.blogPost.rankMathSummary.description}
+                          {result.blogPost.seoMetaSummary.description}
                         </p>
                       </div>
                     )}
@@ -784,8 +803,8 @@ export default function GeneratePage() {
                           {result.blogPost.schemaPreview}
                         </pre>
                         <p className="text-[10px] text-muted-foreground mt-1.5">
-                          Sent to your connected WordPress sites on publish (Rank Math
-                          fields + Article/FAQPage schema).
+                          Sent to your connected WordPress sites on publish — SEO title,
+                          description, focus keyword + JSON-LD schema embedded in the content.
                         </p>
                       </div>
                     )}

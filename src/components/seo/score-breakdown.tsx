@@ -5,7 +5,7 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 
 // ============================================================================
 // Types — mirror the engine check shapes so this component works for both
-// the RankMath-style SEO engine and the AEO/GEO engine without imports.
+// the on-page SEO engine and the AEO/GEO engine without imports.
 // ============================================================================
 
 export interface SeoCheckShape {

@@ -10,10 +10,10 @@
  */
 
 import * as cheerio from "cheerio";
-import { scoreContent, type RankMathResult } from "@/lib/rankmath";
+import { scoreContent, type SeoScoreResult } from "@/lib/seo-scorer";
 import { scoreAeoGeo, type AeoGeoResult } from "@/lib/aeo-geo";
 import { brandKeyword, homepageMarkdown } from "@/lib/seo/audit-report";
-import { fetchCompetitorHtml } from "@/lib/seo/competitor-fetch";
+import { fetchCompetitorHtmlDetailed } from "@/lib/seo/competitor-fetch";
 
 export interface AnalyzeRequest {
   /** URL to crawl and score. */
@@ -22,8 +22,16 @@ export interface AnalyzeRequest {
   text?: string;
   /** Optional title override for text mode. */
   title?: string;
-  /** Optional keyword to score against; derived from the URL otherwise. */
+  /** Optional keyword to score against; derived otherwise. */
   keyword?: string;
+  /**
+   * Text mode only: the URL this content lives at. Used to derive the same
+   * focus keyword + slug the hosted URL audit would use, so pasted text and
+   * the live page score consistently.
+   */
+  pageUrl?: string;
+  /** Text mode only: the page's meta description, so the meta check matches the hosted audit. */
+  metaDescription?: string;
 }
 
 export interface AnalyzeResult {
@@ -34,7 +42,9 @@ export interface AnalyzeResult {
   wordCount: number;
   fetched?: boolean;
   fetchError?: string;
-  seo: RankMathResult | null;
+  /** The exact markdown body that was scored — lets the user re-paste it for an identical score. */
+  scoredBody?: string;
+  seo: SeoScoreResult | null;
   aeoGeo: AeoGeoResult | null;
   scoreGate: {
     seo: number | null;
@@ -62,6 +72,37 @@ function slugOf(url: string): string {
   } catch {
     return "/home";
   }
+}
+
+const STOPWORDS = new Set([
+  "the", "and", "for", "with", "your", "you", "are", "was", "that", "this",
+  "from", "have", "has", "not", "but", "our", "their", "they", "will",
+  "can", "all", "when", "what", "why", "how", "about", "into", "than",
+  "then", "these", "those", "its", "per", "each", "such", "more", "most",
+]);
+
+/**
+ * Derive a sensible scoring keyword for pasted text — never a placeholder
+ * like "example". Prefers the title's significant words, then the most
+ * frequent content word in the body.
+ */
+export function deriveKeyword(title: string, text: string): string {
+  const t = (title ?? "").trim();
+  if (t) {
+    const words = t
+      .split(/\s+/)
+      .filter((w) => w.length > 3 && !STOPWORDS.has(w.toLowerCase()));
+    if (words.length > 0) return words.slice(0, 3).join(" ");
+  }
+  const counts = new Map<string, number>();
+  for (const w of (text ?? "").toLowerCase().split(/\s+/)) {
+    if (w.length > 3 && !STOPWORDS.has(w) && /^[a-z]+$/.test(w)) {
+      counts.set(w, (counts.get(w) ?? 0) + 1);
+    }
+  }
+  const top = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
+  if (top && top[1] >= 3) return top[0];
+  return "the topic";
 }
 
 /** Parse fetched HTML into the shape the scoring engines need. */
@@ -202,7 +243,29 @@ export async function analyzeContent(
   const mode: "url" | "text" = url ? "url" : "text";
 
   if (mode === "url" && url) {
-    const html = await fetchCompetitorHtml(url);
+    const fetchOut = await fetchCompetitorHtmlDetailed(url);
+    if (fetchOut.redirectedHome) {
+      return {
+        mode,
+        url,
+        title: "",
+        keyword: brandKeyword(url),
+        wordCount: 0,
+        fetched: false,
+        fetchError:
+          `The URL redirected to the site homepage (${fetchOut.finalUrl ?? "/"}) instead of the page you asked for — common with subdirectory installs. Use the exact article URL, or paste the page's text with its page URL in text mode.`,
+        seo: null,
+        aeoGeo: null,
+        scoreGate: {
+          seo: null,
+          aeo: null,
+          geo: null,
+          passesSeoGate: false,
+          passesAeoGeoGate: false,
+        },
+      };
+    }
+    const html = fetchOut.html;
     if (!html) {
       return {
         mode,
@@ -237,6 +300,7 @@ export async function analyzeContent(
       title: parsed.title,
       keyword,
       fetched: true,
+      scoredBody: parsed.body,
       ...scored,
     };
   }
@@ -247,18 +311,26 @@ export async function analyzeContent(
     throw new Error("Provide a URL or pasted text to analyze.");
   }
   const title = (req.title || "").trim() || "Pasted content";
-  const keyword = (req.keyword || "").trim() || brandKeyword("https://example.com");
+  // When the pasted content lives at a known URL, score against the same
+  // keyword/slug the hosted URL audit would use so the two never disagree.
+  const pageUrl = req.pageUrl ? parseUrlOrNull(req.pageUrl) : null;
+  const keyword =
+    (req.keyword || "").trim() ||
+    (pageUrl ? brandKeyword(pageUrl) : "") ||
+    deriveKeyword(title, text);
   const scored = scoreAnalyzedContent({
     title,
-    metaDescription: "",
+    metaDescription: (req.metaDescription || "").trim(),
     body: text,
     keyword,
     internalUrls: [],
+    url: pageUrl ?? undefined,
   });
   return {
     mode,
     title,
     keyword,
+    scoredBody: text,
     ...scored,
   };
 }

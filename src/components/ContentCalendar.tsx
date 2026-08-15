@@ -972,7 +972,7 @@ export default function ContentCalendar({
                   </div>
                 </div>
 
-                {/* SEO score + checklist (Rank Math-style) */}
+                {/* SEO score + checklist */}
                 {selectedPost.seo_score != null && (
                   <div className="rounded-md bg-muted/50 border px-3 py-2">
                     <div className="flex items-center justify-between mb-1.5">

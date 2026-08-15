@@ -31,9 +31,9 @@ import {
   type BlogImageSpec,
   type GeneratedBlogImage,
 } from "@/lib/blog-images";
-import { scoreContent, type RankMathResult } from "@/lib/rankmath";
+import { scoreContent, type SeoScoreResult } from "@/lib/seo-scorer";
 import { scoreAeoGeo, type AeoGeoResult } from "@/lib/aeo-geo";
-import { buildRankMathMeta, schemaPreview } from "@/lib/seo/rank-math-meta";
+import { buildWpSeoMeta, schemaPreview, type SchemaSelection } from "@/lib/seo/wp-seo-meta";
 import {
   getScoreGate,
   MAX_SCORE_ATTEMPTS,
@@ -171,7 +171,7 @@ async function generateBlogImages(
 
         // Persist to media_assets so it lands in the images page history.
         // The SEO payload (alt text + unique title) is what makes the asset
-        // Rank Math-friendly when it ships inside a page.
+        // SEO-friendly when it ships inside a page.
         const altText =
           spec.description && spec.description.trim().length > 0
             ? spec.description.trim()
@@ -390,13 +390,42 @@ export async function POST(request: NextRequest) {
     // The user may supply a title, keywords/topics, or both. "topic" is the
     // primary working keyword the model writes around; when only a title is
     // given, the title itself becomes the working topic.
-    const primaryKeyword =
+    let primaryKeyword =
       (keywords ?? []).filter(Boolean)[0] ?? topic ?? title ?? "";
-    const workingTopic =
+    let workingTopic =
       topic ??
       (keywords ?? []).filter(Boolean).join(", ") ??
       title ??
       "";
+    let autoSelectedTopic: string | null = null;
+
+    // No direction at all — pick the topic from what people are actually
+    // asking. Research is seeded by the workspace/client name so the
+    // suggested topic is relevant to the business, and the top real question
+    // or trend becomes the working topic.
+    if (!workingTopic.trim()) {
+      const seed = schemaSiteName || "small business marketing";
+      try {
+        const suggest = await researchTopic(tenantId, { topic: seed });
+        const candidate =
+          (suggest?.questions ?? []).find((q) => q && q.trim()) ??
+          (suggest?.trends ?? []).find((t) => t && t.trim()) ??
+          "";
+        if (candidate) {
+          autoSelectedTopic = candidate.trim().slice(0, 160);
+          workingTopic = autoSelectedTopic;
+          primaryKeyword = primaryKeyword || autoSelectedTopic;
+        }
+      } catch (err) {
+        console.warn("[generate-content] Topic suggestion failed:", err);
+      }
+      if (!autoSelectedTopic) {
+        return NextResponse.json(
+          { error: "Provide a title, keywords, or a topic to generate from." },
+          { status: 400 }
+        );
+      }
+    }
 
     // Research-first: search the web (Google-grounded when the platform key
     // exists, otherwise a model-generated question set) so the content
@@ -405,7 +434,7 @@ export async function POST(request: NextRequest) {
     try {
       research = await researchTopic(tenantId, {
         title: title ?? undefined,
-        topic: topic ?? undefined,
+        topic: workingTopic,
         keywords: keywords ?? [],
       });
     } catch (err) {
@@ -549,7 +578,7 @@ export async function POST(request: NextRequest) {
     };
     let generatedImages: GeneratedBlogImage[] = [];
     let bodyWithImages = "";
-    let seoScore: RankMathResult;
+    let seoScore: SeoScoreResult;
     let aeoGeo: AeoGeoResult;
 
     while (true) {
@@ -623,13 +652,13 @@ export async function POST(request: NextRequest) {
         );
         imageSpecs = [
           {
-            prompt: `Featured image for a blog post titled "${blogPost.title}" about: ${topic}. High quality, editorial, on-brand.`,
+            prompt: `Featured image for a blog post titled "${blogPost.title}" about: ${workingTopic}. High quality, editorial, on-brand.`,
             placement: "featured" as const,
             sectionTitle: "",
             description: `Featured image for ${blogPost.title}`,
           },
           ...bodyPlaceholders.map((ph) => ({
-            prompt: `Blog illustration for a post about "${topic}". ${ph.alt}. Detailed, on-brand, editorial quality.`,
+            prompt: `Blog illustration for a post about "${workingTopic}". ${ph.alt}. Detailed, on-brand, editorial quality.`,
             placement: "inline" as const,
             sectionTitle: "",
             description: ph.alt || `Inline image ${ph.index}`,
@@ -691,7 +720,7 @@ export async function POST(request: NextRequest) {
         linkablePages
       );
 
-      // On-page SEO score (Rank Math-style) — stored with the post and
+      // On-page SEO score — stored with the post and
       // displayed in Recent Content. The keyword used is the primary keyword;
       // internal links are judged against the workspace knowledge base, so the
       // score reflects reality (not the model's opinion).
@@ -741,14 +770,14 @@ export async function POST(request: NextRequest) {
       qaPairs: aeoGeo.qaPairs,
     };
 
-    // Rank Math meta + Article/FAQPage JSON-LD for the connected WordPress
+    // WordPress SEO meta + JSON-LD schema for the connected WordPress
     // sites — deterministic (no extra model call), from data the scorers
     // already produced. Persisted with the post and sent on publish.
     const featuredImage =
       generatedImages.find((img) => img.spec.placement === "featured")?.url ??
       generatedImages[0]?.url ??
       null;
-    const rankMath = buildRankMathMeta({
+    const seoMeta = buildWpSeoMeta({
       title: blogPost.title,
       metaDescription: blogPost.metaDescription,
       focusKeyword: primaryKeyword,
@@ -756,7 +785,7 @@ export async function POST(request: NextRequest) {
       featuredImageUrl: featuredImage,
       slug: blogPost.slug,
       siteName: schemaSiteName,
-      schemaTypes: schemaTypes as "auto" | ("Article" | "FAQPage" | "HowTo" | "Recipe")[] | undefined,
+      schemaTypes: schemaTypes as SchemaSelection | undefined,
       body: bodyWithImages,
     });
 
@@ -912,11 +941,12 @@ Use the above context to craft a compelling, platform-optimized caption that dri
             research: research
               ? { questions: research.questions, trends: research.trends, source: research.source }
               : null,
+            topicAutoSelected: autoSelectedTopic,
             seo: seoPayload,
             aeoGeo: aeoGeoPayload,
-            rankMath: rankMath.meta,
-            schemaTypes: Array.isArray(schemaTypes) ? schemaTypes : rankMath.summary.schemaTypes,
-            rankMathPreview: schemaPreview({
+            seoMeta: seoMeta.meta,
+            schemaTypes: Array.isArray(schemaTypes) ? schemaTypes : seoMeta.summary.schemaTypes,
+            seoMetaPreview: schemaPreview({
               title: blogPost.title,
               metaDescription: blogPost.metaDescription,
               focusKeyword: primaryKeyword,
@@ -924,7 +954,7 @@ Use the above context to craft a compelling, platform-optimized caption that dri
               featuredImageUrl: featuredImage,
               slug: blogPost.slug,
               siteName: schemaSiteName,
-              schemaTypes: schemaTypes as "auto" | ("Article" | "FAQPage" | "HowTo" | "Recipe")[] | undefined,
+              schemaTypes: schemaTypes as SchemaSelection | undefined,
               body: bodyWithImages,
             }),
           },
@@ -1066,9 +1096,9 @@ Use the above context to craft a compelling, platform-optimized caption that dri
         suggestedImagePrompt: blogPost.suggestedImagePrompt ?? "",
         status: "draft",
         seo: seoPayload,
-        rankMath: rankMath.meta,
-        rankMathSummary: rankMath.summary,
-        schemaTypes: Array.isArray(schemaTypes) ? schemaTypes : rankMath.summary.schemaTypes,
+        seoMeta: seoMeta.meta,
+        seoMetaSummary: seoMeta.summary,
+        schemaTypes: Array.isArray(schemaTypes) ? schemaTypes : seoMeta.summary.schemaTypes,
         schemaPreview: schemaPreview({
           title: blogPost.title,
           metaDescription: blogPost.metaDescription,
@@ -1077,12 +1107,13 @@ Use the above context to craft a compelling, platform-optimized caption that dri
           featuredImageUrl: featuredImage,
           slug: blogPost.slug,
           siteName: schemaSiteName,
-          schemaTypes: schemaTypes as "auto" | ("Article" | "FAQPage" | "HowTo" | "Recipe")[] | undefined,
+          schemaTypes: schemaTypes as SchemaSelection | undefined,
           body: bodyWithImages,
         }),
         research: research
           ? { questions: research.questions, trends: research.trends, source: research.source }
           : null,
+        autoSelectedTopic,
       },
       socialPosts: socialResults.map(({ platform, caption }, index) => ({
         platform,

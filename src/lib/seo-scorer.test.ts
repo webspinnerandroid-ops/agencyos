@@ -7,7 +7,7 @@ import {
   extractImages,
   plainText,
   stripMarkdownImage,
-} from "./rankmath";
+} from "./seo-scorer";
 
 const BASE = {
   title: "Coal Creek Coffee Roasters: A Seasonal Menu Guide",

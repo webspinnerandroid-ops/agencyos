@@ -7,7 +7,7 @@ import {
   ScoreGateError,
   mapReusedImages,
 } from "./score-gate";
-import { scoreContent, type RankMathResult } from "./rankmath";
+import { scoreContent, type SeoScoreResult } from "./seo-scorer";
 import { scoreAeoGeo, type AeoGeoResult } from "./aeo-geo";
 import type { BlogImageSpec, GeneratedBlogImage } from "./blog-images";
 
@@ -16,7 +16,7 @@ import type { BlogImageSpec, GeneratedBlogImage } from "./blog-images";
 // the gate-feedback and error tests need.
 const badBody = `Coffee brewing is simple. Most people make coffee every day without thinking about it. There are many ways to brew. Some methods are faster than others. You can use a drip machine or a press. Every method has pros and cons.`;
 
-function failingFixtures(): { seo: RankMathResult; aeo: AeoGeoResult } {
+function failingFixtures(): { seo: SeoScoreResult; aeo: AeoGeoResult } {
   return {
     seo: scoreContent({
       title: "Brewing",

@@ -5,7 +5,7 @@ import {
   evalTeam,
   scoreEmployeeOutput,
 } from "./eval";
-import { scoreContent } from "@/lib/rankmath";
+import { scoreContent } from "@/lib/seo-scorer";
 import { scoreAeoGeo } from "@/lib/aeo-geo";
 
 describe("ai team eval loop", () => {

@@ -1,4 +1,4 @@
-import { scoreBadgeClass } from "@/lib/rankmath";
+import { scoreBadgeClass } from "@/lib/seo-scorer";
 
 export default function ScoreBadge({
   score,

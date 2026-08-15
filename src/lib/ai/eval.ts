@@ -3,7 +3,7 @@
  *
  * The "better is measurable" piece: each employee has a small set of quality
  * criteria (with good/bad examples) their outputs are checked against. The
- * same engine that scores content (rankmath) has its analogue here for the
+ * same engine that scores content (seo-scorer) has its analogue here for the
  * team's deliverables — so when a persona or pipeline changes, we can show
  * the score moving instead of relying on vibes.
  *
@@ -14,7 +14,7 @@
  */
 
 import { EMPLOYEE_PERSONAS } from "@/lib/ai/employee-personas";
-import { scoreContent } from "@/lib/rankmath";
+import { scoreContent } from "@/lib/seo-scorer";
 import { scoreAeoGeo } from "@/lib/aeo-geo";
 
 export interface EvalCriterion {

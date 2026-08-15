@@ -1,11 +1,10 @@
 /**
- * Rank Math-style on-page content scorer.
+ * On-page content scorer.
  *
- * A native, dependency-free approximation of Rank Math's 100-point on-page
- * scoring model. Rank Math's real internal weights are not public and have
- * shifted across versions; this engine follows the widely documented
- * breakdown (Basic SEO ~50, Links ~25, Image & Readability ~25) and is
- * intentionally labeled an approximation everywhere it surfaces in the UI.
+ * A native, dependency-free 100-point on-page scoring model built on the
+ * widely documented on-page breakdown (Basic SEO ~50, Links ~25, Image &
+ * Readability ~25). Scores are surfaced as an approximation everywhere they
+ * appear in the UI.
  *
  * Every test is a pure function: it either passes (full points), fails (0),
  * or — for content length — earns a fractional multiplier. The aggregator
@@ -13,7 +12,7 @@
  * exactly what passed and what to fix.
  */
 
-export interface RankMathCheck {
+export interface SeoScoreCheck {
   id: string;
   label: string;
   category: "Basic SEO" | "Links" | "Images & Readability";
@@ -23,16 +22,16 @@ export interface RankMathCheck {
   detail: string;
 }
 
-export interface RankMathResult {
+export interface SeoScoreResult {
   total: number;
   grade: "red" | "yellow" | "green";
-  checks: RankMathCheck[];
+  checks: SeoScoreCheck[];
   /** The exact keyword that was scored against. */
   keyword: string;
   wordCount: number;
 }
 
-export interface RankMathInput {
+export interface SeoScoreInput {
   title: string;
   metaDescription: string;
   slug: string;
@@ -121,7 +120,7 @@ export function splitParagraphs(body: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// Content-length multiplier (Rank Math's documented word-count thresholds)
+// Content-length multiplier (documented word-count thresholds)
 // ---------------------------------------------------------------------------
 
 export function contentLengthMultiplier(wordCount: number): number {
@@ -160,7 +159,7 @@ function escapeRegExp(text: string): string {
 // scoreContent — the aggregator
 // ---------------------------------------------------------------------------
 
-export function scoreContent(input: RankMathInput): RankMathResult {
+export function scoreContent(input: SeoScoreInput): SeoScoreResult {
   const keyword = input.keyword.trim().toLowerCase();
   const text = plainText(input.body);
   const wordCount = countWords(text);
@@ -267,7 +266,7 @@ export function scoreContent(input: RankMathInput): RankMathResult {
   const defs: {
     id: string;
     label: string;
-    category: RankMathCheck["category"];
+    category: SeoScoreCheck["category"];
     maxPoints: number;
     passed: boolean;
     multiplier?: number;
@@ -428,7 +427,7 @@ export function scoreContent(input: RankMathInput): RankMathResult {
     },
   ];
 
-  const checks: RankMathCheck[] = defs.map((d) => ({
+  const checks: SeoScoreCheck[] = defs.map((d) => ({
     id: d.id,
     label: d.label,
     category: d.category,

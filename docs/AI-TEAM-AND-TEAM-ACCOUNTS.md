@@ -6,7 +6,7 @@ Related: `src/app/help/page.tsx` (recovered roster), `src/lib/ai/orchestrator.ts
 
 ## 1. Vision
 
-Every agency tenant gets a team of **named AI employees** (the Marblism-inspired roster,
+Every agency tenant gets a team of **named AI employees** (a persona-based roster,
 renamed + repivoted for agencies, expanded from 6 to 11). Employees run the agency's
 day-to-day work — content, socials, leads, SEO, voice, publishing, analytics, reputation —
 as background modules, workers, and integrations.

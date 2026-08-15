@@ -1,5 +1,5 @@
 /**
- * One-off backfill: compute a Rank Math-style on-page SEO score for every
+ * One-off backfill: compute an on-page SEO score for every
  * existing blog post that doesn't have one yet (posts generated before the
  * scoring feature shipped). Mirrors the scoring in
  * src/app/api/generate-content/route.ts:
@@ -18,7 +18,7 @@
  */
 import { createClient } from "@supabase/supabase-js";
 import { readFileSync } from "fs";
-import { scoreContent } from "../src/lib/rankmath";
+import { scoreContent } from "../src/lib/seo-scorer";
 
 // Minimal .env.local loader (dotenv is not a dependency here).
 for (const line of readFileSync(".env.local", "utf8").split(/\r?\n/)) {

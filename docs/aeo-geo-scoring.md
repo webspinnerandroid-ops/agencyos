@@ -1,17 +1,18 @@
 # AEO / GEO Scoring Engine — Design
 
 **Status:** Engine built (`src/lib/aeo-geo.ts`, unit-tested); UI surfacing pending.
-**Goal:** mirror the tryaeos.com model — every piece of content gets an
-**SEO score** (existing Rank Math-style scorer), an **AEO score** (answer-engine
-readiness), and a **GEO score** (generative-engine citation readiness), all in
-one dashboard the agency can share with clients.
+**Goal:** every piece of content gets an **SEO score** (the on-page scorer in
+`src/lib/seo-scorer.ts`), an **AEO score** (answer-engine readiness), and a
+**GEO score** (generative-engine citation readiness), all in one dashboard the
+agency can share with clients.
 
-## Why this beats the tryaeos approach for us
+## Why this approach wins for us
 
-tryaeos.com sells a standalone audit dashboard. We already generate the content,
-so we can score **at generation time, at zero marginal cost** — no separate
-crawl, no per-audit LLM spend. The scorer is pure text analysis (like
-`rankmath.ts`), so it runs on every post the moment it's created.
+A standalone audit dashboard sells audits for existing pages. We already
+generate the content, so we can score **at generation time, at zero marginal
+cost** — no separate crawl, no per-audit LLM spend. The scorer is pure text
+analysis (like `seo-scorer.ts`), so it runs on every post the moment it's
+created.
 
 ## Scoring pillars (100 points total)
 
@@ -21,15 +22,15 @@ crawl, no per-audit LLM spend. The scorer is pure text analysis (like
 | **GEO — Citation readiness** | 50 | Data/statistics present, FAQ/Article schema readiness, step/how-to structure, authority signals (studies, citations), outbound reference links |
 
 Each check is a pure pass/fail function (earns full points or 0) — same model as
-the Rank Math scorer, so both engines share a consistent mental model.
+the on-page SEO scorer, so both engines share a consistent mental model.
 
 ## What the engine emits
 
 - `total` (0–100), `aeoScore`, `geoSscore`, `grade` (red/yellow/green)
 - A per-check checklist (`passed` / `detail`) for the UI
 - **Extracted Q&A pairs** — the raw material for two downstream features:
-  1. **FAQPage schema generation** (rank math "schema readiness" becomes real)
-  2. **The Answer Library** — a client-facing page of Q&A content optimized for AI citation (the tryaeos.com answer-library equivalent)
+  1. **FAQPage schema generation** (schema readiness becomes real)
+  2. **The Answer Library** — a client-facing page of Q&A content optimized for AI citation
 
 ## Hybrid LLM mode (opt-in)
 
@@ -48,7 +49,7 @@ runs the same pillars through the tenant's configured text model, and
 
 ## Wiring plan (next steps)
 
-1. **Compute on save:** call `scoreAeoGeo()` alongside `rankMathScore()` in
+1. **Compute on save:** call `scoreAeoGeo()` alongside `scoreContent()` in
    `cherylGenerateBlog` and the manual generate-content pipeline; store
    `seo_score` (existing) + new `aeo_geo_score JSONB` column (migration).
 2. **UI:** show SEO / AEO / GEO as three chips on every post in Recent Content

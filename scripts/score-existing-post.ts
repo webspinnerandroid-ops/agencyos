@@ -1,13 +1,13 @@
 /**
  * One-off maintenance script: score an already-generated blog post that was
  * written before team generation computed on-page SEO scores. Pure scoring
- * (rankmath module) — no LLM calls, no image generation.
+ * (seo-scorer module) — no LLM calls, no image generation.
  *
  * Usage: set env from .env.local, then:
  *   node -e "esbuild bundle" ... (see the run instruction in the shell command)
  */
 import { createClient } from "@supabase/supabase-js";
-import { scoreContent } from "../src/lib/rankmath";
+import { scoreContent } from "../src/lib/seo-scorer";
 import { getWorkspaceLinkablePages } from "../src/lib/knowledgebase";
 
 async function main() {

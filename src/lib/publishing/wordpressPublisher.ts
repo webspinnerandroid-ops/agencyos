@@ -27,8 +27,8 @@ export interface WpPublishTarget {
     body: string;
     metaDescription?: string;
     slug?: string;
-    /** Rank Math post-meta keys (rank_math_*) generated with the post. */
-    rankMath?: Record<string, string | string[]>;
+    /** WordPress SEO post-meta generated with the post (seo_*, schema_*). */
+    seoMeta?: Record<string, string | string[]>;
   };
   action: "draft" | "publish" | "schedule";
   scheduledAt?: string;     // ISO date for scheduling
@@ -86,38 +86,21 @@ async function postToWordPress(target: WpPublishTarget): Promise<WpPublishResult
     status: action === "publish" ? "publish" : "draft",
   };
 
-  // Rank Math registers its fields as top-level REST params on wp/v2/posts
-  // (rank_math_title, rank_math_description, rank_math_focus_keyword,
-  // rank_math_schema_*). Send them when the post carries a generated payload;
-  // if the site doesn't have Rank Math (or doesn't expose its fields) the API
-  // either rejects them (rest_invalid_param → retry without) or silently
-  // ignores them — either way publishing never breaks.
-  const rankMath = content.rankMath ?? {};
-  for (const [key, value] of Object.entries(rankMath)) {
-    if (typeof value === "string") body[key] = value;
-    else body[key] = value;
-  }
-  const rankMathKeys = Object.keys(rankMath);
-
-  // The ONLY way to guarantee schema lands on every WP site (Rank Math's REST
-  // fields aren't exposed on many installs) is embedding the JSON-LD directly
-  // in the post content — Google reads it from anywhere in the DOM, and Rank
-  // Math dedupes embedded schema it detects. Built from the same payload.
-  const schemaBlocks: unknown[] = [];
-  for (const key of ["rank_math_schema_Article", "rank_math_schema_FAQPage", "rank_math_schema_HowTo", "rank_math_schema_Recipe"]) {
-    const raw = rankMath[key];
-    if (typeof raw !== "string") continue;
+  // The ONLY way to guarantee schema lands on every WP site is embedding the
+  // JSON-LD directly in the post content — Google reads it from anywhere in
+  // the DOM. The combined `schema_jsonld` array is generated with the post.
+  const seoMeta = content.seoMeta ?? {};
+  const rawJsonLd = seoMeta.schema_jsonld;
+  if (typeof rawJsonLd === "string" && rawJsonLd.trim().length > 0) {
     try {
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) schemaBlocks.push(...parsed);
+      const parsed = JSON.parse(rawJsonLd);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const scriptTag = `<script type="application/ld+json">${JSON.stringify(parsed)}</script>`;
+        body.content = `${scriptTag}\n\n${body.content ?? ""}`;
+      }
     } catch {
       // ignore malformed schema — never fail a publish over it
     }
-  }
-  if (schemaBlocks.length > 0) {
-    const jsonLd = JSON.stringify(schemaBlocks);
-    const scriptTag = `<script type="application/ld+json">${jsonLd}</script>`;
-    body.content = `${scriptTag}\n\n${body.content ?? ""}`;
   }
 
   // Put the post into the chosen category (default: WordPress's own
@@ -150,25 +133,7 @@ async function postToWordPress(target: WpPublishTarget): Promise<WpPublishResult
       return { ok: response.ok, status: response.status, data };
     };
 
-    let { ok, status, data } = await send(body);
-
-    // A site without Rank Math rejects the extra rank_math_* params — retry
-    // without them (rest_invalid_param: "Invalid parameter(s): rank_math_...").
-    if (
-      !ok &&
-      status === 400 &&
-      rankMathKeys.length > 0 &&
-      typeof data?.code === "string" &&
-      data.code === "rest_invalid_param" &&
-      /rank_math/i.test(JSON.stringify(data?.data ?? data?.message ?? ""))
-    ) {
-      const stripped = { ...body };
-      for (const key of rankMathKeys) delete stripped[key];
-      const retry = await send(stripped);
-      ok = retry.ok;
-      status = retry.status;
-      data = retry.data;
-    }
+    const { ok, status, data } = await send(body);
 
     if (!ok) {
       const message = data?.message || data?.code || `HTTP ${status}`;
@@ -263,7 +228,7 @@ export async function publishToWordPress(
         body: content.body,
         metaDescription: content.metaDescription,
         slug: content.slug,
-        rankMath: content.rankMath,
+        seoMeta: content.seoMeta,
       },
       action,
       scheduledAt,

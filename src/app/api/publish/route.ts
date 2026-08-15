@@ -43,7 +43,7 @@ function blogBodyToBlocks(body: string): any[] {
 
 // Score-based publish gate: content below this score is blocked from being
 // scheduled/published, so low-quality drafts can't go live. The gate checks
-// BOTH the Rank Math-style SEO score AND the AEO/GEO readiness score — a blog
+// BOTH the on-page SEO score AND the AEO/GEO readiness score — a blog
 // must clear both bars (the combined score is the lower of the two). Blogs
 // below the bar are auto-rewritten through Cheryl's pipeline (max 2 times),
 // then the user retries. Admins can override with force=true (they own the

@@ -50,9 +50,9 @@ import {
   buildInternalLinkContext,
   appendRelatedReading,
 } from "@/lib/content-links";
-import { scoreContent, type RankMathResult } from "@/lib/rankmath";
+import { scoreContent, type SeoScoreResult } from "@/lib/seo-scorer";
 import { scoreAeoGeo, type AeoGeoResult } from "@/lib/aeo-geo";
-import { buildRankMathMeta, schemaPreview } from "@/lib/seo/rank-math-meta";
+import { buildWpSeoMeta, schemaPreview } from "@/lib/seo/wp-seo-meta";
 import {
   getScoreGate,
   MAX_SCORE_ATTEMPTS,
@@ -429,7 +429,7 @@ async function cherylGenerateBlog(
   };
   let generated: GeneratedBlogImage[] = [];
   let body = "";
-  let seo: RankMathResult;
+  let seo: SeoScoreResult;
   let aeoGeo: AeoGeoResult;
 
   while (true) {
@@ -515,7 +515,7 @@ async function cherylGenerateBlog(
       linkablePages
     );
 
-    // On-page SEO score (Rank Math-style) — every blog the team generates is
+    // On-page SEO score — every blog the team generates is
     // scored against its real keyword + the workspace's actual linkable pages,
     // exactly like the manual generator. Stored in content.seo; the DB trigger
     // (migration 025) syncs seo_score / seo_checks columns from it.
@@ -565,7 +565,7 @@ async function cherylGenerateBlog(
     generated[0]?.url ??
     null;
   const brandName = workspaceContext.match(/BRAND VOICE: ([^\n]+)/)?.[1] ?? null;
-  const rankMath = buildRankMathMeta({
+  const seoMeta = buildWpSeoMeta({
     title: blogPost.title,
     metaDescription: blogPost.metaDescription,
     focusKeyword: primaryKeyword,
@@ -611,8 +611,8 @@ async function cherylGenerateBlog(
           checks: aeoGeo.checks,
           qaPairs: aeoGeo.qaPairs,
         },
-        rankMath: rankMath.meta,
-        rankMathPreview: schemaPreview({
+        seoMeta: seoMeta.meta,
+        seoMetaPreview: schemaPreview({
           title: blogPost.title,
           metaDescription: blogPost.metaDescription,
           focusKeyword: primaryKeyword,

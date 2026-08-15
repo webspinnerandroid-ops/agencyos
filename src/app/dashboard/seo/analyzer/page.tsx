@@ -28,6 +28,7 @@ interface AnalyzeResponse {
   wordCount: number;
   fetched?: boolean;
   fetchError?: string;
+  scoredBody?: string;
   seo: { total: number; checks: EngineCheck[] } | null;
   aeoGeo: { aeoScore: number; geoSscore: number; checks: EngineCheck[] } | null;
   scoreGate: {
@@ -50,6 +51,8 @@ export default function SeoAnalyzerPage() {
   const [text, setText] = useState("");
   const [title, setTitle] = useState("");
   const [keyword, setKeyword] = useState("");
+  const [pageUrl, setPageUrl] = useState("");
+  const [metaDescription, setMetaDescription] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AnalyzeResponse | null>(null);
@@ -82,6 +85,10 @@ export default function SeoAnalyzerPage() {
                 text: text,
                 title: title.trim() || undefined,
                 keyword: keyword.trim() || undefined,
+                // Match the hosted audit: same keyword/slug/meta inputs so a
+                // pasted copy of a live page scores identically to the URL.
+                pageUrl: pageUrl.trim() || undefined,
+                metaDescription: metaDescription.trim() || undefined,
               }
         ),
       });
@@ -165,6 +172,28 @@ export default function SeoAnalyzerPage() {
                 placeholder="e.g., custom software development"
                 value={keyword}
                 onChange={(e) => setKeyword(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="analyze-page-url">
+                Page URL this content lives at (optional — used to match the hosted audit&apos;s keyword &amp; slug)
+              </Label>
+              <Input
+                id="analyze-page-url"
+                placeholder="https://example.com/blog/post"
+                value={pageUrl}
+                onChange={(e) => setPageUrl(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="analyze-meta">
+                Meta description from the page (optional — used for the meta description check)
+              </Label>
+              <Input
+                id="analyze-meta"
+                placeholder="Paste the page's meta description to match its hosted score"
+                value={metaDescription}
+                onChange={(e) => setMetaDescription(e.target.value)}
               />
             </div>
             <div className="space-y-2">
@@ -256,6 +285,25 @@ export default function SeoAnalyzerPage() {
               </p>
             )}
           </Card>
+
+          {/* Scored content — what the engines actually read, so a URL audit
+              and a pasted-text audit of the same page can be compared 1:1 */}
+          {result.scoredBody && (
+            <Card className="p-6">
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <div>
+                  <h2 className="text-lg font-semibold">Scored content</h2>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    The exact body the engines scored. Copy it and re-paste in text
+                    mode (with the page URL + meta description) for an identical score.
+                  </p>
+                </div>
+              </div>
+              <pre className="text-xs text-muted-foreground overflow-x-auto max-h-64 whitespace-pre-wrap break-all rounded-md border bg-muted/30 p-3">
+                {result.scoredBody}
+              </pre>
+            </Card>
+          )}
 
           {/* Score breakdowns */}
           <Card className="p-6">

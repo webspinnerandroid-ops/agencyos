@@ -31,22 +31,33 @@ export const generateContentSchema = z
     // JSON-LD schema types to generate with the post (Article is always
     // included). "auto" detects from the content (FAQPage from Q&A pairs,
     // HowTo/Recipe from numbered steps).
+    // JSON-LD schema types to generate with the post (Article is always
+    // included). "auto" detects from the content (FAQPage from Q&A pairs,
+    // HowTo/Recipe from numbered steps). Everything above is OPTIONAL — when
+    // no title/topic/keywords are given, the backend auto-selects a topic
+    // from the questions people are asking (trends).
     schemaTypes: z
       .union([
-        z.array(z.enum(["Article", "FAQPage", "HowTo", "Recipe"])),
+        z.array(
+          z.enum([
+            "Article",
+            "FAQPage",
+            "HowTo",
+            "Recipe",
+            "Product",
+            "Service",
+            "Organization",
+            "LocalBusiness",
+            "Event",
+            "Course",
+            "SoftwareApplication",
+            "VideoObject",
+            "Person",
+          ])
+        ),
         z.literal("auto"),
       ])
       .optional(),
-  })
-  .refine(
-    (v) =>
-      !!v.title ||
-      !!v.topic ||
-      (Array.isArray(v.keywords) && v.keywords.length > 0),
-    {
-      message: "Provide a title, keywords, or a topic to generate from.",
-      path: ["title"],
-    }
-  );
+  });
 
 export type GenerateContentInput = z.infer<typeof generateContentSchema>;

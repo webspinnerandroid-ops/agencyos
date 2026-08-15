@@ -1,6 +1,6 @@
 -- Migration: 039_aeo_geo_gate
 --
--- Score-based publish gate now covers BOTH the Rank Math-style SEO score and
+-- Score-based publish gate now covers BOTH the on-page SEO score and
 -- the AEO/GEO readiness score, and below-threshold blogs are auto-rewritten
 -- through Cheryl's pipeline (guarded to a max of 2 rewrites per post so a
 -- stubborn keyword can't loop forever).

@@ -13,7 +13,7 @@
  *      so nothing sub-gate is ever force-saved.
  */
 
-import { analyzeContent, type AnalyzeResult } from "@/lib/seo/analyzer";
+import { analyzeContent, deriveKeyword, type AnalyzeResult } from "@/lib/seo/analyzer";
 import { generateText } from "@/lib/ai/orchestrator";
 import {
   getScoreGate,
@@ -21,7 +21,7 @@ import {
   buildGateFeedback,
   MAX_SCORE_ATTEMPTS,
 } from "@/lib/score-gate";
-import type { RankMathResult } from "@/lib/rankmath";
+import type { SeoScoreResult } from "@/lib/seo-scorer";
 import type { AeoGeoResult } from "@/lib/aeo-geo";
 
 export interface RewriteRequest {
@@ -36,7 +36,7 @@ export interface RewriteRequest {
 export interface RewriteAttempt {
   attempt: number;
   body: string;
-  seo: RankMathResult | null;
+  seo: SeoScoreResult | null;
   aeoGeo: AeoGeoResult | null;
   passed: boolean;
   feedback: string;
@@ -57,13 +57,26 @@ export interface RewriteResult {
   title: string;
 }
 
+/** Pull a meta description the model embedded as "Meta description: …". */
+function extractMetaDescription(body: string): string {
+  const m = body.match(/^Meta description[\s:—\-]+(.+)$/im);
+  if (m && m[1].trim()) return m[1].trim().slice(0, 320);
+  return "";
+}
+
 /** Score text-mode content through the analyzer's shared path. */
 async function scoreText(
   text: string,
   title: string,
-  keyword: string
+  keyword: string,
+  metaDescription = ""
 ): Promise<AnalyzeResult> {
-  const result = await analyzeContent({ text, title, keyword });
+  const result = await analyzeContent({
+    text,
+    title,
+    keyword,
+    metaDescription: metaDescription || undefined,
+  });
   return result;
 }
 
@@ -80,7 +93,11 @@ export async function rewriteToPassGate(
   if (!text) throw new Error("Provide a piece of text to rewrite.");
 
   const title = (input.title ?? "").trim() || "Rewritten content";
-  const keyword = (input.keyword ?? "").trim() || (input.title ?? "").trim() || "the topic";
+  // Derive a real working keyword from the pasted content — never a
+  // placeholder — so the rewrite targets the actual subject and the gate is
+  // reachable (a keyword like "the topic" can never score 80+).
+  const keyword =
+    (input.keyword ?? "").trim() || deriveKeyword(title, text);
 
   const original = await scoreText(text, title, keyword);
   const originalPassed =
@@ -91,10 +108,11 @@ export async function rewriteToPassGate(
   const attempts: RewriteAttempt[] = [];
   let currentBody = text;
   let currentTitle = title;
+  let currentMeta = extractMetaDescription(text);
   let final: AnalyzeResult = original;
 
   for (let attempt = 1; attempt <= MAX_SCORE_ATTEMPTS; attempt++) {
-    const scored = await scoreText(currentBody, currentTitle, keyword);
+    const scored = await scoreText(currentBody, currentTitle, keyword, currentMeta);
     const passed =
       scored.seo != null &&
       scored.aeoGeo != null &&
@@ -116,7 +134,7 @@ export async function rewriteToPassGate(
 
     // Rewrite with the exact failing checks as guidance.
     const feedback = buildGateFeedback(
-      scored.seo ?? (emptySeo() as unknown as RankMathResult),
+      scored.seo ?? (emptySeo() as unknown as SeoScoreResult),
       scored.aeoGeo ?? (emptyAeo() as unknown as AeoGeoResult),
       gate
     );
@@ -126,6 +144,7 @@ export async function rewriteToPassGate(
 
 Rules for every rewrite:
 - Keep the same topic, primary keyword "${keyword}", and overall meaning — do not change facts or tone.
+- Begin with a single line exactly like: Meta description: <a 120-160 character description that contains the primary keyword>.
 - Improve the structure: a clear opening definition, H2/H3 subheadings, short paragraphs (under 120 words).
 - Include the primary keyword naturally in the title, first paragraph, a heading, and the meta description.
 - Add a FAQ section with 3-5 direct question/answer pairs.
@@ -146,7 +165,9 @@ Rules for every rewrite:
       const cleaned = (rewritten ?? "").trim();
       // The model may return a JSON-ish envelope; prefer markdown as-is.
       currentBody = cleaned || currentBody;
-      // Try to lift an improved title from a leading markdown H1, else keep.
+      // Lift the meta description the model embedded (feeds the meta check),
+      // then an improved title from a leading markdown H1, else keep both.
+      currentMeta = extractMetaDescription(currentBody) || currentMeta;
       const h1 = currentBody.match(/^#\s+(.+)$/m);
       if (h1) currentTitle = h1[1].trim().slice(0, 120) || currentTitle;
     } catch (err) {
@@ -186,7 +207,7 @@ Rules for every rewrite:
   };
 }
 
-function emptySeo(): RankMathResult {
+function emptySeo(): SeoScoreResult {
   return { total: 0, grade: "red", keyword: "", wordCount: 0, checks: [] };
 }
 

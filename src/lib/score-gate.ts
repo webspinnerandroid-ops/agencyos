@@ -12,7 +12,7 @@
 // One knob controls the whole system: SEO_SCORE_PUBLISH_MIN (default 80),
 // the same env var the publish gate has always used.
 
-import type { RankMathResult } from "@/lib/rankmath";
+import type { SeoScoreResult } from "@/lib/seo-scorer";
 import type { AeoGeoResult } from "@/lib/aeo-geo";
 import type { BlogImageSpec, GeneratedBlogImage } from "@/lib/blog-images";
 
@@ -56,7 +56,7 @@ export class ScoreGateError extends Error {
     seo: number,
     aeoGeo: number,
     gate: number,
-    seoResult: RankMathResult,
+    seoResult: SeoScoreResult,
     aeoResult: AeoGeoResult
   ) {
     const checks: GateCheckFailure[] = [
@@ -94,7 +94,7 @@ export class ScoreGateError extends Error {
  * of guessing. Appended to the generation prompt's user message.
  */
 export function buildGateFeedback(
-  seoResult: RankMathResult,
+  seoResult: SeoScoreResult,
   aeoResult: AeoGeoResult,
   gate: number
 ): string {

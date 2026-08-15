@@ -81,7 +81,7 @@ agency-os/
 | `cms.ts` | CMS blocks, `renderBlocks` → HTML, blog-body rendering |
 | `content-links.ts` | Internal-link resolution against real pages + "Related reading" |
 | `blog-images.ts` | Image selection/specs for blogs (max 3, spaced, alternating wrap) |
-| `rankmath.ts` | Rank Math–style SEO scoring engine (100-point, per-check) |
+| `seo-scorer.ts` | On-page SEO scoring engine (100-point, per-check) |
 | `aeo-geo.ts` | AI Engine Optimization / Generative Engine Optimization scoring |
 | `docusign.ts` | DocuSign envelope creation + signed-doc storage |
 | `campaign-plans.ts` / `campaign-refine.ts` / `campaign-from-proposal.ts` | Campaign plan CRUD, Malory refine flow, proposal→campaign |
@@ -92,7 +92,7 @@ agency-os/
 | `inngest/` | Background-job client + function definitions |
 | `totp.ts` | RFC 6238 TOTP (2FA) — dependency-free, validated against official vectors |
 | `nav-sections.ts` | Shared dashboard navigation model (Work / Plan / Manage) |
-| `aeo-geo.test.ts`, `rankmath.test.ts`, `totp.test.ts`, `blog-images.test.ts`, … | Vitest suites (172 tests) |
+| `aeo-geo.test.ts`, `seo-scorer.test.ts`, `totp.test.ts`, `blog-images.test.ts`, … | Vitest suites |
 
 ---
 
@@ -294,13 +294,13 @@ prompt before calling the provider.
 **Blog pipeline:** title/keywords → research → outline → body (1500–2000 words) →
 featured image + ≤3 images spaced by paragraphs, alternating left/right text wrap →
 internal links (resolved against real KB/CMS pages, "Related reading" auto-appended when
-none) → external links from research only → Rank Math score + gate.
+none) → external links from research only → on-page score + gate.
 
 ---
 
 ## 10. Scoring engines
 
-- **Rank Math style** (`src/lib/rankmath.ts`): 100-point pass/fail accumulation —
+- **On-page SEO** (`src/lib/seo-scorer.ts`): 100-point pass/fail accumulation —
   keyword in title/meta/slug/first 10%/body, density, content-length scaling, outbound
   dofollow link, internal link, image alts containing keyword, paragraph readability
   (≤120 words), subheadings. Displays on content (Recent Content / post detail).

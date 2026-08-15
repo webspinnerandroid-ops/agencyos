@@ -6,7 +6,7 @@
  * Perplexity, Google AI Overviews). GEO (Generative Engine Optimization)
  * measures how likely a generative engine is to cite the content as a source.
  *
- * Like the Rank Math-style scorer, this is a pure, dependency-free heuristic
+ * Like the on-page SEO scorer, this is a pure, dependency-free heuristic
  * engine — no LLM calls, so it can run on every piece of content at zero
  * marginal cost. Scores surface alongside the existing SEO score on content.
  *
@@ -63,8 +63,8 @@ export interface AeoGeoInput {
   hasArticleSchema?: boolean;
 }
 
-// Reuse the rankmath plain-text helpers so parsing stays consistent.
-import { plainText, countWords } from "./rankmath";
+// Reuse the scorer plain-text helpers so parsing stays consistent.
+import { plainText, countWords } from "./seo-scorer";
 
 // The heuristic engine above is the free, always-on default. For editors who
 // want deeper judgment, scoreAeoGeoWithLLM / resolveAeoGeoScore add an

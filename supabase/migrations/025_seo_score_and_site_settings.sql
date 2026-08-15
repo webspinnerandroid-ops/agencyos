@@ -1,7 +1,7 @@
 -- ============================================================================
 -- Migration: 025_seo_score_and_site_settings
 --
--- 1. posts: denormalized on-page SEO score columns (Rank Math-style) so list
+-- 1. posts: denormalized on-page SEO score columns so list
 --    queries never touch the content JSONB blob.
 -- 2. site_settings: a single global row (id = 1) for platform-level settings
 --    (landing hero media mode / video URL).

@@ -13,7 +13,7 @@ export interface PostRow {
   scheduled_at: string | null;
   tier_level?: number | null;
   created_at?: string | null;
-  /** Denormalized Rank Math-style on-page SEO score (migration 025). */
+  /** Denormalized on-page SEO score (migration 025). */
   seo_score?: number | null;
   seo_checks?: unknown;
   /** Denormalized AEO/GEO readiness score (migration 039/060). */

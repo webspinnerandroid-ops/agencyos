@@ -116,7 +116,7 @@ export function getBlogPrompt(brandVoice?: string, seoContext?: SeoContext): str
   const audience = seoContext?.targetAudience ?? "a general audience";
   const industry = seoContext?.industry ?? "";
   // The content-length test awards 60% of its points at 1500-2000 words and
-  // 70% at 2000-2500 (see src/lib/rankmath.ts contentLengthMultiplier). 2500+
+  // 70% at 2000-2500 (see src/lib/seo-scorer.ts contentLengthMultiplier). 2500+
   // would pay 100% but empirically times out generation; 1500-2000 is the
   // sweet spot for depth, scoring, and reliable generation — so every post
   // targets ~1750 unless a caller explicitly overrides.

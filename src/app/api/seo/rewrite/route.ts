@@ -3,7 +3,7 @@ import { getTenantId } from "@/lib/auth";
 import { getCurrentWorkspaceId } from "@/lib/workspace";
 import { createServiceClient } from "@/lib/supabase/server";
 import { rewriteToPassGate } from "@/lib/seo/rewriter";
-import { buildRankMathMeta, schemaPreview } from "@/lib/seo/rank-math-meta";
+import { buildWpSeoMeta, schemaPreview } from "@/lib/seo/wp-seo-meta";
 
 /**
  * POST /api/seo/rewrite
@@ -46,7 +46,7 @@ export async function POST(request: NextRequest) {
     const finalTitle = (result.final.title || result.title || "Rewritten content").slice(0, 300);
     const description = result.finalScores.seo != null ? finalTitle : "";
 
-    const rankMath = buildRankMathMeta({
+    const seoMeta = buildWpSeoMeta({
       title: finalTitle,
       metaDescription: description,
       focusKeyword: result.keyword,
@@ -84,7 +84,7 @@ export async function POST(request: NextRequest) {
           original_score_aeo_geo: result.originalScores.aeoGeo,
           attempts: result.attempts.length,
           passed: result.passed,
-          rankMath: rankMath.meta,
+          seoMeta: seoMeta.meta,
           schemaPreview: schemaPreview({
             title: finalTitle,
             metaDescription: description,

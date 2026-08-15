@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { fetchCompetitorHtml } from "./competitor-fetch";
+import {
+  fetchCompetitorHtml,
+  fetchCompetitorHtmlDetailed,
+} from "./competitor-fetch";
 
 function textResponse(body: string, status = 200) {
   return new Response(body, { status });
@@ -51,5 +54,42 @@ describe("fetchCompetitorHtml", () => {
     delete process.env.HEADLESS_BROWSER_ENABLED;
     const html = await fetchCompetitorHtml("https://a.com");
     expect(html).toBeNull();
+  });
+
+  it("reports a homepage redirect instead of silently scoring the wrong page", async () => {
+    // A subdirectory-install trap: /blog/post bounces to the bare homepage.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(null, {
+          status: 301,
+          headers: { location: "https://a.com/" },
+        })
+      )
+    );
+    delete process.env.HEADLESS_BROWSER_EXECUTABLE;
+    delete process.env.HEADLESS_BROWSER_ENABLED;
+    const out = await fetchCompetitorHtmlDetailed("https://a.com/blog/post");
+    expect(out.html).toBeNull();
+    expect(out.redirectedHome).toBe(true);
+    expect(out.finalUrl).toBe("https://a.com/");
+  });
+
+  it("follows a same-host redirect to another real page", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 301,
+          headers: { location: "/blog/post/" },
+        })
+      )
+      .mockResolvedValueOnce(textResponse("<html>article</html>"));
+    vi.stubGlobal("fetch", fetchMock);
+    delete process.env.HEADLESS_BROWSER_EXECUTABLE;
+    delete process.env.HEADLESS_BROWSER_ENABLED;
+    const out = await fetchCompetitorHtmlDetailed("https://a.com/blog/post");
+    expect(out.html).toBe("<html>article</html>");
+    expect(out.redirectedHome).toBeUndefined();
   });
 });

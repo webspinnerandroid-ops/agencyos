@@ -864,7 +864,7 @@ export default function AnalyticsPage() {
                   <CardHeader>
                     <CardTitle>Content Score Health</CardTitle>
                     <CardDescription>
-                      Rank Math-style bands: green 81+, yellow 50–80, red below 50.
+                      On-page score bands: green 81+, yellow 50–80, red below 50.
                     </CardDescription>
                   </CardHeader>
                   <CardContent>

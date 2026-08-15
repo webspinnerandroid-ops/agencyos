@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { brandKeyword, homepageMarkdown, scoreCompetitorHtml } from "./audit-report";
-import { scoreContent } from "@/lib/rankmath";
+import { scoreContent } from "@/lib/seo-scorer";
 import { scoreAeoGeo } from "@/lib/aeo-geo";
 
 describe("brandKeyword", () => {

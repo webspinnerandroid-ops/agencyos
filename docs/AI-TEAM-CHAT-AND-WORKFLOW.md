@@ -5,7 +5,7 @@ AI agency you planned:
 
 1. **AI Team Chat** — a chat instance per *team × workspace × client*, where you
    talk to Cheryl, Woodhouse, Pam, Barry, Brett, AK, Ray, Sterling, Malory,
-   Lana and Cyril like coworkers (Marblism-style "meet your team" — but a real
+   Lana and Cyril like coworkers (a "meet your team" feel — but a real
    chat, not static cards).
 2. **Campaign Workflow Engine** — the ideal agency pipeline runs end-to-end with
    the team: onboarding → audit → proposal → approval → auto-configure → content

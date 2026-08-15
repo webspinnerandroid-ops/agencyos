@@ -278,12 +278,16 @@ The workflow definition lives at `.github/workflows/ci.yml`.
 
 A scheduled job (`.github/workflows/price-drift.yml`, 03:17 UTC daily, also manually runnable) compares every plan and hub's stored landing‑page price against its **live Stripe** monthly price — the same resolution logic the page builder uses (`src/lib/stripe-pricing.ts`). The job fails when anything drifts, and the shield badge above reflects the latest nightly result.
 
-- Set **`PRICE_DRIFT_WEBHOOK_URL`** (a Slack or Discord incoming webhook URL) as a repo **secret** to have each nightly result posted to chat — the job exits non‑zero if the delivery fails too, so a broken webhook can't hide a broken price.
+- **Notify on every nightly result** — add repo **secrets** (Settings → Secrets and variables → Actions):
+  - **`PRICE_DRIFT_WEBHOOK_URL`** — a Slack or Discord incoming webhook URL, or an **ntfy.sh topic** (`https://ntfy.sh/<your-topic>`) that pushes straight to your phone with no account or server setup (install the ntfy app and subscribe to the topic to receive it).
+  - **`PRICE_DRIFT_SMTP_URL`** + **`PRICE_DRIFT_SMTP_FROM`** + **`PRICE_DRIFT_SMTP_TO`** — all three together to also (or instead) email the result.
+  - The job exits non‑zero if a delivery fails too, so a broken notification channel can't hide a broken price.
 - Run the check manually: `Actions → Price Drift Check → Run workflow`, or locally:
   ```bash
   NEXT_PUBLIC_SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... STRIPE_SECRET_KEY=... \
   PRICE_DRIFT_WEBHOOK_URL=... node scripts/check-price-drift.cjs
   ```
+  Locally, `PRICE_DRIFT_WEBHOOK_URL=https://ntfy.sh/test` is a safe way to try the phone push without touching real channels.
 - The pure normalization/comparison logic lives in `src/lib/price-drift.ts` with unit tests in `src/lib/price-drift.test.ts`.
 
 ---

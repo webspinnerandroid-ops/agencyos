@@ -5,6 +5,9 @@ import {
   classifyDrift,
   detectWebhookService,
   buildWebhookPayload,
+  buildHeading,
+  buildSummaryText,
+  buildEmailContent,
   type DriftSummary,
 } from "./price-drift";
 
@@ -94,6 +97,44 @@ describe("webhook payloads", () => {
     expect(
       detectWebhookService("https://example.com/hooks/whatever")
     ).toBe("slack");
+    expect(
+      detectWebhookService("https://ntfy.sh/agencyos-price-drift")
+    ).toBe("ntfy");
+    expect(
+      detectWebhookService("https://ntfy.example.com/mytopic")
+    ).toBe("ntfy");
+  });
+
+  it("builds an ntfy push payload with topic, tags, and priority", () => {
+    const p = buildWebhookPayload(
+      "ntfy",
+      summary,
+      "456",
+      "agencyos-price-drift"
+    );
+    expect(p.topic).toBe("agencyos-price-drift");
+    expect(p.title).toContain("1 item(s) out of sync");
+    expect(p.tags).toEqual(["rotating_light"]);
+    expect(p.priority).toBe(5);
+    expect(p.click).toContain("github.com");
+    const message = p.message as string;
+    expect(message).toContain("hub content");
+    expect(message).toContain("DRIFT");
+    expect(message).toContain("$29/mo");
+  });
+
+  it("throws for an ntfy URL without a topic", () => {
+    expect(() => buildWebhookPayload("ntfy", summary, undefined)).toThrow(
+      "topic"
+    );
+  });
+
+  it("uses success tags and default priority when synced", () => {
+    const okSummary: DriftSummary = { ...summary, failures: 0, ok: true };
+    const p = buildWebhookPayload("ntfy", okSummary, undefined, "t");
+    expect(p.tags).toEqual(["white_check_mark"]);
+    expect(p.priority).toBe(3);
+    expect(p.click).toBeUndefined();
   });
 
   it("builds a Discord embed payload", () => {
@@ -135,5 +176,60 @@ describe("webhook payloads", () => {
       attachments: Array<{ color: string }>;
     };
     expect(slack.attachments[0].color).toBe("good");
+  });
+});
+
+describe("summary text and email content", () => {
+  const summary: DriftSummary = {
+    total: 2,
+    failures: 1,
+    ok: false,
+    entries: [
+      {
+        kind: "plan",
+        id: "foundation",
+        status: "SYNCED",
+        storedStr: "$49/mo",
+        liveStr: "$49/mo (price_abc)",
+      },
+      {
+        kind: "hub",
+        id: "content",
+        status: "DRIFT",
+        storedStr: "$29/mo",
+        liveStr: "$39/mo (price_def)",
+      },
+    ],
+  };
+
+  it("builds a heading that reflects the outcome", () => {
+    expect(buildHeading(summary)).toContain("1 item(s) out of sync");
+    expect(
+      buildHeading({ ...summary, failures: 0, ok: true })
+    ).toContain("ALL SYNCED (2/2)");
+  });
+
+  it("builds a one-line-per-entry summary with a next step", () => {
+    const text = buildSummaryText(summary);
+    expect(text).toContain("Checked 2 plan/hub display prices");
+    expect(text).toContain("plan foundation");
+    expect(text).toContain("hub content");
+    expect(text).toContain("DRIFT");
+    expect(text).toContain("fix the price in Stripe");
+  });
+
+  it("builds an email subject and body", () => {
+    const email = buildEmailContent(summary, "run-9");
+    expect(email.subject).toContain("1 item(s) out of sync");
+    expect(email.text).toContain("Workflow run: run-9");
+    expect(email.text).toContain("github.com/webspinnerandroid-ops/agencyos");
+    expect(email.text).toContain("hub content");
+  });
+
+  it("mentions no drift on success", () => {
+    const okSummary: DriftSummary = { ...summary, failures: 0, ok: true };
+    const text = buildSummaryText(okSummary);
+    expect(text).toContain("No drift detected");
+    expect(text).not.toContain("fix the price");
   });
 });

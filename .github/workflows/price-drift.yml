@@ -38,8 +38,15 @@ jobs:
           NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
-          # Optional Slack/Discord incoming webhook URL; when set, the result
-          # summary is posted there so failures are noticed without watching
-          # the Actions tab. Add it at Settings > Secrets and variables.
+          # Optional notification channels; when set, the result summary is
+          # pushed there so failures are noticed without watching the Actions
+          # tab. Add them at Settings > Secrets and variables.
+          #   - PRICE_DRIFT_WEBHOOK_URL: Slack/Discord incoming webhook URL,
+          #     or an ntfy.sh topic (https://ntfy.sh/<topic>) for phone push
+          #   - PRICE_DRIFT_SMTP_URL/FROM/TO: SMTP connection URL + sender +
+          #     recipient for email delivery (all three required together)
           PRICE_DRIFT_WEBHOOK_URL: ${{ secrets.PRICE_DRIFT_WEBHOOK_URL }}
+          PRICE_DRIFT_SMTP_URL: ${{ secrets.PRICE_DRIFT_SMTP_URL }}
+          PRICE_DRIFT_SMTP_FROM: ${{ secrets.PRICE_DRIFT_SMTP_FROM }}
+          PRICE_DRIFT_SMTP_TO: ${{ secrets.PRICE_DRIFT_SMTP_TO }}
         run: node scripts/check-price-drift.cjs

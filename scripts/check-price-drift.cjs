@@ -25,6 +25,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 // scripts/check-price-drift.ts
 var import_stripe = __toESM(require("stripe"));
 var import_supabase_js = require("@supabase/supabase-js");
+var import_nodemailer = __toESM(require("nodemailer"));
 
 // src/lib/landing-content.ts
 var DEFAULT_LANDING_CONTENT = {
@@ -333,12 +334,46 @@ function classifyDrift(stored, liveCents) {
   if (stored == null) return "DRIFT (stored unparseable)";
   return Math.abs(stored - liveCents / 100) > 1e-3 ? "DRIFT" : "SYNCED";
 }
-function detectWebhookService(url) {
-  return url.includes("discord.com/api/webhooks") ? "discord" : "slack";
+function buildHeading(summary) {
+  return summary.ok ? `\u2705 Price drift check: ALL SYNCED (${summary.total}/${summary.total})` : `\u274C Price drift check: ${summary.failures} item(s) out of sync`;
 }
-function buildWebhookPayload(service, summary, runId) {
-  const heading = summary.ok ? `\u2705 Price drift check: ALL SYNCED (${summary.total}/${summary.total})` : `\u274C Price drift check: ${summary.failures} item(s) out of sync`;
+function buildSummaryText(summary) {
+  const lines = summary.entries.map(
+    (e) => `- ${e.kind} ${e.id.padEnd(12)} ${e.status.padEnd(24)} stored=${e.storedStr.padEnd(10)} live=${e.liveStr}`
+  );
+  const guidance = summary.ok ? "No drift detected \u2014 the landing page matches what checkout charges." : "Action: fix the price in Stripe, then update the stored display copy.";
+  return [
+    `Checked ${summary.total} plan/hub display prices against live Stripe monthly prices.`,
+    "",
+    ...lines,
+    "",
+    guidance
+  ].join("\n");
+}
+function detectWebhookService(url) {
+  if (url.includes("discord.com/api/webhooks")) return "discord";
+  try {
+    const host = new URL(url).hostname;
+    if (host === "ntfy.sh" || host.endsWith(".ntfy.sh") || host.includes("ntfy"))
+      return "ntfy";
+  } catch {
+  }
+  return "slack";
+}
+function buildWebhookPayload(service, summary, runId, ntfyTopic) {
+  const heading = buildHeading(summary);
   const description = summary.ok ? `Checked ${summary.total} plan/hub display prices against live Stripe monthly prices. No drift detected \u2014 the landing page matches what checkout charges.` : `Checked ${summary.total} plan/hub display prices against live Stripe monthly prices. One or more prices have drifted \u2014 fix the price in Stripe, then update the stored display copy.`;
+  if (service === "ntfy") {
+    if (!ntfyTopic) throw new Error("ntfy webhook URL must include a topic");
+    return {
+      topic: ntfyTopic,
+      title: heading,
+      message: buildSummaryText(summary),
+      tags: summary.ok ? ["white_check_mark"] : ["rotating_light"],
+      priority: summary.ok ? 3 : 5,
+      click: runId ? "https://github.com/webspinnerandroid-ops/agencyos/actions" : void 0
+    };
+  }
   if (service === "discord") {
     return {
       username: "Price Drift Check",
@@ -378,12 +413,24 @@ live: ${e.liveStr}`,
     ]
   };
 }
+function buildEmailContent(summary, runId) {
+  const text = [
+    buildSummaryText(summary),
+    "",
+    `Workflow run: ${runId ?? "local run"}`,
+    "Repo: https://github.com/webspinnerandroid-ops/agencyos"
+  ].join("\n");
+  return { subject: buildHeading(summary), text };
+}
 
 // scripts/check-price-drift.ts
 var SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 var SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 var STRIPE_KEY = process.env.STRIPE_SECRET_KEY;
 var WEBHOOK_URL = process.env.PRICE_DRIFT_WEBHOOK_URL;
+var SMTP_URL = process.env.PRICE_DRIFT_SMTP_URL;
+var SMTP_FROM = process.env.PRICE_DRIFT_SMTP_FROM;
+var SMTP_TO = process.env.PRICE_DRIFT_SMTP_TO;
 var failures = 0;
 var entries = [];
 async function lookupMonthlyPrice(stripe, metaKey, id) {
@@ -435,10 +482,29 @@ async function sendWebhook(url, payload) {
     throw new Error(`webhook returned HTTP ${res.status} ${res.statusText}`);
   }
 }
+async function sendEmail(url, from, to, content) {
+  const transport = import_nodemailer.default.createTransport(url);
+  try {
+    await transport.sendMail({
+      from,
+      to,
+      subject: content.subject,
+      text: content.text
+    });
+  } finally {
+    transport.close();
+  }
+}
 async function main() {
   if (!SUPABASE_URL || !SUPABASE_KEY || !STRIPE_KEY) {
     console.error(
       "Missing env: need NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, STRIPE_SECRET_KEY"
+    );
+    process.exit(2);
+  }
+  if (SMTP_URL && (!SMTP_FROM || !SMTP_TO)) {
+    console.error(
+      "PRICE_DRIFT_SMTP_URL is set but PRICE_DRIFT_SMTP_FROM / PRICE_DRIFT_SMTP_TO are missing"
     );
     process.exit(2);
   }
@@ -472,18 +538,29 @@ async function main() {
     `
 ${summary.ok ? "ALL SYNCED" : `${failures} item(s) out of sync`}`
   );
+  const runId = process.env.GITHUB_RUN_ID;
   if (WEBHOOK_URL) {
-    const service = detectWebhookService(WEBHOOK_URL);
-    const payload = buildWebhookPayload(
-      service,
-      summary,
-      process.env.GITHUB_RUN_ID
-    );
     try {
-      await sendWebhook(WEBHOOK_URL, payload);
+      const service = detectWebhookService(WEBHOOK_URL);
+      const topic = service === "ntfy" ? new URL(WEBHOOK_URL).pathname.replace(/^\/+/, "") : void 0;
+      await sendWebhook(
+        WEBHOOK_URL,
+        buildWebhookPayload(service, summary, runId, topic)
+      );
       console.log(`Results posted to ${service} webhook.`);
     } catch (err) {
-      console.error(`Failed to post results to webhook: ${err.message}`);
+      console.error(
+        `Failed to post results to webhook: ${err.message}`
+      );
+      failures += 1;
+    }
+  }
+  if (SMTP_URL) {
+    try {
+      await sendEmail(SMTP_URL, SMTP_FROM, SMTP_TO, buildEmailContent(summary, runId));
+      console.log("Results emailed.");
+    } catch (err) {
+      console.error(`Failed to email results: ${err.message}`);
       failures += 1;
     }
   }

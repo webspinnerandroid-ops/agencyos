@@ -8,24 +8,35 @@
 //
 // Exits non-zero when any plan/hub is DRIFTED (stored != live) or has NO
 // Stripe price (missing product / no active monthly price), so it can gate a
-// scheduled CI job. When PRICE_DRIFT_WEBHOOK_URL is set (Slack or Discord
-// incoming webhook), the full result summary is posted there too, so a
-// failing nightly run is noticed even if nobody watches the Actions tab.
+// scheduled CI job. Results can be pushed out so a failing nightly run is
+// noticed even if nobody watches the Actions tab:
+//   - PRICE_DRIFT_WEBHOOK_URL  Slack or Discord incoming webhook, or an
+//                              ntfy.sh topic (https://ntfy.sh/<topic>) that
+//                              pushes straight to subscribers' phones with
+//                              no account or server setup.
+//   - PRICE_DRIFT_SMTP_URL     SMTP/SMTPS connection URL for email delivery
+//                              (requires PRICE_DRIFT_SMTP_FROM/TO too).
+// A failed delivery counts as a failure, so a broken notification channel
+// can't hide a broken price.
 //
 // Build:  node_modules/.bin/esbuild scripts/check-price-drift.ts \
 //           --bundle --platform=node --format=cjs --outfile=scripts/check-price-drift.cjs \
-//           --external:stripe --external:@supabase/supabase-js
+//           --external:stripe --external:@supabase/supabase-js --external:nodemailer
 // Usage:  NEXT_PUBLIC_SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... STRIPE_SECRET_KEY=... \
-//           [PRICE_DRIFT_WEBHOOK_URL=...] node scripts/check-price-drift.cjs
+//           [PRICE_DRIFT_WEBHOOK_URL=...] \
+//           [PRICE_DRIFT_SMTP_URL=... PRICE_DRIFT_SMTP_FROM=... PRICE_DRIFT_SMTP_TO=...] \
+//           node scripts/check-price-drift.cjs
 
 import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
+import nodemailer from "nodemailer";
 import { mergeLandingContent } from "../src/lib/landing-content";
 import {
   normalizeStoredPrice,
   classifyDrift,
   fmt,
   buildWebhookPayload,
+  buildEmailContent,
   detectWebhookService,
   type DriftEntry,
   type DriftSummary,
@@ -35,6 +46,9 @@ const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const STRIPE_KEY = process.env.STRIPE_SECRET_KEY;
 const WEBHOOK_URL = process.env.PRICE_DRIFT_WEBHOOK_URL;
+const SMTP_URL = process.env.PRICE_DRIFT_SMTP_URL;
+const SMTP_FROM = process.env.PRICE_DRIFT_SMTP_FROM;
+const SMTP_TO = process.env.PRICE_DRIFT_SMTP_TO;
 
 let failures = 0;
 const entries: DriftEntry[] = [];
@@ -106,10 +120,35 @@ async function sendWebhook(url: string, payload: unknown): Promise<void> {
   }
 }
 
+async function sendEmail(
+  url: string,
+  from: string,
+  to: string,
+  content: { subject: string; text: string }
+): Promise<void> {
+  const transport = nodemailer.createTransport(url);
+  try {
+    await transport.sendMail({
+      from,
+      to,
+      subject: content.subject,
+      text: content.text,
+    });
+  } finally {
+    transport.close();
+  }
+}
+
 async function main(): Promise<void> {
   if (!SUPABASE_URL || !SUPABASE_KEY || !STRIPE_KEY) {
     console.error(
       "Missing env: need NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, STRIPE_SECRET_KEY"
+    );
+    process.exit(2);
+  }
+  if (SMTP_URL && (!SMTP_FROM || !SMTP_TO)) {
+    console.error(
+      "PRICE_DRIFT_SMTP_URL is set but PRICE_DRIFT_SMTP_FROM / PRICE_DRIFT_SMTP_TO are missing"
     );
     process.exit(2);
   }
@@ -156,20 +195,36 @@ async function main(): Promise<void> {
     `\n${summary.ok ? "ALL SYNCED" : `${failures} item(s) out of sync`}`
   );
 
+  const runId = process.env.GITHUB_RUN_ID;
+
   if (WEBHOOK_URL) {
-    const service = detectWebhookService(WEBHOOK_URL);
-    const payload = buildWebhookPayload(
-      service,
-      summary,
-      process.env.GITHUB_RUN_ID
-    );
     try {
-      await sendWebhook(WEBHOOK_URL, payload);
+      const service = detectWebhookService(WEBHOOK_URL);
+      const topic =
+        service === "ntfy"
+          ? new URL(WEBHOOK_URL).pathname.replace(/^\/+/, "")
+          : undefined;
+      await sendWebhook(
+        WEBHOOK_URL,
+        buildWebhookPayload(service, summary, runId, topic)
+      );
       console.log(`Results posted to ${service} webhook.`);
     } catch (err) {
       // A failed delivery must surface, or the whole point of the webhook
       // (noticing broken prices without watching Actions) is defeated.
-      console.error(`Failed to post results to webhook: ${(err as Error).message}`);
+      console.error(
+        `Failed to post results to webhook: ${(err as Error).message}`
+      );
+      failures += 1;
+    }
+  }
+
+  if (SMTP_URL) {
+    try {
+      await sendEmail(SMTP_URL, SMTP_FROM!, SMTP_TO!, buildEmailContent(summary, runId));
+      console.log("Results emailed.");
+    } catch (err) {
+      console.error(`Failed to email results: ${(err as Error).message}`);
       failures += 1;
     }
   }

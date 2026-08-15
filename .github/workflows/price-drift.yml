@@ -38,4 +38,8 @@ jobs:
           NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          # Optional Slack/Discord incoming webhook URL; when set, the result
+          # summary is posted there so failures are noticed without watching
+          # the Actions tab. Add it at Settings > Secrets and variables.
+          PRICE_DRIFT_WEBHOOK_URL: ${{ secrets.PRICE_DRIFT_WEBHOOK_URL }}
         run: node scripts/check-price-drift.cjs

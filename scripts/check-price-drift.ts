@@ -8,33 +8,36 @@
 //
 // Exits non-zero when any plan/hub is DRIFTED (stored != live) or has NO
 // Stripe price (missing product / no active monthly price), so it can gate a
-// scheduled CI job.
+// scheduled CI job. When PRICE_DRIFT_WEBHOOK_URL is set (Slack or Discord
+// incoming webhook), the full result summary is posted there too, so a
+// failing nightly run is noticed even if nobody watches the Actions tab.
 //
 // Build:  node_modules/.bin/esbuild scripts/check-price-drift.ts \
 //           --bundle --platform=node --format=cjs --outfile=scripts/check-price-drift.cjs \
 //           --external:stripe --external:@supabase/supabase-js
 // Usage:  NEXT_PUBLIC_SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... STRIPE_SECRET_KEY=... \
-//           node scripts/check-price-drift.cjs
+//           [PRICE_DRIFT_WEBHOOK_URL=...] node scripts/check-price-drift.cjs
 
 import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
 import { mergeLandingContent } from "../src/lib/landing-content";
+import {
+  normalizeStoredPrice,
+  classifyDrift,
+  fmt,
+  buildWebhookPayload,
+  detectWebhookService,
+  type DriftEntry,
+  type DriftSummary,
+} from "../src/lib/price-drift";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const STRIPE_KEY = process.env.STRIPE_SECRET_KEY;
+const WEBHOOK_URL = process.env.PRICE_DRIFT_WEBHOOK_URL;
 
 let failures = 0;
-
-function normalizeStoredPrice(value: string): number | null {
-  const n = parseFloat(String(value).replace(/[$,\s]/g, ""));
-  return Number.isFinite(n) ? n : null;
-}
-
-function fmt(cents: number): string {
-  const dollars = cents / 100;
-  return Number.isInteger(dollars) ? String(dollars) : dollars.toFixed(2);
-}
+const entries: DriftEntry[] = [];
 
 async function lookupMonthlyPrice(
   stripe: Stripe,
@@ -81,22 +84,26 @@ function checkEntry(
   live: { cents: number; priceId: string } | null
 ): void {
   const stored = normalizeStoredPrice(storedPrice);
-  let status: string;
-  if (!live) {
-    status = stored == null ? "NO STORED PRICE" : "NO STRIPE PRICE";
-  } else if (stored == null) {
-    status = "DRIFT (stored unparseable)";
-  } else {
-    status =
-      Math.abs(stored - live.cents / 100) > 0.001 ? "DRIFT" : "SYNCED";
-  }
+  const status = classifyDrift(stored, live?.cents ?? null);
   const liveStr = live ? `$${fmt(live.cents)}/mo (${live.priceId})` : "(missing)";
   const storedStr = stored != null ? `$${stored}/mo` : "(none)";
   const flag = status === "SYNCED" ? "  " : "✗ ";
   console.log(
     `${flag}${kind.padEnd(6)} ${id.padEnd(12)} stored=${storedStr.padEnd(10)} live=${liveStr}  -> ${status}`
   );
+  entries.push({ kind, id, status, storedStr, liveStr });
   if (status !== "SYNCED") failures += 1;
+}
+
+async function sendWebhook(url: string, payload: unknown): Promise<void> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    throw new Error(`webhook returned HTTP ${res.status} ${res.statusText}`);
+  }
 }
 
 async function main(): Promise<void> {
@@ -139,9 +146,34 @@ async function main(): Promise<void> {
     checkEntry("hub", h.hubId, h.price, live);
   }
 
+  const summary: DriftSummary = {
+    total: entries.length,
+    failures,
+    ok: failures === 0,
+    entries,
+  };
   console.log(
-    `\n${failures === 0 ? "ALL SYNCED" : `${failures} item(s) out of sync`}`
+    `\n${summary.ok ? "ALL SYNCED" : `${failures} item(s) out of sync`}`
   );
+
+  if (WEBHOOK_URL) {
+    const service = detectWebhookService(WEBHOOK_URL);
+    const payload = buildWebhookPayload(
+      service,
+      summary,
+      process.env.GITHUB_RUN_ID
+    );
+    try {
+      await sendWebhook(WEBHOOK_URL, payload);
+      console.log(`Results posted to ${service} webhook.`);
+    } catch (err) {
+      // A failed delivery must surface, or the whole point of the webhook
+      // (noticing broken prices without watching Actions) is defeated.
+      console.error(`Failed to post results to webhook: ${(err as Error).message}`);
+      failures += 1;
+    }
+  }
+
   process.exit(failures === 0 ? 0 : 1);
 }
 

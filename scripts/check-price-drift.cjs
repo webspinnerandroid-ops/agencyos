@@ -317,11 +317,7 @@ function mergeLandingContent(raw) {
   };
 }
 
-// scripts/check-price-drift.ts
-var SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
-var SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-var STRIPE_KEY = process.env.STRIPE_SECRET_KEY;
-var failures = 0;
+// src/lib/price-drift.ts
 function normalizeStoredPrice(value) {
   const n = parseFloat(String(value).replace(/[$,\s]/g, ""));
   return Number.isFinite(n) ? n : null;
@@ -330,6 +326,66 @@ function fmt(cents) {
   const dollars = cents / 100;
   return Number.isInteger(dollars) ? String(dollars) : dollars.toFixed(2);
 }
+function classifyDrift(stored, liveCents) {
+  if (liveCents == null) {
+    return stored == null ? "NO STORED PRICE" : "NO STRIPE PRICE";
+  }
+  if (stored == null) return "DRIFT (stored unparseable)";
+  return Math.abs(stored - liveCents / 100) > 1e-3 ? "DRIFT" : "SYNCED";
+}
+function detectWebhookService(url) {
+  return url.includes("discord.com/api/webhooks") ? "discord" : "slack";
+}
+function buildWebhookPayload(service, summary, runId) {
+  const heading = summary.ok ? `\u2705 Price drift check: ALL SYNCED (${summary.total}/${summary.total})` : `\u274C Price drift check: ${summary.failures} item(s) out of sync`;
+  const description = summary.ok ? `Checked ${summary.total} plan/hub display prices against live Stripe monthly prices. No drift detected \u2014 the landing page matches what checkout charges.` : `Checked ${summary.total} plan/hub display prices against live Stripe monthly prices. One or more prices have drifted \u2014 fix the price in Stripe, then update the stored display copy.`;
+  if (service === "discord") {
+    return {
+      username: "Price Drift Check",
+      embeds: [
+        {
+          title: heading,
+          color: summary.ok ? 3066993 : 15158332,
+          description,
+          fields: summary.entries.map((e) => ({
+            name: `${e.kind} ${e.id}`,
+            value: `${e.status}
+stored: ${e.storedStr}
+live: ${e.liveStr}`,
+            inline: true
+          })),
+          footer: runId ? { text: `Agency OS \xB7 workflow run ${runId}` } : void 0,
+          timestamp: (/* @__PURE__ */ new Date()).toISOString()
+        }
+      ]
+    };
+  }
+  return {
+    text: heading,
+    attachments: [
+      {
+        color: summary.ok ? "good" : "danger",
+        title: "Agency OS \xB7 Nightly Price Drift Check",
+        text: description,
+        fields: summary.entries.map((e) => ({
+          title: `${e.kind} ${e.id}`,
+          value: `${e.status} \u2014 stored ${e.storedStr}, live ${e.liveStr}`,
+          short: true
+        })),
+        footer: runId ? `workflow run ${runId}` : void 0,
+        ts: Math.floor(Date.now() / 1e3)
+      }
+    ]
+  };
+}
+
+// scripts/check-price-drift.ts
+var SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+var SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+var STRIPE_KEY = process.env.STRIPE_SECRET_KEY;
+var WEBHOOK_URL = process.env.PRICE_DRIFT_WEBHOOK_URL;
+var failures = 0;
+var entries = [];
 async function lookupMonthlyPrice(stripe, metaKey, id) {
   try {
     const products = await stripe.products.search({
@@ -359,21 +415,25 @@ async function lookupMonthlyPrice(stripe, metaKey, id) {
 }
 function checkEntry(kind, id, storedPrice, live) {
   const stored = normalizeStoredPrice(storedPrice);
-  let status;
-  if (!live) {
-    status = stored == null ? "NO STORED PRICE" : "NO STRIPE PRICE";
-  } else if (stored == null) {
-    status = "DRIFT (stored unparseable)";
-  } else {
-    status = Math.abs(stored - live.cents / 100) > 1e-3 ? "DRIFT" : "SYNCED";
-  }
+  const status = classifyDrift(stored, live?.cents ?? null);
   const liveStr = live ? `$${fmt(live.cents)}/mo (${live.priceId})` : "(missing)";
   const storedStr = stored != null ? `$${stored}/mo` : "(none)";
   const flag = status === "SYNCED" ? "  " : "\u2717 ";
   console.log(
     `${flag}${kind.padEnd(6)} ${id.padEnd(12)} stored=${storedStr.padEnd(10)} live=${liveStr}  -> ${status}`
   );
+  entries.push({ kind, id, status, storedStr, liveStr });
   if (status !== "SYNCED") failures += 1;
+}
+async function sendWebhook(url, payload) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) {
+    throw new Error(`webhook returned HTTP ${res.status} ${res.statusText}`);
+  }
 }
 async function main() {
   if (!SUPABASE_URL || !SUPABASE_KEY || !STRIPE_KEY) {
@@ -402,10 +462,31 @@ async function main() {
     const live = await lookupMonthlyPrice(stripe, "hub_id", h.hubId);
     checkEntry("hub", h.hubId, h.price, live);
   }
+  const summary = {
+    total: entries.length,
+    failures,
+    ok: failures === 0,
+    entries
+  };
   console.log(
     `
-${failures === 0 ? "ALL SYNCED" : `${failures} item(s) out of sync`}`
+${summary.ok ? "ALL SYNCED" : `${failures} item(s) out of sync`}`
   );
+  if (WEBHOOK_URL) {
+    const service = detectWebhookService(WEBHOOK_URL);
+    const payload = buildWebhookPayload(
+      service,
+      summary,
+      process.env.GITHUB_RUN_ID
+    );
+    try {
+      await sendWebhook(WEBHOOK_URL, payload);
+      console.log(`Results posted to ${service} webhook.`);
+    } catch (err) {
+      console.error(`Failed to post results to webhook: ${err.message}`);
+      failures += 1;
+    }
+  }
   process.exit(failures === 0 ? 0 : 1);
 }
 main().catch((err) => {

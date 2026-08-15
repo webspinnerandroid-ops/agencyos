@@ -53,10 +53,12 @@ export default function SeoAnalyzerPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<AnalyzeResponse | null>(null);
+  const [savedId, setSavedId] = useState<string | null>(null);
 
   const runAnalysis = async () => {
     setError(null);
     setResult(null);
+    setSavedId(null);
     if (mode === "url" && !url.trim()) {
       setError("Enter a URL to analyze.");
       return;
@@ -67,7 +69,9 @@ export default function SeoAnalyzerPage() {
     }
     setLoading(true);
     try {
-      const res = await fetch("/api/seo/analyze", {
+      // Saved to site_audits automatically — shows on the Monitored Sites
+      // dashboard with score history + re-audit.
+      const res = await fetch("/api/seo/audits", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -86,7 +90,8 @@ export default function SeoAnalyzerPage() {
         setError(data.error ?? "Analysis failed.");
         return;
       }
-      setResult(data);
+      setResult(data.result ?? data);
+      if (data.audit?.id) setSavedId(data.audit.id);
     } catch {
       setError("Network error while analyzing.");
     } finally {
@@ -196,6 +201,18 @@ export default function SeoAnalyzerPage() {
           )}
         </Button>
       </Card>
+
+      {savedId && (
+        <div className="p-4 rounded-md bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 text-sm flex items-center justify-between gap-3 flex-wrap">
+          <span className="text-green-700 dark:text-green-300">
+            ✓ Audit saved — it now appears on your Monitored Sites dashboard with
+            score history, so you can re-run it after edits and compare.
+          </span>
+          <a href="/dashboard/seo/sites" className="text-primary underline hover:underline shrink-0">
+            View Monitored Sites →
+          </a>
+        </div>
+      )}
 
       {result && (
         <div className="space-y-6">

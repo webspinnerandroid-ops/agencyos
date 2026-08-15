@@ -55,6 +55,14 @@ export default function SeoPage() {
         </Card>
 
         <Card>
+          <CardHeader><CardTitle className="flex items-center gap-2 text-base"><BarChart3 className="size-4 text-primary" />Monitored Sites</CardTitle><CardDescription>Track every audited URL's SEO / AEO / GEO scores over time.</CardDescription></CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">Saved audits with score history, re-audit after edits, and live Google traffic when connected.</p>
+            <Button className="w-full" variant="outline" onClick={() => window.location.href = "/dashboard/seo/sites"}>Open Sites</Button>
+          </CardContent>
+        </Card>
+
+        <Card>
           <CardHeader><CardTitle className="flex items-center gap-2 text-base"><BarChart3 className="size-4 text-primary" />Rankings</CardTitle><CardDescription>Track keyword rankings over time.</CardDescription></CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">Coming soon — connect Google Search Console to track keyword performance.</p>

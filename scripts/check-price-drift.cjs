@@ -23,6 +23,8 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // scripts/check-price-drift.ts
+var import_node_fs = __toESM(require("node:fs"));
+var import_node_path = __toESM(require("node:path"));
 var import_stripe = __toESM(require("stripe"));
 var import_supabase_js = require("@supabase/supabase-js");
 var import_nodemailer = __toESM(require("nodemailer"));
@@ -360,17 +362,16 @@ function detectWebhookService(url) {
   }
   return "slack";
 }
-function buildWebhookPayload(service, summary, runId, ntfyTopic) {
-  const heading = buildHeading(summary);
-  const description = summary.ok ? `Checked ${summary.total} plan/hub display prices against live Stripe monthly prices. No drift detected \u2014 the landing page matches what checkout charges.` : `Checked ${summary.total} plan/hub display prices against live Stripe monthly prices. One or more prices have drifted \u2014 fix the price in Stripe, then update the stored display copy.`;
+function buildPushPayload(service, opts, runId, ntfyTopic) {
+  const footerLabel = opts.footerLabel ?? "workflow run";
   if (service === "ntfy") {
     if (!ntfyTopic) throw new Error("ntfy webhook URL must include a topic");
     return {
       topic: ntfyTopic,
-      title: heading,
-      message: buildSummaryText(summary),
-      tags: summary.ok ? ["white_check_mark"] : ["rotating_light"],
-      priority: summary.ok ? 3 : 5,
+      title: opts.title,
+      message: opts.text,
+      tags: opts.success ? ["white_check_mark"] : ["rotating_light"],
+      priority: opts.success ? 3 : 5,
       click: runId ? "https://github.com/webspinnerandroid-ops/agencyos/actions" : void 0
     };
   }
@@ -379,39 +380,58 @@ function buildWebhookPayload(service, summary, runId, ntfyTopic) {
       username: "Price Drift Check",
       embeds: [
         {
-          title: heading,
-          color: summary.ok ? 3066993 : 15158332,
-          description,
-          fields: summary.entries.map((e) => ({
-            name: `${e.kind} ${e.id}`,
-            value: `${e.status}
-stored: ${e.storedStr}
-live: ${e.liveStr}`,
+          title: opts.title,
+          color: opts.success ? 3066993 : 15158332,
+          description: opts.description,
+          fields: opts.fields.map((f) => ({
+            name: f.name,
+            value: f.value,
             inline: true
           })),
-          footer: runId ? { text: `Agency OS \xB7 workflow run ${runId}` } : void 0,
+          footer: runId ? { text: `Agency OS \xB7 ${footerLabel} ${runId}` } : void 0,
           timestamp: (/* @__PURE__ */ new Date()).toISOString()
         }
       ]
     };
   }
   return {
-    text: heading,
+    text: opts.title,
     attachments: [
       {
-        color: summary.ok ? "good" : "danger",
-        title: "Agency OS \xB7 Nightly Price Drift Check",
-        text: description,
-        fields: summary.entries.map((e) => ({
-          title: `${e.kind} ${e.id}`,
-          value: `${e.status} \u2014 stored ${e.storedStr}, live ${e.liveStr}`,
+        color: opts.success ? "good" : "danger",
+        title: opts.attachmentTitle ?? "Agency OS \xB7 Nightly Price Drift Check",
+        text: opts.description,
+        fields: opts.fields.map((f) => ({
+          title: f.name,
+          value: f.value,
           short: true
         })),
-        footer: runId ? `workflow run ${runId}` : void 0,
+        footer: runId ? `${footerLabel} ${runId}` : void 0,
         ts: Math.floor(Date.now() / 1e3)
       }
     ]
   };
+}
+function buildWebhookPayload(service, summary, runId, ntfyTopic) {
+  const heading = buildHeading(summary);
+  const description = summary.ok ? `Checked ${summary.total} plan/hub display prices against live Stripe monthly prices. No drift detected \u2014 the landing page matches what checkout charges.` : `Checked ${summary.total} plan/hub display prices against live Stripe monthly prices. One or more prices have drifted \u2014 fix the price in Stripe, then update the stored display copy.`;
+  return buildPushPayload(
+    service,
+    {
+      title: heading,
+      success: summary.ok,
+      description,
+      text: buildSummaryText(summary),
+      fields: summary.entries.map((e) => ({
+        name: `${e.kind} ${e.id}`,
+        value: `${e.status}
+stored: ${e.storedStr}
+live: ${e.liveStr}`
+      }))
+    },
+    runId,
+    ntfyTopic
+  );
 }
 function buildEmailContent(summary, runId) {
   const text = [
@@ -422,6 +442,72 @@ function buildEmailContent(summary, runId) {
   ].join("\n");
   return { subject: buildHeading(summary), text };
 }
+function formatMonthlyPeriod(start, end) {
+  const fmtDate = (d) => {
+    const m = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][d.getUTCMonth()];
+    return `${m} ${d.getUTCDate()}, ${d.getUTCFullYear()}`;
+  };
+  return `${fmtDate(start).slice(0, fmtDate(start).lastIndexOf(","))} \u2013 ${fmtDate(end)}`;
+}
+function buildMonthlyHeading(stats) {
+  if (stats.totalRuns === 0) {
+    return "\u{1F4CA} Monthly price-drift summary: no nightly runs in this period";
+  }
+  return stats.failed === 0 ? `\u{1F4CA} Monthly price-drift summary: ${stats.succeeded}/${stats.totalRuns} runs passed` : `\u{1F4CA} Monthly price-drift summary: ${stats.failed} of ${stats.totalRuns} runs failed`;
+}
+function buildMonthlyText(stats) {
+  const lines = [
+    `Period: ${stats.period}`,
+    `Runs: ${stats.totalRuns} total \u2014 ${stats.succeeded} passed, ${stats.failed} failed, ${stats.cancelled} cancelled.`
+  ];
+  if (stats.latest) {
+    const conclusion = stats.latest.conclusion || stats.latest.status;
+    lines.push(
+      `Latest: ${conclusion} (run ${stats.latest.runId}, ${stats.latest.createdAt.slice(0, 10)})`
+    );
+  }
+  lines.push(
+    "",
+    stats.failed > 0 ? "Action: open the Actions tab and investigate the failed nightly runs \u2014 a red check means stored prices drifted from what Stripe charges." : "All good \u2014 no drift was detected across the last 30 nightly checks."
+  );
+  return lines.join("\n");
+}
+function buildMonthlyWebhookPayload(service, stats, runId, ntfyTopic) {
+  const heading = buildMonthlyHeading(stats);
+  const description = stats.failed === 0 ? `All ${stats.totalRuns} nightly price-drift checks in this period passed.` : `${stats.failed} of ${stats.totalRuns} nightly price-drift checks in this period failed \u2014 stored display prices drifted from what Stripe charges.`;
+  return buildPushPayload(
+    service,
+    {
+      title: heading,
+      success: stats.failed === 0,
+      description,
+      text: buildMonthlyText(stats),
+      fields: [
+        { name: "Period", value: stats.period },
+        { name: "Runs", value: `${stats.totalRuns} (${stats.succeeded} ok / ${stats.failed} failed / ${stats.cancelled} cancelled)` },
+        ...stats.latest ? [
+          {
+            name: "Latest run",
+            value: `${stats.latest.conclusion || stats.latest.status} \xB7 ${stats.latest.createdAt.slice(0, 10)}`
+          }
+        ] : []
+      ],
+      attachmentTitle: "Agency OS \xB7 Monthly Price Drift Summary",
+      footerLabel: "monthly run"
+    },
+    runId,
+    ntfyTopic
+  );
+}
+function buildMonthlyEmailContent(stats, runId) {
+  const text = [
+    buildMonthlyText(stats),
+    "",
+    `Monthly run: ${runId ?? "local run"}`,
+    "Repo: https://github.com/webspinnerandroid-ops/agencyos"
+  ].join("\n");
+  return { subject: buildMonthlyHeading(stats), text };
+}
 
 // scripts/check-price-drift.ts
 var SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -431,6 +517,104 @@ var WEBHOOK_URL = process.env.PRICE_DRIFT_WEBHOOK_URL;
 var SMTP_URL = process.env.PRICE_DRIFT_SMTP_URL;
 var SMTP_FROM = process.env.PRICE_DRIFT_SMTP_FROM;
 var SMTP_TO = process.env.PRICE_DRIFT_SMTP_TO;
+var MONTHLY = process.argv.includes("--monthly-summary");
+var REPO = process.env.GITHUB_REPOSITORY ?? "webspinnerandroid-ops/agencyos";
+function resolveGitHubToken() {
+  if (process.env.GITHUB_TOKEN) return process.env.GITHUB_TOKEN;
+  if (process.env.GH_TOKEN) return process.env.GH_TOKEN;
+  try {
+    const p = import_node_path.default.join(__dirname, "..", ".freebuff", "gh-token.txt");
+    if (import_node_fs.default.existsSync(p)) return import_node_fs.default.readFileSync(p, "utf8").trim();
+  } catch {
+  }
+  return void 0;
+}
+async function fetchMonthlyRuns() {
+  const token = resolveGitHubToken();
+  const headers = {
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28"
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const url = `https://api.github.com/repos/${REPO}/actions/workflows/price-drift.yml/runs?per_page=30`;
+  const res = await fetch(url, { headers });
+  if (!res.ok) {
+    throw new Error(`GitHub API ${res.status} ${res.statusText} fetching workflow runs`);
+  }
+  const data = await res.json();
+  const runs = data.workflow_runs ?? [];
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1e3;
+  const inWindow = runs.filter(
+    (r) => new Date(r.created_at).getTime() >= cutoff
+  );
+  const succeeded = inWindow.filter((r) => r.conclusion === "success").length;
+  const failed = inWindow.filter(
+    (r) => r.conclusion != null && r.conclusion !== "success" && r.conclusion !== "cancelled" && r.conclusion !== "skipped"
+  ).length;
+  const cancelled = inWindow.filter(
+    (r) => r.conclusion === "cancelled" || r.conclusion === "skipped"
+  ).length;
+  const latest = inWindow[0] ? {
+    status: inWindow[0].status,
+    conclusion: inWindow[0].conclusion ?? null,
+    runId: String(inWindow[0].id),
+    createdAt: inWindow[0].created_at
+  } : null;
+  return {
+    period: formatMonthlyPeriod(
+      new Date(cutoff),
+      /* @__PURE__ */ new Date()
+    ),
+    totalRuns: inWindow.length,
+    succeeded,
+    failed,
+    cancelled,
+    latest
+  };
+}
+async function runMonthlySummary() {
+  let failures2 = 0;
+  if (!WEBHOOK_URL && !SMTP_URL) {
+    console.error(
+      "Monthly summary needs at least one channel: set PRICE_DRIFT_WEBHOOK_URL and/or PRICE_DRIFT_SMTP_URL(+FROM/TO)."
+    );
+    return 2;
+  }
+  const stats = await fetchMonthlyRuns();
+  console.log(buildMonthlyText(stats));
+  const runId = process.env.GITHUB_RUN_ID;
+  if (WEBHOOK_URL) {
+    try {
+      const service = detectWebhookService(WEBHOOK_URL);
+      const topic = service === "ntfy" ? new URL(WEBHOOK_URL).pathname.replace(/^\/+/, "") : void 0;
+      await sendWebhook(
+        WEBHOOK_URL,
+        buildMonthlyWebhookPayload(service, stats, runId, topic)
+      );
+      console.log(`Monthly summary posted to ${service} webhook.`);
+    } catch (err) {
+      console.error(
+        `Failed to post monthly summary to webhook: ${err.message}`
+      );
+      failures2 += 1;
+    }
+  }
+  if (SMTP_URL) {
+    try {
+      await sendEmail(
+        SMTP_URL,
+        SMTP_FROM,
+        SMTP_TO,
+        buildMonthlyEmailContent(stats, runId)
+      );
+      console.log("Monthly summary emailed.");
+    } catch (err) {
+      console.error(`Failed to email monthly summary: ${err.message}`);
+      failures2 += 1;
+    }
+  }
+  return failures2 === 0 ? 0 : 1;
+}
 var failures = 0;
 var entries = [];
 async function lookupMonthlyPrice(stripe, metaKey, id) {
@@ -496,6 +680,10 @@ async function sendEmail(url, from, to, content) {
   }
 }
 async function main() {
+  if (MONTHLY) {
+    process.exitCode = await runMonthlySummary();
+    return;
+  }
   if (!SUPABASE_URL || !SUPABASE_KEY || !STRIPE_KEY) {
     console.error(
       "Missing env: need NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, STRIPE_SECRET_KEY"
@@ -564,9 +752,9 @@ ${summary.ok ? "ALL SYNCED" : `${failures} item(s) out of sync`}`
       failures += 1;
     }
   }
-  process.exit(failures === 0 ? 0 : 1);
+  process.exitCode = failures === 0 ? 0 : 1;
 }
 main().catch((err) => {
   console.error("FATAL:", err);
-  process.exit(1);
+  process.exitCode = 1;
 });

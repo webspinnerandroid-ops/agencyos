@@ -1,0 +1,44 @@
+name: Price Drift Monthly Summary
+
+# Monthly digest: summarizes the last ~30 nightly price-drift runs and pushes
+# the result to the same webhook/email channels as the nightly check, so the
+# monthly health of the Stripe-price sync is visible in one message instead of
+# 30. Runs scripts/check-price-drift.cjs in --monthly-summary mode, which
+# reads the workflow-run history via the GitHub API (no Supabase/Stripe keys
+# needed — only the auto-provided GITHUB_TOKEN).
+
+on:
+  schedule:
+    # 1st of every month, 06:30 UTC
+    - cron: "30 6 1 * *"
+  workflow_dispatch: # allow manual runs from the Actions tab
+
+env:
+  NODE_VERSION: "24"
+
+jobs:
+  monthly-summary:
+    name: Post monthly drift digest
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Post monthly price-drift summary
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PRICE_DRIFT_WEBHOOK_URL: ${{ secrets.PRICE_DRIFT_WEBHOOK_URL }}
+          PRICE_DRIFT_SMTP_URL: ${{ secrets.PRICE_DRIFT_SMTP_URL }}
+          PRICE_DRIFT_SMTP_FROM: ${{ secrets.PRICE_DRIFT_SMTP_FROM }}
+          PRICE_DRIFT_SMTP_TO: ${{ secrets.PRICE_DRIFT_SMTP_TO }}
+        run: node scripts/check-price-drift.cjs --monthly-summary

@@ -26,7 +26,13 @@
 //           [PRICE_DRIFT_WEBHOOK_URL=...] \
 //           [PRICE_DRIFT_SMTP_URL=... PRICE_DRIFT_SMTP_FROM=... PRICE_DRIFT_SMTP_TO=...] \
 //           node scripts/check-price-drift.cjs
+//
+// Monthly digest mode (no Supabase/Stripe needed):
+//   GITHUB_TOKEN=... [PRICE_DRIFT_WEBHOOK_URL=...] [PRICE_DRIFT_SMTP_URL=...] \
+//           node scripts/check-price-drift.cjs --monthly-summary
 
+import fs from "node:fs";
+import path from "node:path";
 import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
 import nodemailer from "nodemailer";
@@ -37,9 +43,14 @@ import {
   fmt,
   buildWebhookPayload,
   buildEmailContent,
+  buildMonthlyWebhookPayload,
+  buildMonthlyEmailContent,
+  buildMonthlyText,
+  formatMonthlyPeriod,
   detectWebhookService,
   type DriftEntry,
   type DriftSummary,
+  type MonthlyDriftStats,
 } from "../src/lib/price-drift";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -49,6 +60,139 @@ const WEBHOOK_URL = process.env.PRICE_DRIFT_WEBHOOK_URL;
 const SMTP_URL = process.env.PRICE_DRIFT_SMTP_URL;
 const SMTP_FROM = process.env.PRICE_DRIFT_SMTP_FROM;
 const SMTP_TO = process.env.PRICE_DRIFT_SMTP_TO;
+
+// Monthly-summary mode (--monthly-summary): skips the price check entirely and
+// instead summarizes the last ~30 nightly runs of the price-drift workflow
+// (via the GitHub API) and pushes that digest to the same webhook/email
+// channels. Does NOT need Supabase/Stripe keys — only a GitHub token.
+const MONTHLY = process.argv.includes("--monthly-summary");
+const REPO = process.env.GITHUB_REPOSITORY ?? "webspinnerandroid-ops/agencyos";
+
+function resolveGitHubToken(): string | undefined {
+  if (process.env.GITHUB_TOKEN) return process.env.GITHUB_TOKEN;
+  if (process.env.GH_TOKEN) return process.env.GH_TOKEN;
+  try {
+    const p = path.join(__dirname, "..", ".freebuff", "gh-token.txt");
+    if (fs.existsSync(p)) return fs.readFileSync(p, "utf8").trim();
+  } catch {
+    // ignore — CI always has GITHUB_TOKEN
+  }
+  return undefined;
+}
+
+/**
+ * Fetch the last 30 days of price-drift workflow runs. Success/failure is
+ * judged by the run conclusion exactly as the Actions UI shows it (a
+ * completed run with conclusion != success is a failed check).
+ */
+async function fetchMonthlyRuns(): Promise<MonthlyDriftStats> {
+  const token = resolveGitHubToken();
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const url = `https://api.github.com/repos/${REPO}/actions/workflows/price-drift.yml/runs?per_page=30`;
+  const res = await fetch(url, { headers });
+  if (!res.ok) {
+    throw new Error(`GitHub API ${res.status} ${res.statusText} fetching workflow runs`);
+  }
+  const data = (await res.json()) as { workflow_runs?: Record<string, unknown>[] };
+  const runs = (data.workflow_runs ?? []) as {
+    id: number;
+    status: string;
+    conclusion: string | null;
+    created_at: string;
+  }[];
+
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const inWindow = runs.filter(
+    (r) => new Date(r.created_at).getTime() >= cutoff
+  );
+
+  const succeeded = inWindow.filter((r) => r.conclusion === "success").length;
+  const failed = inWindow.filter(
+    (r) =>
+      r.conclusion != null &&
+      r.conclusion !== "success" &&
+      r.conclusion !== "cancelled" &&
+      r.conclusion !== "skipped"
+  ).length;
+  const cancelled = inWindow.filter(
+    (r) => r.conclusion === "cancelled" || r.conclusion === "skipped"
+  ).length;
+  const latest = inWindow[0]
+    ? {
+        status: inWindow[0].status,
+        conclusion: inWindow[0].conclusion ?? null,
+        runId: String(inWindow[0].id),
+        createdAt: inWindow[0].created_at,
+      }
+    : null;
+
+  return {
+    period: formatMonthlyPeriod(
+      new Date(cutoff),
+      new Date()
+    ),
+    totalRuns: inWindow.length,
+    succeeded,
+    failed,
+    cancelled,
+    latest,
+  };
+}
+
+/** Post/email the monthly digest and exit non-zero on any delivery failure. */
+async function runMonthlySummary(): Promise<number> {
+  let failures = 0;
+  if (!WEBHOOK_URL && !SMTP_URL) {
+    console.error(
+      "Monthly summary needs at least one channel: set PRICE_DRIFT_WEBHOOK_URL and/or PRICE_DRIFT_SMTP_URL(+FROM/TO)."
+    );
+    return 2;
+  }
+  const stats = await fetchMonthlyRuns();
+  console.log(buildMonthlyText(stats));
+  const runId = process.env.GITHUB_RUN_ID;
+
+  if (WEBHOOK_URL) {
+    try {
+      const service = detectWebhookService(WEBHOOK_URL);
+      const topic =
+        service === "ntfy"
+          ? new URL(WEBHOOK_URL).pathname.replace(/^\/+/, "")
+          : undefined;
+      await sendWebhook(
+        WEBHOOK_URL,
+        buildMonthlyWebhookPayload(service, stats, runId, topic)
+      );
+      console.log(`Monthly summary posted to ${service} webhook.`);
+    } catch (err) {
+      console.error(
+        `Failed to post monthly summary to webhook: ${(err as Error).message}`
+      );
+      failures += 1;
+    }
+  }
+
+  if (SMTP_URL) {
+    try {
+      await sendEmail(
+        SMTP_URL,
+        SMTP_FROM!,
+        SMTP_TO!,
+        buildMonthlyEmailContent(stats, runId)
+      );
+      console.log("Monthly summary emailed.");
+    } catch (err) {
+      console.error(`Failed to email monthly summary: ${(err as Error).message}`);
+      failures += 1;
+    }
+  }
+  return failures === 0 ? 0 : 1;
+}
+
 
 let failures = 0;
 const entries: DriftEntry[] = [];
@@ -140,6 +284,10 @@ async function sendEmail(
 }
 
 async function main(): Promise<void> {
+  if (MONTHLY) {
+    process.exitCode = await runMonthlySummary();
+    return;
+  }
   if (!SUPABASE_URL || !SUPABASE_KEY || !STRIPE_KEY) {
     console.error(
       "Missing env: need NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, STRIPE_SECRET_KEY"
@@ -229,10 +377,13 @@ async function main(): Promise<void> {
     }
   }
 
-  process.exit(failures === 0 ? 0 : 1);
+  // exitCode (not process.exit()) so undici's keep-alive sockets from the
+  // webhook/GitHub fetches drain naturally — hard process.exit() on Windows
+  // can crash on a still-open socket (libuv assertion) after the work is done.
+  process.exitCode = failures === 0 ? 0 : 1;
 }
 
 main().catch((err) => {
   console.error("FATAL:", err);
-  process.exit(1);
+  process.exitCode = 1;
 });

@@ -8,7 +8,13 @@ import {
   buildHeading,
   buildSummaryText,
   buildEmailContent,
+  buildMonthlyHeading,
+  buildMonthlyText,
+  buildMonthlyWebhookPayload,
+  buildMonthlyEmailContent,
+  formatMonthlyPeriod,
   type DriftSummary,
+  type MonthlyDriftStats,
 } from "./price-drift";
 
 describe("normalizeStoredPrice", () => {
@@ -231,5 +237,100 @@ describe("summary text and email content", () => {
     const text = buildSummaryText(okSummary);
     expect(text).toContain("No drift detected");
     expect(text).not.toContain("fix the price");
+  });
+});
+
+describe("monthly summary", () => {
+  const monthly: MonthlyDriftStats = {
+    period: "Jul 15 – Aug 14, 2026",
+    totalRuns: 30,
+    succeeded: 29,
+    failed: 1,
+    cancelled: 0,
+    latest: {
+      status: "completed",
+      conclusion: "success",
+      runId: "12345",
+      createdAt: "2026-08-14T03:17:00Z",
+    },
+  };
+
+  it("builds a heading that reflects failures, success, and emptiness", () => {
+    expect(buildMonthlyHeading(monthly)).toContain("1 of 30 runs failed");
+    expect(
+      buildMonthlyHeading({ ...monthly, failed: 0, succeeded: 30 })
+    ).toContain("30/30 runs passed");
+    expect(
+      buildMonthlyHeading({
+        ...monthly,
+        totalRuns: 0,
+        succeeded: 0,
+        failed: 0,
+        cancelled: 0,
+        latest: null,
+      })
+    ).toContain("no nightly runs");
+  });
+
+  it("builds a text digest with period, counts, latest run, and action", () => {
+    const text = buildMonthlyText(monthly);
+    expect(text).toContain("Jul 15 – Aug 14, 2026");
+    expect(text).toContain("30 total");
+    expect(text).toContain("29 passed");
+    expect(text).toContain("1 failed");
+    expect(text).toContain("run 12345");
+    expect(text).toContain("investigate the failed nightly runs");
+    expect(
+      buildMonthlyText({ ...monthly, failed: 0, succeeded: 30 })
+    ).toContain("All good");
+  });
+
+  it("builds monthly webhook payloads per service", () => {
+    const ntfy = buildMonthlyWebhookPayload("ntfy", monthly, "999", "topic-x");
+    expect(ntfy.topic).toBe("topic-x");
+    expect(String(ntfy.title)).toContain("1 of 30 runs failed");
+    expect(ntfy.tags).toEqual(["rotating_light"]);
+    expect(ntfy.priority).toBe(5);
+
+    const discord = buildMonthlyWebhookPayload("discord", monthly, "999");
+    const embeds = discord.embeds as Array<Record<string, unknown>>;
+    expect(embeds[0].color).toBe(0xe74c3c);
+    expect((embeds[0].footer as { text: string }).text).toBe(
+      "Agency OS · monthly run 999"
+    );
+    const fields = embeds[0].fields as Array<Record<string, unknown>>;
+    expect(fields[0]).toEqual({ name: "Period", value: "Jul 15 – Aug 14, 2026", inline: true });
+
+    const okSummary = { ...monthly, failed: 0, succeeded: 30 };
+    const slack = buildMonthlyWebhookPayload("slack", okSummary, undefined) as {
+      attachments: Array<Record<string, unknown>>;
+    };
+    expect(slack.attachments[0].color).toBe("good");
+    expect(slack.attachments[0].title).toBe(
+      "Agency OS · Monthly Price Drift Summary"
+    );
+    expect(slack.attachments[0].footer).toBeUndefined();
+  });
+
+  it("builds monthly email content", () => {
+    const email = buildMonthlyEmailContent(monthly, "42");
+    expect(email.subject).toContain("1 of 30 runs failed");
+    expect(email.text).toContain("Monthly run: 42");
+    expect(email.text).toContain("Jul 15 – Aug 14, 2026");
+  });
+
+  it("formats the period deterministically", () => {
+    expect(
+      formatMonthlyPeriod(
+        new Date("2026-07-15T00:00:00Z"),
+        new Date("2026-08-14T00:00:00Z")
+      )
+    ).toBe("Jul 15 – Aug 14, 2026");
+    expect(
+      formatMonthlyPeriod(
+        new Date("2026-08-01T00:00:00Z"),
+        new Date("2026-08-30T00:00:00Z")
+      )
+    ).toBe("Aug 1 – Aug 30, 2026");
   });
 });

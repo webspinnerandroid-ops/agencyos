@@ -288,6 +288,7 @@ A scheduled job (`.github/workflows/price-drift.yml`, 03:17 UTC daily, also manu
   PRICE_DRIFT_WEBHOOK_URL=... node scripts/check-price-drift.cjs
   ```
   Locally, `PRICE_DRIFT_WEBHOOK_URL=https://ntfy.sh/test` is a safe way to try the phone push without touching real channels.
+- **Monthly digest** — `.github/workflows/price-drift-monthly.yml` (1st of every month, 06:30 UTC) posts a summary of the past **30 nightly runs** to the same webhook/email channels, so you get one monthly health message instead of 30. Trigger it early with `Actions → Price Drift Monthly Summary → Run workflow`.
 - The pure normalization/comparison logic lives in `src/lib/price-drift.ts` with unit tests in `src/lib/price-drift.test.ts`.
 
 ---

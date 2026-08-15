@@ -8,7 +8,7 @@ on:
   workflow_dispatch: # allow manual runs from the Actions tab
 
 env:
-  NODE_VERSION: "20"
+  NODE_VERSION: "24"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}

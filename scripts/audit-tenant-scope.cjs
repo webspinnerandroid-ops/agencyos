@@ -178,6 +178,13 @@ const IGNORE = new Set([
   // the service role and writes competitors_json back only to the row it read
   // (keyed by the row's own id). Never reachable from a user session.
   "src/lib/inngest/functions/refreshCompetitorBenchmarks.ts",
+  // autoAuditMonitoredSites.ts: weekly cross-tenant maintenance job, same
+  // class as refreshCompetitorBenchmarks — re-runs the SEO/AEO/GEO analyzer
+  // on every tenant's monitored site_audits URLs with the service role. It
+  // only inserts a new site_audits row carrying the same tenant_id it read
+  // (never a tenant-supplied value) and is never reachable from a user
+  // session. Verified.
+  "src/lib/inngest/functions/autoAuditMonitoredSites.ts",
 ]);
 
 const CHAIN_WINDOW = 900; // chars after .from(...) — enough for chained filters

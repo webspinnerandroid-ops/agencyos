@@ -73,9 +73,18 @@ interface TrafficRow {
   position?: number | null;
 }
 
+interface SiteKeyword {
+  query: string;
+  clicks: number | null;
+  impressions: number | null;
+  ctr: number | null;
+  position: number | null;
+}
+
 interface SiteHistory {
   audits: AuditRun[];
   traffic: { googleAnalytics: TrafficRow[]; searchConsole: TrafficRow[] };
+  keywords: SiteKeyword[];
 }
 
 interface MonitoredSite {
@@ -114,6 +123,43 @@ function fmtNumber(v: number | null | undefined): string {
   return v == null ? "—" : v.toLocaleString();
 }
 
+/** Build a per-check diff between two runs' checks_json. */
+function diffChecks(a: AuditRun, b: AuditRun): {
+  label: string;
+  pillar: string;
+  from: { earned: number; max: number; passed: boolean; detail: string } | null;
+  to: { earned: number; max: number; passed: boolean; detail: string } | null;
+  delta: number;
+}[] {
+  const mapA = new Map(
+    (a.checks_json?.seo ?? [])
+      .concat(a.checks_json?.aeoGeo ?? [])
+      .map((c) => [c.id, c] as const)
+  );
+  const mapB = new Map(
+    (b.checks_json?.seo ?? [])
+      .concat(b.checks_json?.aeoGeo ?? [])
+      .map((c) => [c.id, c] as const)
+  );
+  const ids = new Set([...mapA.keys(), ...mapB.keys()]);
+  const out: ReturnType<typeof diffChecks>[number][] = [];
+  for (const id of ids) {
+    const ca = mapA.get(id);
+    const cb = mapB.get(id);
+    const label = (cb ?? ca)?.label ?? id;
+    const pillar =
+      (cb ?? ca)?.pillar ?? (cb ?? ca)?.category ?? "SEO";
+    out.push({
+      label,
+      pillar,
+      from: ca ? { earned: ca.earned, max: ca.maxPoints, passed: ca.passed, detail: ca.detail } : null,
+      to: cb ? { earned: cb.earned, max: cb.maxPoints, passed: cb.passed, detail: cb.detail } : null,
+      delta: (cb?.earned ?? 0) - (ca?.earned ?? 0),
+    });
+  }
+  return out.sort((x, y) => y.delta - x.delta);
+}
+
 function fmtPct(v: number | null | undefined): string {
   return v == null ? "—" : `${(v * 100).toFixed(1)}%`;
 }
@@ -148,6 +194,9 @@ export default function SeoSitesPage() {
   // Site detail state (when ?url= is present).
   const [history, setHistory] = useState<SiteHistory | null>(null);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  // Comparison mode: selected run indices into history.audits.
+  const [compareA, setCompareA] = useState(0);
+  const [compareB, setCompareB] = useState(1);
 
   const loadDetail = useCallback(async (key: string) => {
     setLoadingHistory(true);
@@ -366,6 +415,159 @@ export default function SeoSitesPage() {
                     <Line type="monotone" dataKey="GEO" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3 }} />
                   </LineChart>
                 </ResponsiveContainer>
+              </Card>
+            )}
+
+            {/* Compare two runs */}
+            {history && history.audits.length >= 2 && (() => {
+              const runA = history.audits[compareA];
+              const runB = history.audits[compareB];
+              const rows = diffChecks(runA, runB);
+              const changed = rows.filter((r) => r.delta !== 0);
+              const totalA = (runA.seo_score ?? 0) + (runA.aeo_score ?? 0) + (runA.geo_score ?? 0);
+              const totalB = (runB.seo_score ?? 0) + (runB.aeo_score ?? 0) + (runB.geo_score ?? 0);
+              return (
+                <Card className="p-6 border-primary/30">
+                  <div className="flex items-center justify-between gap-2 flex-wrap mb-4">
+                    <div className="flex items-center gap-2">
+                      <TrendingUp className="size-4 text-primary" />
+                      <h2 className="text-lg font-semibold">Compare runs</h2>
+                      <span className="text-xs text-muted-foreground">
+                        {changed.length} check(s) changed
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 text-sm">
+                      <select
+                        value={compareA}
+                        onChange={(e) => setCompareA(Number(e.target.value))}
+                        className="rounded-md border border-input bg-background px-2 py-1 text-xs"
+                      >
+                        {history.audits.map((a, i) => (
+                          <option key={a.id} value={i}>
+                            Run {history.audits.length - i} · {fmtDate(a.created_at)}
+                          </option>
+                        ))}
+                      </select>
+                      <span className="text-muted-foreground">vs</span>
+                      <select
+                        value={compareB}
+                        onChange={(e) => setCompareB(Number(e.target.value))}
+                        className="rounded-md border border-input bg-background px-2 py-1 text-xs"
+                      >
+                        {history.audits.map((a, i) => (
+                          <option key={a.id} value={i}>
+                            Run {history.audits.length - i} · {fmtDate(a.created_at)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-3 mb-4 text-center">
+                    {[
+                      { label: "SEO", a: runA.seo_score, b: runB.seo_score },
+                      { label: "AEO", a: runA.aeo_score, b: runB.aeo_score },
+                      { label: "GEO", a: runA.geo_score, b: runB.geo_score },
+                    ].map((s) => (
+                      <div key={s.label} className="p-3 rounded-lg bg-muted/50">
+                        <div className="text-[11px] uppercase tracking-wide text-muted-foreground">{s.label}</div>
+                        <div className="text-xl font-bold mt-0.5 flex items-center justify-center gap-2">
+                          <span className={scoreTone(s.a)}>{s.a ?? "—"}</span>
+                          <span className="text-muted-foreground text-sm">→</span>
+                          <span className={scoreTone(s.b)}>{s.b ?? "—"}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {changed.length === 0 ? (
+                    <p className="text-sm text-muted-foreground text-center py-3">
+                      No per-check changes between these two runs.
+                    </p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
+                            <th className="py-2 pr-4 font-medium">Check</th>
+                            <th className="py-2 pr-4 font-medium">Group</th>
+                            <th className="py-2 pr-4 font-medium text-right">Before</th>
+                            <th className="py-2 pr-4 font-medium text-right">After</th>
+                            <th className="py-2 font-medium text-right">Δ</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {changed.slice(0, 30).map((r) => (
+                            <tr key={r.label} className="border-b last:border-0">
+                              <td className="py-2 pr-4 font-medium">
+                                {r.label}
+                                {!r.to?.passed && (
+                                  <span className="ml-2 text-[10px] text-red-600 dark:text-red-400 uppercase">fail</span>
+                                )}
+                              </td>
+                              <td className="py-2 pr-4 text-xs text-muted-foreground">{r.pillar}</td>
+                              <td className={`py-2 pr-4 text-right tabular-nums ${scoreTone(r.from?.earned ?? 0)}`}>
+                                {r.from ? `${r.from.earned}/${r.from.max}` : "—"}
+                              </td>
+                              <td className={`py-2 pr-4 text-right tabular-nums ${scoreTone(r.to?.earned ?? 0)}`}>
+                                {r.to ? `${r.to.earned}/${r.to.max}` : "—"}
+                              </td>
+                              <td className={`py-2 text-right font-bold tabular-nums ${
+                                r.delta > 0 ? "text-green-600 dark:text-green-400" : "text-red-600 dark:text-red-400"
+                              }`}>
+                                {r.delta > 0 ? `+${r.delta}` : r.delta}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                  <p className="text-[11px] text-muted-foreground mt-3">
+                    Combined score: {totalA} → {totalB} ({totalB - totalA >= 0 ? "+" : ""}{totalB - totalA})
+                  </p>
+                </Card>
+              );
+            })()}
+
+            {/* SC keyword rankings */}
+            {history && history.keywords.length > 0 && (
+              <Card className="p-6">
+                <div className="flex items-center gap-2 mb-4">
+                  <Gauge className="size-4 text-primary" />
+                  <h2 className="text-lg font-semibold">Keyword rankings (Search Console)</h2>
+                  <span className="text-xs text-muted-foreground">
+                    top {Math.min(25, history.keywords.length)} queries by clicks
+                  </span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b text-left text-xs uppercase tracking-wide text-muted-foreground">
+                        <th className="py-2 pr-4 font-medium">Query</th>
+                        <th className="py-2 pr-4 font-medium text-right">Position</th>
+                        <th className="py-2 pr-4 font-medium text-right">Clicks</th>
+                        <th className="py-2 pr-4 font-medium text-right">Impressions</th>
+                        <th className="py-2 font-medium text-right">CTR</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {history.keywords.map((k) => (
+                        <tr key={k.query} className="border-b last:border-0">
+                          <td className="py-2 pr-4 font-medium break-all">{k.query}</td>
+                          <td className={`py-2 pr-4 text-right font-bold tabular-nums ${
+                            k.position == null ? "text-muted-foreground" : k.position <= 10 ? "text-green-600 dark:text-green-400" : k.position <= 30 ? "text-yellow-600 dark:text-yellow-400" : "text-muted-foreground"
+                          }`}>
+                            {k.position ?? "—"}
+                          </td>
+                          <td className="py-2 pr-4 text-right tabular-nums">{fmtNumber(k.clicks)}</td>
+                          <td className="py-2 pr-4 text-right tabular-nums">{fmtNumber(k.impressions)}</td>
+                          <td className="py-2 text-right tabular-nums">{fmtPct(k.ctr)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </Card>
             )}
 

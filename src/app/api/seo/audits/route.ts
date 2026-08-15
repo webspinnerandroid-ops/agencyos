@@ -47,7 +47,8 @@ export async function GET(request: NextRequest) {
       if (error) throw error;
 
       const traffic = await fetchMatchedTraffic(supabase, tenantId, url);
-      return NextResponse.json({ audits: data ?? [], traffic });
+      const keywords = await fetchMatchedKeywords(supabase, tenantId, url);
+      return NextResponse.json({ audits: data ?? [], traffic, keywords });
     }
 
     if (search) {
@@ -187,6 +188,38 @@ function domainOf(value: string): string {
     host = s.replace(/^sc-domain:/i, "").replace(/^https?:\/\//i, "").split("/")[0] ?? s;
   }
   return host.replace(/^www\./, "").toLowerCase();
+}
+
+/** Pull measured SC keyword rankings whose resource matches the site's domain. */
+async function fetchMatchedKeywords(
+  supabase: Awaited<ReturnType<typeof createServiceClient>>,
+  tenantId: string,
+  url: string
+): Promise<{
+  query: string;
+  clicks: number | null;
+  impressions: number | null;
+  ctr: number | null;
+  position: number | null;
+}[]> {
+  const siteDomain = domainOf(url);
+  const { data, error } = await supabase
+    .from("keyword_rankings")
+    .select("query, clicks, impressions, ctr, position, resource")
+    .eq("tenant_id", tenantId)
+    .limit(2000);
+  if (error || !data) return [];
+  return data
+    .filter((r) => domainOf(String(r.resource)) === siteDomain)
+    .map((r) => ({
+      query: r.query ?? "",
+      clicks: r.clicks ?? null,
+      impressions: r.impressions ?? null,
+      ctr: r.ctr ?? null,
+      position: r.position ?? null,
+    }))
+    .sort((a, b) => (b.clicks ?? 0) - (a.clicks ?? 0))
+    .slice(0, 25);
 }
 
 /** Pull the latest GA4 + Search Console traffic rows whose resource matches the site's domain. */

@@ -12,6 +12,7 @@ import { syncSiteMetrics } from "@/lib/inngest/functions/syncSiteMetrics";
 import { scoreCompetitors } from "@/lib/inngest/functions/scoreCompetitors";
 import { refreshCompetitorBenchmarks } from "@/lib/inngest/functions/refreshCompetitorBenchmarks";
 import { checkProviderBalances } from "@/lib/inngest/functions/checkProviderBalances";
+import { autoAuditMonitoredSites } from "@/lib/inngest/functions/autoAuditMonitoredSites";
 
 /**
  * Inngest API handler — serves all registered functions.
@@ -23,5 +24,5 @@ import { checkProviderBalances } from "@/lib/inngest/functions/checkProviderBala
  */
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [publishScheduledPosts, monthlyBillingReset, syncInboxes, syncSocialInbox, processSequences, teamChatTask, weeklyOpportunityScan, autoRewritePost, syncSiteMetrics, scoreCompetitors, refreshCompetitorBenchmarks, checkProviderBalances],
+  functions: [publishScheduledPosts, monthlyBillingReset, syncInboxes, syncSocialInbox, processSequences, teamChatTask, weeklyOpportunityScan, autoRewritePost, syncSiteMetrics, scoreCompetitors, refreshCompetitorBenchmarks, checkProviderBalances, autoAuditMonitoredSites],
 });

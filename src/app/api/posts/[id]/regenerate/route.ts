@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getTenantId, requireRole } from "@/lib/auth";
 import { getCurrentWorkspaceId } from "@/lib/workspace";
 import { regenerateBlogPost } from "@/lib/ai/team-task";
+import { ScoreGateError } from "@/lib/score-gate";
 
 /**
  * POST /api/posts/[id]/regenerate
@@ -37,6 +38,22 @@ export async function POST(
     const result = await regenerateBlogPost(tenantId, id, workspaceId, feedback);
     return NextResponse.json({ success: true, ...result });
   } catch (err) {
+    // A rewrite that can't clear the quality gate (SEO AND AEO/GEO >= 80)
+    // keeps the existing content intact and reports why — the old post is
+    // never replaced with a sub-standard rewrite.
+    if (err instanceof ScoreGateError) {
+      return NextResponse.json(
+        {
+          error: err.message,
+          code: "score_gate",
+          seo: err.seo,
+          aeoGeo: err.aeoGeo,
+          gate: err.gate,
+          checks: err.checks,
+        },
+        { status: 422 }
+      );
+    }
     const message = err instanceof Error ? err.message : "Internal server error";
     return NextResponse.json({ error: message }, { status: 500 });
   }

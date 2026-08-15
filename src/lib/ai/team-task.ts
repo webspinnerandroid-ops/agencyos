@@ -50,8 +50,16 @@ import {
   buildInternalLinkContext,
   appendRelatedReading,
 } from "@/lib/content-links";
-import { scoreContent } from "@/lib/rankmath";
-import { scoreAeoGeo } from "@/lib/aeo-geo";
+import { scoreContent, type RankMathResult } from "@/lib/rankmath";
+import { scoreAeoGeo, type AeoGeoResult } from "@/lib/aeo-geo";
+import {
+  getScoreGate,
+  MAX_SCORE_ATTEMPTS,
+  isBelowGate,
+  buildGateFeedback,
+  ScoreGateError,
+  mapReusedImages,
+} from "@/lib/score-gate";
 import { incrementUsage } from "@/lib/usage";
 import { checkTrialContentLimit } from "@/lib/trial-limits";
 import { checkUsageLimit } from "@/lib/plan-limits";
@@ -397,99 +405,147 @@ async function cherylGenerateBlog(
       ? `\n\n## Revision guidance from the owner\nRewrite this post addressing the following feedback. Keep it on-topic and preserve the target keywords:\n${revisionFeedback}`
       : "");
 
-  const blogPost = await generateStructuredOutput<{
+  // ---- Score gate (must clear 80/80 on SEO AND AEO/GEO) --------------------
+  // Every generated AND rewritten piece must clear the gate on both engines
+  // before it is saved. If the first draft misses it, the draft is
+  // regenerated — text only, since every scoring check reads the text (the
+  // images from the first attempt are reused with the retry draft's
+  // keyword-bearing descriptions as alt text) — with the exact failing
+  // checks from the scorers as rewrite feedback. After MAX_SCORE_ATTEMPTS
+  // the gate rejects the draft with a ScoreGateError (scores + failing
+  // checks) instead of saving sub-standard content; the publish gate is no
+  // longer the only line of defense.
+  const gate = getScoreGate();
+  let attempts = 0;
+  let fixFeedback = "";
+  let blogPost: {
     title: string;
     slug: string;
     metaDescription: string;
     headings: { level: number; text: string }[];
     body: string;
     images: BlogImageSpec[];
-  }>(
-    "blog_generation",
-    systemPrompt,
-    userPrompt,
-    tenantId,
-    getBlogPostSchema(),
-    { functionName: "generate_blog_post" }
-  );
+  };
+  let generated: GeneratedBlogImage[] = [];
+  let body = "";
+  let seo: RankMathResult;
+  let aeoGeo: AeoGeoResult;
 
-  const specs = selectBlogImageSpecs(
-    Array.isArray(blogPost.images) ? blogPost.images : []
-  );
-  const generated: GeneratedBlogImage[] = [];
+  while (true) {
+    attempts += 1;
+    if (shouldCancel && (await shouldCancel())) {
+      throw new Error("Blog generation cancelled");
+    }
 
-  await Promise.all(
-    specs.map(async (spec) => {
-      try {
-        if (shouldCancel && (await shouldCancel())) return;
-        const size = spec.placement === "featured" ? "1792x1024" : "1024x1024";
-        const images = await generateImage(tenantId, spec.prompt, {
-          size: size as "1792x1024" | "1024x1024",
-          n: 1,
-        });
-        const rawUrl = images[0]?.url;
-        if (!rawUrl) return;
-        const url = await persistImageToStorage(tenantId, rawUrl);
+    blogPost = await generateStructuredOutput<{
+      title: string;
+      slug: string;
+      metaDescription: string;
+      headings: { level: number; text: string }[];
+      body: string;
+      images: BlogImageSpec[];
+    }>(
+      "blog_generation",
+      systemPrompt,
+      fixFeedback ? `${userPrompt}\n\n${fixFeedback}` : userPrompt,
+      tenantId,
+      getBlogPostSchema(),
+      { functionName: "generate_blog_post" }
+    );
 
-        const { error: assetErr } = await supabase.from("media_assets").insert({
-          tenant_id: tenantId,
-          client_id: null,
-          workspace_id: workspaceId,
-          type: "image",
-          prompt: spec.prompt,
-          url,
-          metadata: { placement: spec.placement, sectionTitle: spec.sectionTitle },
-          status: "completed",
-        });
-        if (assetErr) {
-          console.warn("[team-task] media_assets insert failed:", assetErr.message);
-        }
-        generated.push({ spec, url });
-        void incrementUsage(tenantId, "image_generations", 1);
-        void incrementUsage(tenantId, "ai_tokens", 1000);
-      } catch (err) {
-        console.warn(
-          `[team-task] Image generation failed for "${spec.sectionTitle || "featured"}":`,
-          err instanceof Error ? err.message : err
-        );
-      }
-    })
-  );
+    const specs = selectBlogImageSpecs(
+      Array.isArray(blogPost.images) ? blogPost.images : []
+    );
+    if (attempts === 1) {
+      // First attempt: generate every image fresh and record it in
+      // media_assets (failures are isolated per image).
+      generated = [];
+      await Promise.all(
+        specs.map(async (spec) => {
+          try {
+            const size = spec.placement === "featured" ? "1792x1024" : "1024x1024";
+            const images = await generateImage(tenantId, spec.prompt, {
+              size: size as "1792x1024" | "1024x1024",
+              n: 1,
+            });
+            const rawUrl = images[0]?.url;
+            if (!rawUrl) return;
+            const url = await persistImageToStorage(tenantId, rawUrl);
 
-  // Resolve the model's [INTERNAL LINK: …] markers against real pages (KB +
-  // the tenant's own CMS site), then guarantee at least one internal link by
-  // appending a related-reading section when the body has none — automatic
-  // internal linking for posts that will live on the generated site.
-  const body = appendRelatedReading(
-    resolveInternalLinks(
-      injectImagesIntoBody(blogPost.body, generated),
+            const { error: assetErr } = await supabase.from("media_assets").insert({
+              tenant_id: tenantId,
+              client_id: null,
+              workspace_id: workspaceId,
+              type: "image",
+              prompt: spec.prompt,
+              url,
+              metadata: { placement: spec.placement, sectionTitle: spec.sectionTitle },
+              status: "completed",
+            });
+            if (assetErr) {
+              console.warn("[team-task] media_assets insert failed:", assetErr.message);
+            }
+            generated.push({ spec, url });
+            void incrementUsage(tenantId, "image_generations", 1);
+            void incrementUsage(tenantId, "ai_tokens", 1000);
+          } catch (err) {
+            console.warn(
+              `[team-task] Image generation failed for "${spec.sectionTitle || "featured"}":`,
+              err instanceof Error ? err.message : err
+            );
+          }
+        })
+      );
+    } else {
+      // Gate retry: text only — reuse the images from the first attempt with
+      // the retry draft's (keyword-bearing) descriptions as alt text.
+      generated = mapReusedImages(specs, generated);
+    }
+
+    // Resolve the model's [INTERNAL LINK: …] markers against real pages (KB +
+    // the tenant's own CMS site), then guarantee at least one internal link by
+    // appending a related-reading section when the body has none — automatic
+    // internal linking for posts that will live on the generated site.
+    body = appendRelatedReading(
+      resolveInternalLinks(
+        injectImagesIntoBody(blogPost.body, generated),
+        linkablePages
+      ),
       linkablePages
-    ),
-    linkablePages
-  );
+    );
 
-  // On-page SEO score (Rank Math-style) — every blog the team generates is
-  // scored against its real keyword + the workspace's actual linkable pages,
-  // exactly like the manual generator. Stored in content.seo; the DB trigger
-  // (migration 025) syncs seo_score / seo_checks columns from it.
-  const seo = scoreContent({
-    title: blogPost.title,
-    metaDescription: blogPost.metaDescription,
-    slug: blogPost.slug,
-    body,
-    keyword: primaryKeyword,
-    internalUrls: linkablePages.map((p) => p.url),
-  });
+    // On-page SEO score (Rank Math-style) — every blog the team generates is
+    // scored against its real keyword + the workspace's actual linkable pages,
+    // exactly like the manual generator. Stored in content.seo; the DB trigger
+    // (migration 025) syncs seo_score / seo_checks columns from it.
+    seo = scoreContent({
+      title: blogPost.title,
+      metaDescription: blogPost.metaDescription,
+      slug: blogPost.slug,
+      body,
+      keyword: primaryKeyword,
+      internalUrls: linkablePages.map((p) => p.url),
+    });
 
-  // AEO/GEO readiness (free heuristic) — persisted with the post so the SEO
-  // analytics tab and post list show it without recomputing.
-  const aeoGeo = scoreAeoGeo({
-    title: blogPost.title,
-    metaDescription: blogPost.metaDescription,
-    body,
-    keyword: primaryKeyword,
-    entities: [],
-  });
+    // AEO/GEO readiness (free heuristic) — persisted with the post so the SEO
+    // analytics tab and post list show it without recomputing.
+    aeoGeo = scoreAeoGeo({
+      title: blogPost.title,
+      metaDescription: blogPost.metaDescription,
+      body,
+      keyword: primaryKeyword,
+      entities: [],
+    });
+
+    if (!isBelowGate(seo.total, aeoGeo.total, gate)) break;
+    if (attempts >= MAX_SCORE_ATTEMPTS) {
+      throw new ScoreGateError(seo.total, aeoGeo.total, gate, seo, aeoGeo);
+    }
+    fixFeedback = buildGateFeedback(seo, aeoGeo, gate);
+    console.warn(
+      `[team-task] Draft below score gate (SEO ${seo.total}/AEO-GEO ${aeoGeo.total}, gate ${gate}) — retrying (${attempts}/${MAX_SCORE_ATTEMPTS})`
+    );
+  }
 
   // Eval loop: run the finished blog through Cheryl's full criteria including
   // the real-engine parity check (SEO + AEO/GEO, 2000+ word floor) so "did
@@ -643,6 +699,18 @@ export async function generateApprovedCampaignItem(
     }
   } catch (err) {
     console.error("[team-task] Campaign item generation failed:", err);
+    // If the draft couldn't clear the quality bar (SEO AND AEO/GEO >= gate),
+    // tell the owner why instead of silently flipping the idea back.
+    if (err instanceof ScoreGateError) {
+      void createNotification({
+        tenantId,
+        kind: "alert",
+        title: `Content couldn't clear the quality gate: ${item.topic}`,
+        body: `SEO ${err.seo}/100 and AEO/GEO ${err.aeoGeo}/100 — the item needs ${err.gate}/100 on both engines. The idea was set back to "proposed"; approve it again after adjusting the topic or keywords.`,
+        link: "/dashboard/calendar",
+        groupKey: `campaign:${itemId}`,
+      });
+    }
     // Put the idea back so the owner can retry.
     await supabase
       .from("campaign_plan_items")

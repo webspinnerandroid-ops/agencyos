@@ -2,6 +2,7 @@ import { inngest } from "@/lib/inngest/client";
 import { createServiceClient } from "@/lib/supabase/server";
 import { regenerateBlogPost } from "@/lib/ai/team-task";
 import { createNotification } from "@/lib/in-app-notifications";
+import { ScoreGateError } from "@/lib/score-gate";
 
 /**
  * AI Team — auto-rewrite a below-threshold blog post (background).
@@ -53,11 +54,38 @@ export const autoRewritePost = inngest.createFunction(
       groupKey: `post:${postId}`,
     });
 
-    const result = await regenerateBlogPost(
-      tenantId,
-      postId,
-      post?.workspace_id ?? null
-    );
+    let result;
+    try {
+      result = await regenerateBlogPost(
+        tenantId,
+        postId,
+        post?.workspace_id ?? null
+      );
+    } catch (err) {
+      // The rewrite pipeline enforces the quality gate itself (SEO AND
+      // AEO/GEO >= 80). If the regenerated draft still can't clear it, tell
+      // the owner what failed and stop — do NOT retry the same pipeline
+      // again (inngest retries) or overwrite the existing post.
+      if (err instanceof ScoreGateError) {
+        void createNotification({
+          tenantId,
+          kind: "alert",
+          title: "Rewrite couldn't clear the quality gate",
+          body: `The rewritten post scored SEO ${err.seo}/100 and AEO/GEO ${err.aeoGeo}/100 — below the ${err.gate}/100 minimum on both engines. ${err.checks
+            .slice(0, 5)
+            .map((c) => `• ${c.label}`)
+            .join(" ")} Request another rewrite with specific feedback, or force-publish.`,
+          link: `/dashboard/posts?post=${postId}`,
+          groupKey: `post:${postId}`,
+        });
+        console.warn(
+          `[autoRewritePost] Post ${postId} still below the quality gate after rewrite:`,
+          err.message
+        );
+        return { status: "below_gate", postId, seo: err.seo, aeoGeo: err.aeoGeo };
+      }
+      throw err;
+    }
 
     console.log(
       `[autoRewritePost] Rewrote post ${postId} (${result.title}) for tenant ${tenantId}`

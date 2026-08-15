@@ -32,7 +32,15 @@ import {
   type GeneratedBlogImage,
 } from "@/lib/blog-images";
 import { scoreContent, type RankMathResult } from "@/lib/rankmath";
-import { scoreAeoGeo } from "@/lib/aeo-geo";
+import { scoreAeoGeo, type AeoGeoResult } from "@/lib/aeo-geo";
+import {
+  getScoreGate,
+  MAX_SCORE_ATTEMPTS,
+  isBelowGate,
+  buildGateFeedback,
+  ScoreGateError,
+  mapReusedImages,
+} from "@/lib/score-gate";
 import { researchTopic, type TopicResearch } from "@/lib/ai/research";
 
 // Known social platforms
@@ -486,159 +494,207 @@ export async function POST(request: NextRequest) {
       ? Math.min(brandMaxWords, MAX_MODEL_BLOG_WORDS)
       : 1200;
 
-    let blogPost = await generateStructuredOutput<BlogPostResult>(
-      "blog_generation" as AITask,
-      blogSystemPrompt,
-      blogUserPrompt,
-      tenantId,
-      getBlogPostSchema(),
-      {
-        clientId,
-        functionName: "generate_blog_post",
-      }
-    );
-
-    // Normalize a truncated/partial structured response: a missing body or
-    // headings array must not crash downstream code (the word-count retry
-    // below re-prompts the model when the body is empty).
-    blogPost = {
-      title: blogPost.title ?? "",
-      slug: blogPost.slug ?? "",
-      metaDescription: blogPost.metaDescription ?? "",
-      headings: Array.isArray(blogPost.headings) ? blogPost.headings : [],
-      body: typeof blogPost.body === "string" ? blogPost.body : "",
-      images: Array.isArray(blogPost.images) ? blogPost.images : [],
-      suggestedImagePrompt: blogPost.suggestedImagePrompt,
+    // ------------------------------------------------------------------
+    // 3-3.75. Generate the blog post + images + score, enforcing the quality
+    // gate (SEO >= 80 AND AEO/GEO >= 80) BEFORE anything is saved. A draft
+    // that misses the gate is regenerated — text only, since every scoring
+    // check reads the text (the images from the first attempt are reused with
+    // the retry draft's keyword-bearing descriptions as alt text) — with the
+    // exact failing checks as rewrite feedback. After MAX_SCORE_ATTEMPTS the
+    // request fails with a structured ScoreGateError instead of silently
+    // saving sub-standard content; the publish gate is no longer the only
+    // line of defense.
+    // ------------------------------------------------------------------
+    const gate = getScoreGate();
+    let attempts = 0;
+    let fixFeedback = "";
+    let blogPost: BlogPostResult = {
+      title: "",
+      slug: "",
+      metaDescription: "",
+      headings: [],
+      body: "",
+      images: [],
+      suggestedImagePrompt: undefined,
     };
+    let generatedImages: GeneratedBlogImage[] = [];
+    let bodyWithImages = "";
+    let seoScore: RankMathResult;
+    let aeoGeo: AeoGeoResult;
 
-    const blogWordCount = countWords(blogPost.body);
-    console.log(`[generate-content] Blog word count: ${blogWordCount} (min: ${MIN_BLOG_WORDS})`);
-
-    // If the generated post is too short, retry with explicit length instruction
-    // and increased maxTokens to give the model room to expand
-    if (blogWordCount < MIN_BLOG_WORDS) {
-      console.warn(
-        `[generate-content] Blog too short (${blogWordCount} words). Retrying with 2500+ word requirement...`
-      );
-      const enrichedSystemPrompt =
-        blogSystemPrompt +
-        `\n\nCRITICAL: The blog post body MUST be at least 2500 words. Write thorough, detailed content with multiple H2 sections, examples, data points, and actionable insights. Do NOT write thin or shallow content. This will be published on a professional website and must demonstrate expertise.`;
-      const enrichedUserPrompt =
-        blogUserPrompt +
-        `\n\nIMPORTANT: Write at least 2500 words of substantive content.`;
+    while (true) {
+      attempts += 1;
 
       blogPost = await generateStructuredOutput<BlogPostResult>(
         "blog_generation" as AITask,
-        enrichedSystemPrompt,
-        enrichedUserPrompt,
+        blogSystemPrompt,
+        fixFeedback ? `${blogUserPrompt}\n\n${fixFeedback}` : blogUserPrompt,
         tenantId,
         getBlogPostSchema(),
         {
           clientId,
           functionName: "generate_blog_post",
-          maxTokens: 32768,
         }
       );
-    }
 
-    // ------------------------------------------------------------------
-    // 3.5. Generate the post's images (featured + one per ~500 words)
-    // ------------------------------------------------------------------
-    // The model returns image specs (prompt + placement + section). We
-    // generate each image, save it to media_assets, and inject the real URLs
-    // into the body. Failures are isolated per image — text content always
-    // survives even if every image fails (e.g. no image API key configured).
-    //
-    // The model also embeds ![alt](IMAGE_URL_N) placeholder tokens in the
-    // body. If the structured `images` array is lost (a truncated JSON
-    // response where the repair salvages the body but drops the tail), the
-    // placeholders still tell us how many images belong and what each shows
-    // — derive the specs from them rather than silently generating nothing.
-    let imageSpecs: BlogImageSpec[] = Array.isArray(blogPost.images)
-      ? blogPost.images
-      : [];
+      // Normalize a truncated/partial structured response: a missing body or
+      // headings array must not crash downstream code (the word-count retry
+      // below re-prompts the model when the body is empty).
+      blogPost = {
+        title: blogPost.title ?? "",
+        slug: blogPost.slug ?? "",
+        metaDescription: blogPost.metaDescription ?? "",
+        headings: Array.isArray(blogPost.headings) ? blogPost.headings : [],
+        body: typeof blogPost.body === "string" ? blogPost.body : "",
+        images: Array.isArray(blogPost.images) ? blogPost.images : [],
+        suggestedImagePrompt: blogPost.suggestedImagePrompt,
+      };
 
-    const bodyPlaceholders = extractImagePlaceholders(blogPost.body);
-    if (imageSpecs.length === 0 && bodyPlaceholders.length > 0) {
-      console.warn(
-        `[generate-content] Model left ${bodyPlaceholders.length} IMAGE_URL placeholder(s) in the body but returned no image specs — deriving specs from the placeholders.`
-      );
-      imageSpecs = [
-        {
-          prompt: `Featured image for a blog post titled "${blogPost.title}" about: ${topic}. High quality, editorial, on-brand.`,
-          placement: "featured" as const,
-          sectionTitle: "",
-          description: `Featured image for ${blogPost.title}`,
-        },
-        ...bodyPlaceholders.map((ph) => ({
-          prompt: `Blog illustration for a post about "${topic}". ${ph.alt}. Detailed, on-brand, editorial quality.`,
-          placement: "inline" as const,
-          sectionTitle: "",
-          description: ph.alt || `Inline image ${ph.index}`,
-        })),
-      ];
-    }
+      const blogWordCount = countWords(blogPost.body);
+      console.log(`[generate-content] Blog word count: ${blogWordCount} (min: ${MIN_BLOG_WORDS})`);
 
-    // Legacy fallback: no specs and no placeholders but a suggested prompt.
-    if (imageSpecs.length === 0 && blogPost.suggestedImagePrompt) {
-      imageSpecs = [
-        {
-          prompt: blogPost.suggestedImagePrompt,
-          placement: "featured" as const,
-          sectionTitle: "",
-          description: "Featured image for the post",
-        },
-      ];
-    }
+      // If the generated post is too short, retry with explicit length
+      // instruction and increased maxTokens to give the model room to expand.
+      if (blogWordCount < MIN_BLOG_WORDS) {
+        console.warn(
+          `[generate-content] Blog too short (${blogWordCount} words). Retrying with 2500+ word requirement...`
+        );
+        const enrichedSystemPrompt =
+          blogSystemPrompt +
+          `\n\nCRITICAL: The blog post body MUST be at least 2500 words. Write thorough, detailed content with multiple H2 sections, examples, data points, and actionable insights. Do NOT write thin or shallow content. This will be published on a professional website and must demonstrate expertise.`;
+        const enrichedUserPrompt =
+          (fixFeedback ? `${blogUserPrompt}\n\n${fixFeedback}\n\n` : blogUserPrompt) +
+          `\n\nIMPORTANT: Write at least 2500 words of substantive content.`;
 
-    const generatedImages: GeneratedBlogImage[] =
-      uploadedImages && uploadedImages.length > 0
-        ? await (async () => {
-            // User supplied their own images — skip AI generation and use the
-            // uploaded URLs, mapped onto the model's placements so they sit in
-            // the same spots (featured hero + per-section inline).
-            const attached = attachUploadedImages(uploadedImages, imageSpecs);
-            await persistUploadedImages(
-              tenantId,
-              clientId,
-              attached,
-              blogPost.title
-            );
-            return attached;
-          })()
-        : await generateBlogImages(
-            tenantId,
+        blogPost = await generateStructuredOutput<BlogPostResult>(
+          "blog_generation" as AITask,
+          enrichedSystemPrompt,
+          enrichedUserPrompt,
+          tenantId,
+          getBlogPostSchema(),
+          {
             clientId,
-            imageSpecs,
-            blogPost.title,
-            imageCount
-          );
+            functionName: "generate_blog_post",
+            maxTokens: 32768,
+          }
+        );
+      }
 
-    // Resolve internal-link markers, then guarantee at least one internal
-    // link (related-reading section) when the body has none — automatic
-    // internal linking for posts that will live on the generated site.
-    const bodyWithImages = appendRelatedReading(
-      resolveInternalLinks(
-        injectImagesIntoBody(blogPost.body, generatedImages),
+      // Derive the image specs for THIS draft: the model's structured specs,
+      // else derived from IMAGE_URL placeholders left in the body, else the
+      // legacy suggested prompt.
+      let imageSpecs: BlogImageSpec[] = Array.isArray(blogPost.images)
+        ? blogPost.images
+        : [];
+      const bodyPlaceholders = extractImagePlaceholders(blogPost.body);
+      if (imageSpecs.length === 0 && bodyPlaceholders.length > 0) {
+        console.warn(
+          `[generate-content] Model left ${bodyPlaceholders.length} IMAGE_URL placeholder(s) in the body but returned no image specs — deriving specs from the placeholders.`
+        );
+        imageSpecs = [
+          {
+            prompt: `Featured image for a blog post titled "${blogPost.title}" about: ${topic}. High quality, editorial, on-brand.`,
+            placement: "featured" as const,
+            sectionTitle: "",
+            description: `Featured image for ${blogPost.title}`,
+          },
+          ...bodyPlaceholders.map((ph) => ({
+            prompt: `Blog illustration for a post about "${topic}". ${ph.alt}. Detailed, on-brand, editorial quality.`,
+            placement: "inline" as const,
+            sectionTitle: "",
+            description: ph.alt || `Inline image ${ph.index}`,
+          })),
+        ];
+      }
+      if (imageSpecs.length === 0 && blogPost.suggestedImagePrompt) {
+        imageSpecs = [
+          {
+            prompt: blogPost.suggestedImagePrompt,
+            placement: "featured" as const,
+            sectionTitle: "",
+            description: "Featured image for the post",
+          },
+        ];
+      }
+
+      if (attempts === 1) {
+        // First attempt: generate every image fresh (AI or user uploads).
+        generatedImages =
+          uploadedImages && uploadedImages.length > 0
+            ? await (async () => {
+                // User supplied their own images — skip AI generation and use
+                // the uploaded URLs, mapped onto the model's placements so
+                // they sit in the same spots (featured hero + inline).
+                const attached = attachUploadedImages(uploadedImages, imageSpecs);
+                await persistUploadedImages(
+                  tenantId,
+                  clientId,
+                  attached,
+                  blogPost.title
+                );
+                return attached;
+              })()
+            : await generateBlogImages(
+                tenantId,
+                clientId,
+                imageSpecs,
+                blogPost.title,
+                imageCount
+              );
+      } else {
+        // Gate retry: text only — reuse the images from the first attempt
+        // with the retry draft's (keyword-bearing) descriptions as alt text.
+        generatedImages =
+          uploadedImages && uploadedImages.length > 0
+            ? attachUploadedImages(uploadedImages, imageSpecs)
+            : mapReusedImages(imageSpecs, generatedImages);
+      }
+
+      // Resolve internal-link markers, then guarantee at least one internal
+      // link (related-reading section) when the body has none — automatic
+      // internal linking for posts that will live on the generated site.
+      bodyWithImages = appendRelatedReading(
+        resolveInternalLinks(
+          injectImagesIntoBody(blogPost.body, generatedImages),
+          linkablePages
+        ),
         linkablePages
-      ),
-      linkablePages
-    );
+      );
 
-    // ------------------------------------------------------------------
-    // 3.75. On-page SEO score (Rank Math-style) — stored with the post and
-    // displayed in Recent Content. The keyword used is the primary keyword;
-    // internal links are judged against the workspace knowledge base, so the
-    // score reflects reality (not the model's opinion).
-    // ------------------------------------------------------------------
-    const seoScore = scoreContent({
-      title: blogPost.title,
-      metaDescription: blogPost.metaDescription,
-      slug: blogPost.slug,
-      body: bodyWithImages,
-      keyword: primaryKeyword,
-      internalUrls: linkablePages.map((p) => p.url),
-    });
+      // On-page SEO score (Rank Math-style) — stored with the post and
+      // displayed in Recent Content. The keyword used is the primary keyword;
+      // internal links are judged against the workspace knowledge base, so the
+      // score reflects reality (not the model's opinion).
+      seoScore = scoreContent({
+        title: blogPost.title,
+        metaDescription: blogPost.metaDescription,
+        slug: blogPost.slug,
+        body: bodyWithImages,
+        keyword: primaryKeyword,
+        internalUrls: linkablePages.map((p) => p.url),
+      });
+
+      // AEO/GEO readiness (free heuristic engine — no LLM cost on the
+      // high-volume path). Persisted with the post so the SEO analytics tab
+      // and post list can show it without recomputing.
+      aeoGeo = scoreAeoGeo({
+        title: blogPost.title,
+        metaDescription: blogPost.metaDescription,
+        body: bodyWithImages,
+        keyword: primaryKeyword,
+        entities: [],
+      });
+
+      if (!isBelowGate(seoScore.total, aeoGeo.total, gate)) break;
+      if (attempts >= MAX_SCORE_ATTEMPTS) {
+        throw new ScoreGateError(seoScore.total, aeoGeo.total, gate, seoScore, aeoGeo);
+      }
+      fixFeedback = buildGateFeedback(seoScore, aeoGeo, gate);
+      console.warn(
+        `[generate-content] Draft below score gate (SEO ${seoScore.total}/AEO-GEO ${aeoGeo.total}, gate ${gate}) — retrying (${attempts}/${MAX_SCORE_ATTEMPTS})`
+      );
+    }
+
     const seoPayload = {
       score: seoScore.total,
       grade: seoScore.grade,
@@ -646,17 +702,6 @@ export async function POST(request: NextRequest) {
       wordCount: seoScore.wordCount,
       checks: seoScore.checks,
     };
-
-    // AEO/GEO readiness (free heuristic engine — no LLM cost on the
-    // high-volume path). Persisted with the post so the SEO analytics tab and
-    // post list can show it without recomputing.
-    const aeoGeo = scoreAeoGeo({
-      title: blogPost.title,
-      metaDescription: blogPost.metaDescription,
-      body: bodyWithImages,
-      keyword: primaryKeyword,
-      entities: [],
-    });
     const aeoGeoPayload = {
       score: aeoGeo.total,
       aeoScore: aeoGeo.aeoScore,
@@ -970,6 +1015,23 @@ Use the above context to craft a compelling, platform-optimized caption that dri
       })),
     });
   } catch (error) {
+    // The quality gate rejects drafts that can't clear 80/80 on SEO AND
+    // AEO/GEO after MAX_SCORE_ATTEMPTS — return the scores and failing checks
+    // so the UI can tell the user exactly what to fix (and nothing sub-standard
+    // was saved).
+    if (error instanceof ScoreGateError) {
+      return NextResponse.json(
+        {
+          error: error.message,
+          code: "score_gate",
+          seo: error.seo,
+          aeoGeo: error.aeoGeo,
+          gate: error.gate,
+          checks: error.checks,
+        },
+        { status: 422 }
+      );
+    }
     console.error("[generate-content] Unexpected error:", error);
     const message =
       error instanceof Error ? error.message : "Internal server error";

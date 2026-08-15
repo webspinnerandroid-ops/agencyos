@@ -4,6 +4,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { publishToWordPress } from "@/lib/publishing/wordpressPublisher";
 import { publishPost as publishToSocial } from "@/lib/publishing/socialPublisher";
 import { scoreAeoGeo } from "@/lib/aeo-geo";
+import { getScoreGate } from "@/lib/score-gate";
 import { newBlockId, slugify } from "@/lib/cms";
 
 /**
@@ -40,19 +41,15 @@ function blogBodyToBlocks(body: string): any[] {
   return blocks;
 }
 
-/**
- * Score-based publish gate: content below this score is blocked from being
- * scheduled/published, so low-quality drafts can't go live. The gate checks
- * BOTH the Rank Math-style SEO score AND the AEO/GEO readiness score — a blog
- * must clear both bars (the combined score is the lower of the two). Blogs
- * below the bar are auto-rewritten through Cheryl's pipeline (max 2 times),
- * then the user retries. Admins can override with force=true (they own the
- * final call). Configurable via the SEO_SCORE_PUBLISH_MIN env var (default 80).
- */
-function getPublishMinScore(): number {
-  const raw = Number(process.env.SEO_SCORE_PUBLISH_MIN);
-  return Number.isFinite(raw) && raw >= 0 && raw <= 100 ? raw : 80;
-}
+// Score-based publish gate: content below this score is blocked from being
+// scheduled/published, so low-quality drafts can't go live. The gate checks
+// BOTH the Rank Math-style SEO score AND the AEO/GEO readiness score — a blog
+// must clear both bars (the combined score is the lower of the two). Blogs
+// below the bar are auto-rewritten through Cheryl's pipeline (max 2 times),
+// then the user retries. Admins can override with force=true (they own the
+// final call). Same knob (SEO_SCORE_PUBLISH_MIN, default 80) as the
+// generation-time gate in src/lib/score-gate.ts — one setting for the whole
+// pipeline, and generation already refuses to save sub-gate drafts.
 
 const MAX_AUTO_REWRITES = 2;
 
@@ -80,7 +77,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "Post not found" }, { status: 404 });
       }
 
-      const minScore = getPublishMinScore();
+      const minScore = getScoreGate();
       const parsedContent =
         typeof post.content === "string"
           ? (() => {

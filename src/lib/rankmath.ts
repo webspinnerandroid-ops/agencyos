@@ -203,6 +203,67 @@ export function scoreContent(input: RankMathInput): RankMathResult {
   const longParagraph = paragraphs.some((p) => countWords(p) > 120);
   const subheadings = (input.body.match(/^#{2,3}\s+.+$/gm) ?? []).length;
 
+  // ---- Graduated (partial-credit) signals -------------------------------
+  // Each check below earns a multiplier 0..1 of its maxPoints, so a
+  // near-miss scores partial points instead of all-or-nothing. A full pass
+  // always earns 1.0 (maxPoints) and never changes, so a perfectly optimized
+  // piece still totals exactly 100.
+  const keywordWords = keyword.split(/\s+/).filter(Boolean);
+  const anyKeywordWord = (s: string) =>
+    keywordWords.some((w) => w.length > 0 && includesKeyword(s, w));
+
+  // Title / meta / slug: exact keyword = full; at least one keyword word
+  // present = half credit; nothing = 0.
+  const titleMultiplier = titlePass ? 1 : anyKeywordWord(input.title) ? 0.5 : 0;
+  const metaMultiplier = metaPass ? 1 : anyKeywordWord(input.metaDescription) ? 0.5 : 0;
+  const slugMultiplier = slugPass ? 1 : anyKeywordWord(input.slug.replace(/[-_]/g, " ")) ? 0.5 : 0;
+
+  // First 10%: full; within the first quarter of the body = half credit.
+  const quarterLength = Math.max(300, Math.floor(text.length * 0.25));
+  const first10Multiplier = first10Pass
+    ? 1
+    : text.substring(0, quarterLength).toLowerCase().includes(keyword)
+      ? 0.5
+      : 0;
+
+  // Body presence: 0 mentions = 0, 1 mention = 60%, 2+ = full.
+  const bodyOccurrences = (text.toLowerCase().match(new RegExp(escapeRegExp(keyword), "g")) ?? []).length;
+  const bodyMultiplier = bodyPass ? (bodyOccurrences >= 2 ? 1 : 0.6) : 0;
+
+  // Density: healthy range = full; mild under/over = half; extreme = 0.
+  const densityMultiplier = densityOk
+    ? 1
+    : (density >= 0.25 && density < 0.5) || (density > 3.0 && density <= 4.5)
+      ? 0.5
+      : 0;
+
+  // Internal/outbound links stay binary (any link present = full) — a single
+  // reference is a legitimate full pass, matching the documented tests.
+  const internalMultiplier = internalLinks.length > 0 ? 1 : 0;
+  const outboundMultiplier = outboundLinks.length > 0 ? 1 : 0;
+
+  // Images: keyword alt on every image = full; keyword alt on some = 70%;
+  // alts all present but none with keyword = 40%; otherwise partial.
+  const imagesMultiplier =
+    images.length === 0
+      ? 0
+      : allAltsPresent && anyAltHasKeyword
+        ? 1
+        : anyAltHasKeyword
+          ? 0.7
+          : allAltsPresent
+            ? 0.4
+            : 0.2;
+
+  // Paragraphs: fraction of paragraphs within the 120-word limit.
+  const paragraphsMultiplier =
+    paragraphs.length === 0
+      ? 0
+      : paragraphs.filter((p) => countWords(p) <= 120).length / paragraphs.length;
+
+  // Subheadings: 0 = 0, 1 = half, 2+ = full.
+  const subheadingsMultiplier = subheadings >= 2 ? 1 : subheadings === 1 ? 0.5 : 0;
+
   const defs: {
     id: string;
     label: string;
@@ -218,9 +279,12 @@ export function scoreContent(input: RankMathInput): RankMathResult {
       category: "Basic SEO",
       maxPoints: 6,
       passed: titlePass,
+      multiplier: titleMultiplier,
       detail: titlePass
         ? `Title contains "${keyword}"`
-        : `Title does not contain "${keyword}"`,
+        : titleMultiplier > 0
+          ? `Title contains part of the keyword (${keywordWords.join(" / ")})`
+          : `Title does not contain "${keyword}"`,
     },
     {
       id: "meta",
@@ -228,9 +292,12 @@ export function scoreContent(input: RankMathInput): RankMathResult {
       category: "Basic SEO",
       maxPoints: 6,
       passed: metaPass,
+      multiplier: metaMultiplier,
       detail: metaPass
         ? `Meta description contains "${keyword}"`
-        : `Meta description does not contain "${keyword}"`,
+        : metaMultiplier > 0
+          ? `Meta description contains part of the keyword`
+          : `Meta description does not contain "${keyword}"`,
     },
     {
       id: "slug",
@@ -238,9 +305,12 @@ export function scoreContent(input: RankMathInput): RankMathResult {
       category: "Basic SEO",
       maxPoints: 6,
       passed: slugPass,
+      multiplier: slugMultiplier,
       detail: slugPass
         ? `Slug contains "${keyword}"`
-        : `Slug does not contain "${keyword}"`,
+        : slugMultiplier > 0
+          ? "Slug contains part of the keyword"
+          : `Slug does not contain "${keyword}"`,
     },
     {
       id: "first10",
@@ -248,9 +318,12 @@ export function scoreContent(input: RankMathInput): RankMathResult {
       category: "Basic SEO",
       maxPoints: 6,
       passed: first10Pass,
+      multiplier: first10Multiplier,
       detail: first10Pass
         ? "Keyword appears near the top of the body"
-        : "Keyword does not appear in the first 10% of the body",
+        : first10Multiplier > 0
+          ? "Keyword appears in the first quarter of the body"
+          : "Keyword does not appear in the first 10% of the body",
     },
     {
       id: "body",
@@ -258,8 +331,9 @@ export function scoreContent(input: RankMathInput): RankMathResult {
       category: "Basic SEO",
       maxPoints: 6,
       passed: bodyPass,
+      multiplier: bodyMultiplier,
       detail: bodyPass
-        ? `Keyword "${keyword}" appears in the body`
+        ? `Keyword "${keyword}" appears ${bodyOccurrences} time(s) in the body`
         : `Keyword "${keyword}" never appears in the body`,
     },
     {
@@ -268,6 +342,7 @@ export function scoreContent(input: RankMathInput): RankMathResult {
       category: "Basic SEO",
       maxPoints: 6,
       passed: densityOk,
+      multiplier: densityMultiplier,
       detail: `${density.toFixed(2)}% density — ${
         densityOk
           ? "within the healthy 0.5–3.0% range"
@@ -295,6 +370,7 @@ export function scoreContent(input: RankMathInput): RankMathResult {
       category: "Links",
       maxPoints: 8,
       passed: internalLinks.length > 0,
+      multiplier: internalMultiplier,
       detail:
         internalLinks.length > 0
           ? `${internalLinks.length} internal link(s) to known site pages`
@@ -306,6 +382,7 @@ export function scoreContent(input: RankMathInput): RankMathResult {
       category: "Links",
       maxPoints: 8,
       passed: outboundLinks.length > 0,
+      multiplier: outboundMultiplier,
       detail:
         outboundLinks.length > 0
           ? `${outboundLinks.length} outbound link(s) present`
@@ -317,6 +394,7 @@ export function scoreContent(input: RankMathInput): RankMathResult {
       category: "Images & Readability",
       maxPoints: 9,
       passed: imageAltPass,
+      multiplier: imagesMultiplier,
       detail: images.length === 0
         ? "No images in the post — add at least one with a keyword-bearing alt"
         : !allAltsPresent
@@ -331,6 +409,7 @@ export function scoreContent(input: RankMathInput): RankMathResult {
       category: "Images & Readability",
       maxPoints: 13,
       passed: !longParagraph,
+      multiplier: paragraphsMultiplier,
       detail: longParagraph
         ? "At least one paragraph exceeds 120 words — break it up"
         : "All paragraphs are within the 120-word readability limit",
@@ -341,6 +420,7 @@ export function scoreContent(input: RankMathInput): RankMathResult {
       category: "Images & Readability",
       maxPoints: 12,
       passed: subheadings >= 2,
+      multiplier: subheadingsMultiplier,
       detail:
         subheadings >= 2
           ? `${subheadings} H2/H3 subheadings structure the post`
@@ -353,8 +433,8 @@ export function scoreContent(input: RankMathInput): RankMathResult {
     label: d.label,
     category: d.category,
     maxPoints: d.maxPoints,
-    earned: Math.round((d.passed ? 1 : 0) * (d.multiplier ?? 1) * d.maxPoints),
-    passed: d.passed,
+    earned: Math.round((d.multiplier ?? 1) * d.maxPoints),
+    passed: (d.multiplier ?? 1) >= 1,
     detail: d.detail,
   }));
 

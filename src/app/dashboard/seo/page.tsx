@@ -47,6 +47,14 @@ export default function SeoPage() {
         </Card>
 
         <Card>
+          <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Search className="size-4 text-primary" />Content Analyzer</CardTitle><CardDescription>Paste a URL or text and run the SEO / AEO / GEO test suite on it.</CardDescription></CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">See the full per-check score breakdown and whether the content clears the 80/80 gate.</p>
+            <Button className="w-full" variant="outline" onClick={() => window.location.href = "/dashboard/seo/analyzer"}>Open Analyzer</Button>
+          </CardContent>
+        </Card>
+
+        <Card>
           <CardHeader><CardTitle className="flex items-center gap-2 text-base"><BarChart3 className="size-4 text-primary" />Rankings</CardTitle><CardDescription>Track keyword rankings over time.</CardDescription></CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">Coming soon — connect Google Search Console to track keyword performance.</p>

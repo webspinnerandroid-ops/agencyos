@@ -135,9 +135,19 @@ export function scoreAeoGeo(input: AeoGeoInput): AeoGeoResult {
     pillar: "AEO" | "GEO",
     maxPoints: number,
     passed: boolean,
-    detail: string
+    detail: string,
+    multiplier?: number
   ) => {
-    checks.push({ id, label, pillar, maxPoints, earned: passed ? maxPoints : 0, passed, detail });
+    const m = multiplier ?? (passed ? 1 : 0);
+    checks.push({
+      id,
+      label,
+      pillar,
+      maxPoints,
+      earned: Math.round(m * maxPoints),
+      passed: m >= 1,
+      detail,
+    });
   };
 
   // ---- AEO pillar (50) ----
@@ -148,17 +158,21 @@ export function scoreAeoGeo(input: AeoGeoInput): AeoGeoResult {
     "AEO",
     12,
     qWordHits.length >= 4,
-    `Covers ${qWordHits.length}/8 question word families${qWordHits.length < 4 ? " — add sections that answer \"what/why/how\" directly" : ""}.`
+    `Covers ${qWordHits.length}/8 question word families${qWordHits.length < 4 ? " — add sections that answer \"what/why/how\" directly" : ""}.`,
+    qWordHits.length >= 4 ? 1 : qWordHits.length >= 2 ? 0.5 : 0
   );
 
-  const hasQuestionMark = /\?/.test(text);
+  const questionCount = (text.match(/\?/g) ?? []).length;
   push(
     "aeo_direct_questions",
     "Direct questions in body",
     "AEO",
     10,
-    hasQuestionMark,
-    hasQuestionMark ? "Body contains explicit questions the content answers." : "No '?' questions found — answer engines look for explicit Q&A."
+    questionCount >= 1,
+    questionCount >= 1
+      ? `${questionCount} explicit question(s) the content answers.`
+      : "No '?' questions found — answer engines look for explicit Q&A.",
+    questionCount >= 2 ? 1 : questionCount === 1 ? 0.5 : 0
   );
 
   const qaPairs = extractQaPairs(input.body);
@@ -168,27 +182,40 @@ export function scoreAeoGeo(input: AeoGeoInput): AeoGeoResult {
     "AEO",
     10,
     qaPairs.length >= 2,
-    `${qaPairs.length} question→answer pairs detected${qaPairs.length < 2 ? " (2+ feed the answer library / FAQ schema)" : ""}.`
+    `${qaPairs.length} question→answer pairs detected${qaPairs.length < 2 ? " (2+ feed the answer library / FAQ schema)" : ""}.`,
+    qaPairs.length >= 2 ? 1 : qaPairs.length === 1 ? 0.5 : 0
   );
 
   const keywordInTop = lower.slice(0, Math.max(300, Math.floor(lower.length * 0.1))).includes(kw);
+  const keywordInQuarter = lower.slice(0, Math.max(300, Math.floor(lower.length * 0.25))).includes(kw);
   push(
     "aeo_keyword_early",
     "Keyword answered in first 10%",
     "AEO",
     8,
     keywordInTop,
-    keywordInTop ? "Primary keyword appears in the opening definitional section." : "Answer engines read the intro first — put a definition with the keyword near the top."
+    keywordInTop
+      ? "Primary keyword appears in the opening definitional section."
+      : keywordInQuarter
+        ? "Keyword appears in the first quarter of the content."
+        : "Answer engines read the intro first — put a definition with the keyword near the top.",
+    keywordInTop ? 1 : keywordInQuarter ? 0.5 : 0
   );
 
   const definitional = DEFINITION_PATTERNS.test(text.slice(0, Math.max(400, Math.floor(text.length * 0.15))));
+  const definitionalAnywhere = DEFINITION_PATTERNS.test(text.slice(0, Math.max(800, Math.floor(text.length * 0.4))));
   push(
     "aeo_definitional_intro",
     "Definitional introduction",
     "AEO",
     6,
     definitional,
-    definitional ? "Opening uses \"is / means / refers to\" definitional phrasing." : "Open with a crisp one-sentence definition of the topic."
+    definitional
+      ? "Opening uses \"is / means / refers to\" definitional phrasing."
+      : definitionalAnywhere
+        ? "Definitional phrasing appears later in the content — move it to the opening."
+        : "Open with a crisp one-sentence definition of the topic.",
+    definitional ? 1 : definitionalAnywhere ? 0.5 : 0
   );
 
   const faqHeading = headingLower.includes("faq") || headingLower.includes("frequently asked");
@@ -212,7 +239,8 @@ export function scoreAeoGeo(input: AeoGeoInput): AeoGeoResult {
     "GEO",
     14,
     statHits >= 1,
-    `${statHits} data point(s) (%, counts, years)${statHits === 0 ? " — generative engines prefer content with concrete numbers to cite" : ""}.`
+    `${statHits} data point(s) (%, counts, years)${statHits === 0 ? " — generative engines prefer content with concrete numbers to cite" : ""}.`,
+    statHits >= 2 ? 1 : statHits === 1 ? 0.5 : 0
   );
 
   const schemaReady = input.hasFaqSchema || input.hasArticleSchema || faqHeading || qaPairs.length >= 2;
@@ -226,27 +254,34 @@ export function scoreAeoGeo(input: AeoGeoInput): AeoGeoResult {
       ? "Structured data already present."
       : faqHeading || qaPairs.length >= 2
       ? "Q&A structure present — an FAQPage schema can be generated automatically."
-      : "Add an FAQ section or Q&A pairs so FAQPage schema can be generated."
+      : "Add an FAQ section or Q&A pairs so FAQPage schema can be generated.",
+    input.hasFaqSchema || input.hasArticleSchema ? 1 : faqHeading || qaPairs.length >= 2 ? 0.75 : qaPairs.length === 1 ? 0.4 : 0
   );
 
   const steps = STEP_PATTERNS.test(lower);
+  const stepHits =
+    (lower.match(STEP_PATTERNS) ?? []).length +
+    (text.match(/^\s*\d+\.\s+/gm) ?? []).length;
   push(
     "geo_step_structure",
     "Structured steps / how-to",
     "GEO",
     8,
     steps,
-    steps ? "How-to / step structure detected — strong for AI citation." : "Add a numbered step list or how-to section."
+    steps ? "How-to / step structure detected — strong for AI citation." : "Add a numbered step list or how-to section.",
+    stepHits >= 2 ? 1 : steps ? 0.5 : 0
   );
 
   const confidence = CONFIDENCE_PATTERNS.test(lower);
+  const confidenceHits = (lower.match(CONFIDENCE_PATTERNS) ?? []).length;
   push(
     "geo_authority_signals",
     "Authority signals",
     "GEO",
     8,
     confidence,
-    confidence ? "Authoritative language (studies, citations, standards) present." : "Cite a study, standard, or authoritative source to boost credibility."
+    confidence ? "Authoritative language (studies, citations, standards) present." : "Cite a study, standard, or authoritative source to boost credibility.",
+    confidenceHits >= 2 ? 1 : confidence ? 0.5 : 0
   );
 
   const linkCount = (input.body.match(/\]\(https?:\/\//g) ?? []).length;
@@ -256,7 +291,8 @@ export function scoreAeoGeo(input: AeoGeoInput): AeoGeoResult {
     "GEO",
     8,
     linkCount >= 1,
-    `${linkCount} outbound reference link(s)${linkCount === 0 ? " — cite sources with links so engines can verify claims" : ""}.`
+    `${linkCount} outbound reference link(s)${linkCount === 0 ? " — cite sources with links so engines can verify claims" : ""}.`,
+    linkCount >= 2 ? 1 : linkCount === 1 ? 0.5 : 0
   );
 
   const aeoChecks = checks.filter((c) => c.pillar === "AEO");

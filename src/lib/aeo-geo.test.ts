@@ -58,6 +58,38 @@ describe("scoreAeoGeo", () => {
     expect(r.aeoScore).toBeLessThan(30);
   });
 
+  it("awards partial AEO credit for a single question word family", () => {
+    const body =
+      "Why does the topic matter? The topic is the main subject of this " +
+      "piece and we explain it fully below with everything you need.";
+    const r = scoreAeoGeo({
+      title: "The Topic",
+      metaDescription: "All about the topic",
+      body,
+      keyword: "topic",
+    });
+    const check = r.checks.find((c) => c.id === "aeo_question_coverage");
+    expect(check?.passed).toBe(false); // only 1 family (< 4)
+    expect(check?.earned).toBeGreaterThan(0); // partial, not 0
+    expect(check?.earned).toBeLessThan(12); // not full either
+  });
+
+  it("awards partial GEO credit for a single data point", () => {
+    const body =
+      "Some topic explained here with one concrete statistic: 3 in 4 users agree. " +
+      "The rest of the content is plain prose without further numbers.";
+    const r = scoreAeoGeo({
+      title: "The Topic",
+      metaDescription: "All about the topic",
+      body,
+      keyword: "topic",
+    });
+    const check = r.checks.find((c) => c.id === "geo_data_points");
+    expect(check?.passed).toBe(false); // needs 2+ stats for full
+    expect(check?.earned).toBeGreaterThan(0);
+    expect(check?.earned).toBeLessThan(14);
+  });
+
   it("extracts Q&A pairs from markdown", () => {
     const pairs = extractQaPairs(strongBody);
     const qs = pairs.map((p) => p.q);

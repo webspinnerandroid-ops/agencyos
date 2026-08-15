@@ -117,6 +117,43 @@ describe("scoreContent", () => {
     expect(res.total).toBeLessThan(100);
   });
 
+  it("awards partial credit when the title has only part of the keyword", () => {
+    // Title contains one of the keyword words ("coffee") but not the full
+    // phrase — should earn half of the title check's 6 points, not 0.
+    const res = scoreContent({
+      ...BASE,
+      title: "A Seasonal Coffee Guide",
+      body: makeBody(),
+    });
+    const titleCheck = res.checks.find((c) => c.id === "title");
+    expect(titleCheck?.passed).toBe(false);
+    expect(titleCheck?.earned).toBe(3); // 6 * 0.5
+  });
+
+  it("gives partial credit for a single keyword mention in the body", () => {
+    const body =
+      "A short body with no subheadings. " +
+      `Only one mention of the keyword: ${BASE.keyword}. ` +
+      "Nothing else here.";
+    const res = scoreContent({ ...BASE, body });
+    const bodyCheck = res.checks.find((c) => c.id === "body");
+    expect(bodyCheck?.passed).toBe(false);
+    expect(bodyCheck?.earned).toBeGreaterThan(0);
+    expect(bodyCheck?.earned).toBeLessThan(6);
+  });
+
+  it("gives partial credit when a paragraph is over the word limit", () => {
+    const longPara = "word ".repeat(150);
+    const res = scoreContent({
+      ...BASE,
+      body: makeBody() + "\n\n" + longPara,
+    });
+    const paraCheck = res.checks.find((c) => c.id === "paragraphs");
+    expect(paraCheck?.passed).toBe(false);
+    expect(paraCheck?.earned).toBeGreaterThan(0);
+    expect(paraCheck?.earned).toBeLessThan(13);
+  });
+
   it("flags missing alt text / keyword-less alts", () => {
     const body =
       makeBody() + "\n\n![some random scene](https://img.example.com/1.png)";

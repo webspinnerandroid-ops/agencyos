@@ -77,6 +77,7 @@ interface GenerateResponse {
       wordCount: number;
       checks: { id: string; label: string; category: string; maxPoints: number; earned: number; passed: boolean; detail: string }[];
     };
+    schemaTypes?: string[];
     rankMath?: Record<string, string | string[]>;
     rankMathSummary?: {
       title: string;
@@ -131,6 +132,7 @@ export default function GeneratePage() {
   const [keywordsText, setKeywordsText] = useState("");
   const [imageCount, setImageCount] = useState(1);
   const [imageSource, setImageSource] = useState<"generate" | "upload">("generate");
+  const [schemaTypes, setSchemaTypes] = useState<string>("auto");
   const [uploadedFiles, setUploadedFiles] = useState<
     { file: File; preview: string }[]
   >([]);
@@ -240,7 +242,14 @@ export default function GeneratePage() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...data, keywords, imageCount, uploadedImages }),
+        body: JSON.stringify({
+          ...data,
+          keywords,
+          imageCount,
+          uploadedImages,
+          schemaTypes:
+            schemaTypes === "auto" ? "auto" : (schemaTypes.split(",") as ("Article" | "FAQPage" | "HowTo" | "Recipe")[]),
+        }),
       });
 
       const json = await res.json();
@@ -322,6 +331,30 @@ export default function GeneratePage() {
               {errors.topic && (
                 <p className="text-sm text-destructive">{errors.topic.message}</p>
               )}
+            </div>
+
+            {/* Schema markup selection — auto-detect is the default */}
+            <div className="space-y-2">
+              <Label htmlFor="schemaTypes">WordPress Schema (Rank Math)</Label>
+              <select
+                id="schemaTypes"
+                value={schemaTypes}
+                onChange={(e) => setSchemaTypes(e.target.value)}
+                disabled={loading}
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+              >
+                <option value="auto">Auto-detect (recommended)</option>
+                <option value="Article">Article</option>
+                <option value="Article,FAQPage">Article + FAQPage</option>
+                <option value="Article,HowTo">Article + HowTo</option>
+                <option value="Article,Recipe">Article + Recipe</option>
+                <option value="Article,FAQPage,HowTo">Article + FAQPage + HowTo</option>
+                <option value="Article,FAQPage,Recipe">Article + FAQPage + Recipe</option>
+              </select>
+              <p className="text-xs text-muted-foreground">
+                Auto-detect adds FAQPage when the post has Q&amp;A pairs, and HowTo / Recipe when it has numbered steps.
+                Schema author defaults to the client&apos;s company name.
+              </p>
             </div>
 
             {/* Brand Voice */}
@@ -700,9 +733,11 @@ export default function GeneratePage() {
                     <Sparkles className="size-3.5 text-primary" />
                     WordPress Rank Math meta
                     <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded-full bg-muted">
-                      {result.blogPost.rankMathSummary?.hasFaqSchema
-                        ? `Article + FAQPage (${result.blogPost.rankMathSummary.faqCount} Q&As)`
-                        : "Article schema"}
+                      {result.blogPost.schemaTypes
+                        ? result.blogPost.schemaTypes.join(" + ")
+                        : result.blogPost.rankMathSummary?.hasFaqSchema
+                          ? `Article + FAQPage (${result.blogPost.rankMathSummary.faqCount} Q&As)`
+                          : "Article schema"}
                     </span>
                   </summary>
                   <div className="mt-3 space-y-3">

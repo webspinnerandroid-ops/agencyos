@@ -63,6 +63,14 @@ export default function SeoPage() {
         </Card>
 
         <Card>
+          <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Zap className="size-4 text-primary" />Content Rewriter</CardTitle><CardDescription>Paste any text and rewrite it to pass the SEO / AEO / GEO gate.</CardDescription></CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">Fix failing checks with AI, see before/after scores, and save passing results to Monitored Sites.</p>
+            <Button className="w-full" variant="outline" onClick={() => window.location.href = "/dashboard/seo/rewriter"}>Open Rewriter</Button>
+          </CardContent>
+        </Card>
+
+        <Card>
           <CardHeader><CardTitle className="flex items-center gap-2 text-base"><BarChart3 className="size-4 text-primary" />Rankings</CardTitle><CardDescription>Track keyword rankings over time.</CardDescription></CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">Coming soon — connect Google Search Console to track keyword performance.</p>

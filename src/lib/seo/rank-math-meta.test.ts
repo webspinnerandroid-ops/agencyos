@@ -26,15 +26,45 @@ describe("buildRankMathMeta", () => {
     expect(meta.rank_math_focus_keyword).toBe("seasonal coffee menu");
     expect(meta.rank_math_schema_Article).toContain("Article");
     expect(meta.rank_math_schema_FAQPage).toContain("FAQPage");
-    expect(summary.hasArticleSchema).toBe(true);
-    expect(summary.hasFaqSchema).toBe(true);
+    expect(summary.schemaTypes).toEqual(["Article", "FAQPage"]);
     expect(summary.faqCount).toBe(2);
   });
 
   it("omits FAQPage schema when no Q&A pairs exist", () => {
     const { meta, summary } = buildRankMathMeta({ ...base, qaPairs: [] });
     expect(meta.rank_math_schema_FAQPage).toBeUndefined();
-    expect(summary.hasFaqSchema).toBe(false);
+    expect(summary.schemaTypes).not.toContain("FAQPage");
+  });
+
+  it("adds OpenGraph + Twitter social meta from the featured image", () => {
+    const { meta } = buildRankMathMeta({
+      ...base,
+      featuredImageUrl: "https://cdn.example.com/og.png",
+    });
+    expect(meta.rank_math_facebook_image).toBe("https://cdn.example.com/og.png");
+    expect(meta.rank_math_twitter_image).toBe("https://cdn.example.com/og.png");
+    expect(meta.rank_math_facebook_title).toBe(base.title);
+    expect(meta.rank_math_twitter_description).toBe(base.metaDescription);
+  });
+
+  it("emits only the explicitly chosen schema types (Article always kept)", () => {
+    const { meta, summary } = buildRankMathMeta({ ...base, schemaTypes: ["HowTo"] });
+    expect(meta.rank_math_schema_Article).toBeDefined();
+    expect(meta.rank_math_schema_FAQPage).toBeUndefined();
+    expect(summary.schemaTypes).toContain("HowTo");
+  });
+
+  it("auto-detects HowTo from numbered steps in the body", () => {
+    const body = "1. Grind the beans.\n2. Heat the water.\n3. Pour slowly.";
+    const { meta, summary } = buildRankMathMeta({ ...base, body });
+    expect(meta.rank_math_schema_HowTo).toBeDefined();
+    expect(summary.schemaTypes).toContain("HowTo");
+    expect(summary.stepCount).toBeGreaterThanOrEqual(2);
+  });
+
+  it("omits HowTo when the body has no steps", () => {
+    const { meta } = buildRankMathMeta({ ...base, body: "No numbered steps here." });
+    expect(meta.rank_math_schema_HowTo).toBeUndefined();
   });
 
   it("drops empty optional values", () => {
@@ -49,6 +79,8 @@ describe("buildRankMathMeta", () => {
     expect(meta.rank_math_focus_keyword).toBeUndefined();
     // Schema blocks still ship for the article.
     expect(meta.rank_math_schema_Article).toBeDefined();
+    // No social blocks without a title-length description or image.
+    expect(meta.rank_math_facebook_image).toBeUndefined();
   });
 });
 

@@ -28,6 +28,15 @@ export const generateContentSchema = z
     // captions) is a supported and common case, so an empty/absent list must
     // not fail validation. The blog post is always generated.
     platforms: z.array(z.string()).optional(),
+    // JSON-LD schema types to generate with the post (Article is always
+    // included). "auto" detects from the content (FAQPage from Q&A pairs,
+    // HowTo/Recipe from numbered steps).
+    schemaTypes: z
+      .union([
+        z.array(z.enum(["Article", "FAQPage", "HowTo", "Recipe"])),
+        z.literal("auto"),
+      ])
+      .optional(),
   })
   .refine(
     (v) =>

@@ -356,7 +356,36 @@ export async function POST(request: NextRequest) {
       keywords = [],
       imageCount = MAX_BLOG_IMAGES,
       uploadedImages,
+      schemaTypes = "auto",
     } = parsed.data;
+
+    // Schema author/publisher defaults to the CLIENT's company name (falls
+    // back to the tenant name, then the brand profile name, then a default).
+    let schemaSiteName: string | null = null;
+    try {
+      const siteClient = await (await createServiceClient())
+        .from("clients")
+        .select("name")
+        .eq("id", clientId ?? "00000000-0000-0000-0000-000000000000")
+        .eq("tenant_id", tenantId)
+        .maybeSingle();
+      if (siteClient.data?.name) schemaSiteName = siteClient.data.name;
+    } catch {
+      // fall through — tenant name below
+    }
+    if (!schemaSiteName) {
+      // Fall back to the default brand profile's name (the workspace/brand
+      // the post is generated for) — tenant name lookup would need an extra
+      // query and the brand name is the more relevant author anyway.
+      try {
+        const brandRes = await getDefaultBrandProfile();
+        if (brandRes.success && brandRes.data?.name) {
+          schemaSiteName = brandRes.data.name;
+        }
+      } catch {
+        // fall through — default site name in the meta builder
+      }
+    }
 
     // The user may supply a title, keywords/topics, or both. "topic" is the
     // primary working keyword the model writes around; when only a title is
@@ -719,7 +748,6 @@ export async function POST(request: NextRequest) {
       generatedImages.find((img) => img.spec.placement === "featured")?.url ??
       generatedImages[0]?.url ??
       null;
-    const brandName = workspaceContext.match(/BRAND VOICE: ([^\n]+)/)?.[1] ?? null;
     const rankMath = buildRankMathMeta({
       title: blogPost.title,
       metaDescription: blogPost.metaDescription,
@@ -727,7 +755,9 @@ export async function POST(request: NextRequest) {
       qaPairs: aeoGeo.qaPairs,
       featuredImageUrl: featuredImage,
       slug: blogPost.slug,
-      siteName: brandName,
+      siteName: schemaSiteName,
+      schemaTypes: schemaTypes as "auto" | ("Article" | "FAQPage" | "HowTo" | "Recipe")[] | undefined,
+      body: bodyWithImages,
     });
 
     // Safety net: if the body still mentions IMAGE_URL tokens the image
@@ -885,6 +915,7 @@ Use the above context to craft a compelling, platform-optimized caption that dri
             seo: seoPayload,
             aeoGeo: aeoGeoPayload,
             rankMath: rankMath.meta,
+            schemaTypes: Array.isArray(schemaTypes) ? schemaTypes : rankMath.summary.schemaTypes,
             rankMathPreview: schemaPreview({
               title: blogPost.title,
               metaDescription: blogPost.metaDescription,
@@ -892,7 +923,9 @@ Use the above context to craft a compelling, platform-optimized caption that dri
               qaPairs: aeoGeo.qaPairs,
               featuredImageUrl: featuredImage,
               slug: blogPost.slug,
-              siteName: brandName,
+              siteName: schemaSiteName,
+              schemaTypes: schemaTypes as "auto" | ("Article" | "FAQPage" | "HowTo" | "Recipe")[] | undefined,
+              body: bodyWithImages,
             }),
           },
           status: "draft",
@@ -1035,6 +1068,7 @@ Use the above context to craft a compelling, platform-optimized caption that dri
         seo: seoPayload,
         rankMath: rankMath.meta,
         rankMathSummary: rankMath.summary,
+        schemaTypes: Array.isArray(schemaTypes) ? schemaTypes : rankMath.summary.schemaTypes,
         schemaPreview: schemaPreview({
           title: blogPost.title,
           metaDescription: blogPost.metaDescription,
@@ -1042,7 +1076,9 @@ Use the above context to craft a compelling, platform-optimized caption that dri
           qaPairs: aeoGeo.qaPairs,
           featuredImageUrl: featuredImage,
           slug: blogPost.slug,
-          siteName: brandName,
+          siteName: schemaSiteName,
+          schemaTypes: schemaTypes as "auto" | ("Article" | "FAQPage" | "HowTo" | "Recipe")[] | undefined,
+          body: bodyWithImages,
         }),
         research: research
           ? { questions: research.questions, trends: research.trends, source: research.source }

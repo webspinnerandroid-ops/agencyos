@@ -89,15 +89,36 @@ async function postToWordPress(target: WpPublishTarget): Promise<WpPublishResult
   // Rank Math registers its fields as top-level REST params on wp/v2/posts
   // (rank_math_title, rank_math_description, rank_math_focus_keyword,
   // rank_math_schema_*). Send them when the post carries a generated payload;
-  // if the site doesn't have Rank Math the API rejects the unknown params
-  // with rest_invalid_param and we retry without them so publishing never
-  // breaks on a plugin-less site.
+  // if the site doesn't have Rank Math (or doesn't expose its fields) the API
+  // either rejects them (rest_invalid_param → retry without) or silently
+  // ignores them — either way publishing never breaks.
   const rankMath = content.rankMath ?? {};
   for (const [key, value] of Object.entries(rankMath)) {
     if (typeof value === "string") body[key] = value;
     else body[key] = value;
   }
   const rankMathKeys = Object.keys(rankMath);
+
+  // The ONLY way to guarantee schema lands on every WP site (Rank Math's REST
+  // fields aren't exposed on many installs) is embedding the JSON-LD directly
+  // in the post content — Google reads it from anywhere in the DOM, and Rank
+  // Math dedupes embedded schema it detects. Built from the same payload.
+  const schemaBlocks: unknown[] = [];
+  for (const key of ["rank_math_schema_Article", "rank_math_schema_FAQPage", "rank_math_schema_HowTo", "rank_math_schema_Recipe"]) {
+    const raw = rankMath[key];
+    if (typeof raw !== "string") continue;
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) schemaBlocks.push(...parsed);
+    } catch {
+      // ignore malformed schema — never fail a publish over it
+    }
+  }
+  if (schemaBlocks.length > 0) {
+    const jsonLd = JSON.stringify(schemaBlocks);
+    const scriptTag = `<script type="application/ld+json">${jsonLd}</script>`;
+    body.content = `${scriptTag}\n\n${body.content ?? ""}`;
+  }
 
   // Put the post into the chosen category (default: WordPress's own
   // "Uncategorized" when none is picked — the API accepts category IDs).

@@ -16,6 +16,9 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // Local puppeteer screenshot profiles (Chrome user-data dirs).
     ".edge-profile-*/**",
+    // Agent/ops scratch dir (ad-hoc deploy/diag scripts, session data, docs).
+    // Gitignored, so CI never has it; ignoring keeps local lint == CI.
+    ".freebuff/**",
     "*.cjs",
     "*.js",
     "*.txt",

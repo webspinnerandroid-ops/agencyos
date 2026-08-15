@@ -101,6 +101,8 @@ interface MonitoredSite {
   fetchError: string | null;
   lastAuditedAt: string;
   auditCount: number;
+  /** Combined scores per recent run, oldest → newest (up to 4). */
+  trend: (number | null)[];
 }
 
 function timeAgo(iso: string): string {
@@ -162,6 +164,38 @@ function diffChecks(a: AuditRun, b: AuditRun): {
 
 function fmtPct(v: number | null | undefined): string {
   return v == null ? "—" : `${(v * 100).toFixed(1)}%`;
+}
+
+/** Tiny inline SVG sparkline for the trend column (no chart overhead). */
+function Sparkline({ points }: { points: (number | null)[] }) {
+  const w = 72;
+  const h = 24;
+  const valid = points.filter((p): p is number => p != null);
+  if (valid.length < 2) {
+    return (
+      <svg width={w} height={h} className="mx-auto">
+        <text x={w / 2} y={h / 2 + 3} textAnchor="middle" fontSize="9" className="fill-muted-foreground">
+          —
+        </text>
+      </svg>
+    );
+  }
+  const min = Math.min(...valid);
+  const max = Math.max(...valid);
+  const span = Math.max(1, max - min);
+  const x = (i: number) => (i / (valid.length - 1)) * (w - 4) + 2;
+  const y = (v: number) => h - 3 - ((v - min) / span) * (h - 8);
+  const d = valid.map((v, i) => `${i === 0 ? "M" : "L"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const last = valid[valid.length - 1];
+  const up = last != null && valid.length >= 2 && last >= valid[valid.length - 2];
+  const color = up ? "#22c55e" : "#ef4444";
+  return (
+    <svg width={w} height={h} className="mx-auto" aria-label="4-week score trend">
+      <polyline points={valid.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ")} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
+      <circle cx={x(valid.length - 1)} cy={y(last)} r="2" fill={color} />
+      <title>{points.map((p) => (p == null ? "—" : p)).join(" → ")}</title>
+    </svg>
+  );
 }
 
 function fmtDate(iso: string): string {
@@ -802,6 +836,7 @@ export default function SeoSitesPage() {
                   <th className="py-3 pr-4 font-medium text-right">GEO</th>
                   <th className="py-3 pr-4 font-medium text-right">Issues</th>
                   <th className="py-3 pr-4 font-medium text-right">Audits</th>
+                  <th className="py-3 pr-4 font-medium text-center">Trend</th>
                   <th className="py-3 pr-4 font-medium text-right">Last audited</th>
                   <th className="py-3 pr-4 font-medium text-right">Actions</th>
                 </tr>
@@ -860,6 +895,9 @@ export default function SeoSitesPage() {
                       </td>
                       <td className="py-3 pr-4 text-right text-muted-foreground">
                         {site.auditCount}
+                      </td>
+                      <td className="py-3 pr-4 text-center">
+                        <Sparkline points={site.trend ?? []} />
                       </td>
                       <td className="py-3 pr-4 text-right text-muted-foreground whitespace-nowrap">
                         {timeAgo(site.lastAuditedAt)}

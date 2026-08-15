@@ -60,13 +60,25 @@ export async function GET(request: NextRequest) {
       .limit(500);
     if (error) throw error;
 
-    // Latest-per-URL, preserving newest-first order.
+    // Latest-per-URL (newest-first), collecting the last few runs' combined
+    // scores per site for the dashboard's trend sparkline.
     const seen = new Map<string, typeof data[number]>();
     const counts = new Map<string, number>();
+    const trend = new Map<string, (number | null)[]>();
     for (const row of data ?? []) {
       const key = row.url ?? `text:${row.title}`;
       counts.set(key, (counts.get(key) ?? 0) + 1);
       if (!seen.has(key)) seen.set(key, row);
+      // Combined score of each run; keep the most recent 4 (newest first).
+      const combined =
+        row.seo_score != null && row.aeo_score != null && row.geo_score != null
+          ? Math.round((row.seo_score + row.aeo_score + row.geo_score) / 3)
+          : row.seo_score;
+      const list = trend.get(key) ?? [];
+      if (list.length < 4) {
+        list.push(combined);
+        trend.set(key, list);
+      }
     }
     const sites = [...seen.values()].map((row) => {
       const key = row.url ?? `text:${row.title}`;
@@ -84,6 +96,8 @@ export async function GET(request: NextRequest) {
         fetchError: row.fetch_error,
         lastAuditedAt: row.created_at,
         auditCount: counts.get(key) ?? 1,
+        // Chronological (oldest → newest) for the sparkline.
+        trend: (trend.get(key) ?? []).slice().reverse(),
       };
     });
 

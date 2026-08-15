@@ -52,6 +52,7 @@ import {
 } from "@/lib/content-links";
 import { scoreContent, type RankMathResult } from "@/lib/rankmath";
 import { scoreAeoGeo, type AeoGeoResult } from "@/lib/aeo-geo";
+import { buildRankMathMeta, schemaPreview } from "@/lib/seo/rank-math-meta";
 import {
   getScoreGate,
   MAX_SCORE_ATTEMPTS,
@@ -559,6 +560,21 @@ async function cherylGenerateBlog(
     internalUrls: linkablePages.map((p) => p.url),
   });
 
+  const featuredImage =
+    generated.find((img) => img.spec.placement === "featured")?.url ??
+    generated[0]?.url ??
+    null;
+  const brandName = workspaceContext.match(/BRAND VOICE: ([^\n]+)/)?.[1] ?? null;
+  const rankMath = buildRankMathMeta({
+    title: blogPost.title,
+    metaDescription: blogPost.metaDescription,
+    focusKeyword: primaryKeyword,
+    qaPairs: aeoGeo.qaPairs,
+    featuredImageUrl: featuredImage,
+    slug: blogPost.slug,
+    siteName: brandName,
+  });
+
   const { data: post, error: postError } = await supabase
     .from("posts")
     .insert({
@@ -595,6 +611,16 @@ async function cherylGenerateBlog(
           checks: aeoGeo.checks,
           qaPairs: aeoGeo.qaPairs,
         },
+        rankMath: rankMath.meta,
+        rankMathPreview: schemaPreview({
+          title: blogPost.title,
+          metaDescription: blogPost.metaDescription,
+          focusKeyword: primaryKeyword,
+          qaPairs: aeoGeo.qaPairs,
+          featuredImageUrl: featuredImage,
+          slug: blogPost.slug,
+          siteName: brandName,
+        }),
         eval: {
           verdict: evalResult.verdict,
           score: evalResult.score,

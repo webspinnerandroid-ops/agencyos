@@ -27,6 +27,8 @@ export interface WpPublishTarget {
     body: string;
     metaDescription?: string;
     slug?: string;
+    /** Rank Math post-meta keys (rank_math_*) generated with the post. */
+    rankMath?: Record<string, string | string[]>;
   };
   action: "draft" | "publish" | "schedule";
   scheduledAt?: string;     // ISO date for scheduling
@@ -84,6 +86,19 @@ async function postToWordPress(target: WpPublishTarget): Promise<WpPublishResult
     status: action === "publish" ? "publish" : "draft",
   };
 
+  // Rank Math registers its fields as top-level REST params on wp/v2/posts
+  // (rank_math_title, rank_math_description, rank_math_focus_keyword,
+  // rank_math_schema_*). Send them when the post carries a generated payload;
+  // if the site doesn't have Rank Math the API rejects the unknown params
+  // with rest_invalid_param and we retry without them so publishing never
+  // breaks on a plugin-less site.
+  const rankMath = content.rankMath ?? {};
+  for (const [key, value] of Object.entries(rankMath)) {
+    if (typeof value === "string") body[key] = value;
+    else body[key] = value;
+  }
+  const rankMathKeys = Object.keys(rankMath);
+
   // Put the post into the chosen category (default: WordPress's own
   // "Uncategorized" when none is picked — the API accepts category IDs).
   if (categoryId !== undefined && categoryId !== null && categoryId !== "") {
@@ -101,19 +116,41 @@ async function postToWordPress(target: WpPublishTarget): Promise<WpPublishResult
   }
 
   try {
-    const response = await fetch(apiUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: authHeader,
-      },
-      body: JSON.stringify(body),
-    });
+    const send = async (payload: Record<string, any>) => {
+      const response = await fetch(apiUrl, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: authHeader,
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json();
+      return { ok: response.ok, status: response.status, data };
+    };
 
-    const data = await response.json();
+    let { ok, status, data } = await send(body);
 
-    if (!response.ok) {
-      const message = data?.message || data?.code || `HTTP ${response.status}`;
+    // A site without Rank Math rejects the extra rank_math_* params — retry
+    // without them (rest_invalid_param: "Invalid parameter(s): rank_math_...").
+    if (
+      !ok &&
+      status === 400 &&
+      rankMathKeys.length > 0 &&
+      typeof data?.code === "string" &&
+      data.code === "rest_invalid_param" &&
+      /rank_math/i.test(JSON.stringify(data?.data ?? data?.message ?? ""))
+    ) {
+      const stripped = { ...body };
+      for (const key of rankMathKeys) delete stripped[key];
+      const retry = await send(stripped);
+      ok = retry.ok;
+      status = retry.status;
+      data = retry.data;
+    }
+
+    if (!ok) {
+      const message = data?.message || data?.code || `HTTP ${status}`;
       return { success: false, errorMessage: message };
     }
 
@@ -205,6 +242,7 @@ export async function publishToWordPress(
         body: content.body,
         metaDescription: content.metaDescription,
         slug: content.slug,
+        rankMath: content.rankMath,
       },
       action,
       scheduledAt,

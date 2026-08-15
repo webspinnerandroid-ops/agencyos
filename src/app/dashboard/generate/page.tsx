@@ -77,6 +77,16 @@ interface GenerateResponse {
       wordCount: number;
       checks: { id: string; label: string; category: string; maxPoints: number; earned: number; passed: boolean; detail: string }[];
     };
+    rankMath?: Record<string, string | string[]>;
+    rankMathSummary?: {
+      title: string;
+      description: string;
+      focusKeyword: string;
+      hasArticleSchema: boolean;
+      hasFaqSchema: boolean;
+      faqCount: number;
+    };
+    schemaPreview?: string;
     research?: { questions: string[]; trends: string[]; source: "web" | "model" };
   };
   socialPosts: SocialPost[];
@@ -682,6 +692,71 @@ export default function GeneratePage() {
                   {result.blogPost.metaDescription}
                 </p>
               </div>
+
+              {/* Rank Math meta + schema — generated with every post */}
+              {result.blogPost.rankMath && (
+                <details className="rounded-md border p-3">
+                  <summary className="text-xs font-semibold cursor-pointer flex items-center gap-2">
+                    <Sparkles className="size-3.5 text-primary" />
+                    WordPress Rank Math meta
+                    <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded-full bg-muted">
+                      {result.blogPost.rankMathSummary?.hasFaqSchema
+                        ? `Article + FAQPage (${result.blogPost.rankMathSummary.faqCount} Q&As)`
+                        : "Article schema"}
+                    </span>
+                  </summary>
+                  <div className="mt-3 space-y-3">
+                    <div className="grid sm:grid-cols-2 gap-3">
+                      <div className="rounded-md bg-muted/40 p-2.5">
+                        <Label className="text-[10px]">Focus keyword</Label>
+                        <p className="text-sm font-medium mt-0.5">
+                          {result.blogPost.rankMathSummary?.focusKeyword || "—"}
+                        </p>
+                      </div>
+                      <div className="rounded-md bg-muted/40 p-2.5">
+                        <Label className="text-[10px]">SEO title</Label>
+                        <p className="text-sm mt-0.5">
+                          {result.blogPost.rankMathSummary?.title || result.blogPost.title}
+                        </p>
+                      </div>
+                    </div>
+                    {result.blogPost.rankMathSummary?.description && (
+                      <div className="rounded-md bg-muted/40 p-2.5">
+                        <Label className="text-[10px]">Meta description</Label>
+                        <p className="text-sm text-muted-foreground mt-0.5">
+                          {result.blogPost.rankMathSummary.description}
+                        </p>
+                      </div>
+                    )}
+                    {result.blogPost.schemaPreview && (
+                      <div className="rounded-md border bg-background p-2.5">
+                        <div className="flex items-center gap-2 mb-1.5">
+                          <Label className="text-[10px]">JSON-LD schema</Label>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="ml-auto h-6 px-2 text-[10px]"
+                            onClick={() => copy(result.blogPost!.schemaPreview!)}
+                          >
+                            {copied ? (
+                              <><Check className="size-3" /> Copied</>
+                            ) : (
+                              <><Copy className="size-3" /> Copy</>
+                            )}
+                          </Button>
+                        </div>
+                        <pre className="text-[10px] text-muted-foreground overflow-x-auto max-h-48 whitespace-pre-wrap break-all">
+                          {result.blogPost.schemaPreview}
+                        </pre>
+                        <p className="text-[10px] text-muted-foreground mt-1.5">
+                          Sent to your connected WordPress sites on publish (Rank Math
+                          fields + Article/FAQPage schema).
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </details>
+              )}
 
               {/* Headings outline */}
               {(result.blogPost.headings ?? []).length > 0 && (

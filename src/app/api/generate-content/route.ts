@@ -33,6 +33,7 @@ import {
 } from "@/lib/blog-images";
 import { scoreContent, type RankMathResult } from "@/lib/rankmath";
 import { scoreAeoGeo, type AeoGeoResult } from "@/lib/aeo-geo";
+import { buildRankMathMeta, schemaPreview } from "@/lib/seo/rank-math-meta";
 import {
   getScoreGate,
   MAX_SCORE_ATTEMPTS,
@@ -711,6 +712,24 @@ export async function POST(request: NextRequest) {
       qaPairs: aeoGeo.qaPairs,
     };
 
+    // Rank Math meta + Article/FAQPage JSON-LD for the connected WordPress
+    // sites — deterministic (no extra model call), from data the scorers
+    // already produced. Persisted with the post and sent on publish.
+    const featuredImage =
+      generatedImages.find((img) => img.spec.placement === "featured")?.url ??
+      generatedImages[0]?.url ??
+      null;
+    const brandName = workspaceContext.match(/BRAND VOICE: ([^\n]+)/)?.[1] ?? null;
+    const rankMath = buildRankMathMeta({
+      title: blogPost.title,
+      metaDescription: blogPost.metaDescription,
+      focusKeyword: primaryKeyword,
+      qaPairs: aeoGeo.qaPairs,
+      featuredImageUrl: featuredImage,
+      slug: blogPost.slug,
+      siteName: brandName,
+    });
+
     // Safety net: if the body still mentions IMAGE_URL tokens the image
     // pipeline didn't produce enough images — flag it loudly so it's never
     // silently shipped to a published post.
@@ -865,6 +884,16 @@ Use the above context to craft a compelling, platform-optimized caption that dri
               : null,
             seo: seoPayload,
             aeoGeo: aeoGeoPayload,
+            rankMath: rankMath.meta,
+            rankMathPreview: schemaPreview({
+              title: blogPost.title,
+              metaDescription: blogPost.metaDescription,
+              focusKeyword: primaryKeyword,
+              qaPairs: aeoGeo.qaPairs,
+              featuredImageUrl: featuredImage,
+              slug: blogPost.slug,
+              siteName: brandName,
+            }),
           },
           status: "draft",
           created_by: userId,
@@ -1004,6 +1033,17 @@ Use the above context to craft a compelling, platform-optimized caption that dri
         suggestedImagePrompt: blogPost.suggestedImagePrompt ?? "",
         status: "draft",
         seo: seoPayload,
+        rankMath: rankMath.meta,
+        rankMathSummary: rankMath.summary,
+        schemaPreview: schemaPreview({
+          title: blogPost.title,
+          metaDescription: blogPost.metaDescription,
+          focusKeyword: primaryKeyword,
+          qaPairs: aeoGeo.qaPairs,
+          featuredImageUrl: featuredImage,
+          slug: blogPost.slug,
+          siteName: brandName,
+        }),
         research: research
           ? { questions: research.questions, trends: research.trends, source: research.source }
           : null,

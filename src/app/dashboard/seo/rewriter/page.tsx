@@ -19,16 +19,6 @@ import {
 } from "lucide-react";
 import { ScoreBreakdown } from "@/components/seo/score-breakdown";
 import { RewriteComparisonTable } from "@/components/seo/rewrite-comparison";
-import {
-  BarChart,
-  Bar,
-  Legend,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  CartesianGrid,
-} from "recharts";
 
 interface Check {
   id: string;
@@ -253,35 +243,6 @@ export default function SeoRewriterPage() {
                   </div>
                 </div>
               ))}
-            </div>
-            {/* Comparison chart */}
-            <div className="mt-4 h-56">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart
-                  data={[
-                    { metric: "SEO", Before: result.originalScores.seo, After: result.finalScores.seo },
-                    {
-                      metric: "AEO",
-                      Before: result.original?.aeoGeo?.aeoScore ?? result.originalScores.aeoGeo,
-                      After: result.final?.aeoGeo?.aeoScore ?? result.finalScores.aeoGeo,
-                    },
-                    {
-                      metric: "GEO",
-                      Before: result.original?.aeoGeo?.geoSscore ?? result.originalScores.aeoGeo,
-                      After: result.final?.aeoGeo?.geoSscore ?? result.finalScores.aeoGeo,
-                    },
-                  ]}
-                  margin={{ top: 5, right: 10, left: -15, bottom: 0 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                  <XAxis dataKey="metric" tick={{ fontSize: 12 }} />
-                  <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
-                  <Tooltip />
-                  <Legend />
-                  <Bar dataKey="Before" fill="#94a3b8" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="After" fill="#6366f1" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
             </div>
             <p className="text-xs text-muted-foreground mt-2">
               Detected keyword: <span className="font-medium">“{result.keyword || "—"}”</span>

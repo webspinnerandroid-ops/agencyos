@@ -26,9 +26,6 @@ import {
 import {
   LineChart,
   Line,
-  BarChart,
-  Bar,
-  Legend,
   XAxis,
   YAxis,
   Tooltip,
@@ -364,17 +361,6 @@ export default function SeoSitesPage() {
     [history]
   );
 
-  // Before/after comparison for rewritten (saved) content.
-  const rewriteCompare = useMemo(() => {
-    const meta = latest?.meta;
-    if (!meta || (meta.kind !== "rewrite" && !meta.rewrittenBody)) return null;
-    return [
-      { metric: "SEO", before: meta.original_score_seo ?? null, after: latest?.seo_score ?? null },
-      { metric: "AEO", before: meta.original_score_aeo ?? null, after: latest?.aeo_score ?? null },
-      { metric: "GEO", before: meta.original_score_geo ?? null, after: latest?.geo_score ?? null },
-    ];
-  }, [latest]);
-
   if (activeUrl) {
     const label = latest?.url
       ? latest.url.replace(/^https?:\/\//, "").replace(/\/$/, "")
@@ -465,7 +451,7 @@ export default function SeoSitesPage() {
             </div>
 
             {/* Rewrite before/after comparison + saved content */}
-            {rewriteCompare && (
+            {latest?.meta?.kind === "rewrite" || latest?.meta?.rewrittenBody ? (
               <Card className="p-6 border-primary/30">
                 <div className="flex items-center gap-2 mb-4">
                   <Sparkles className="size-4 text-primary" />
@@ -474,18 +460,7 @@ export default function SeoSitesPage() {
                     original vs rewritten (SEO / AEO / GEO)
                   </span>
                 </div>
-                <ResponsiveContainer width="100%" height={240}>
-                  <BarChart data={rewriteCompare} margin={{ top: 5, right: 10, left: -15, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-                    <XAxis dataKey="metric" tick={{ fontSize: 12 }} />
-                    <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
-                    <Tooltip />
-                    <Legend />
-                    <Bar dataKey="before" name="Before" fill="#94a3b8" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="after" name="After" fill="#6366f1" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-                <div className="mt-6">
+                <div className="mt-4">
                   <RewriteComparisonTable
                     beforeSeo={latest.meta?.original_checks_json?.seo ?? []}
                     beforeAeoGeo={latest.meta?.original_checks_json?.aeoGeo ?? []}
@@ -530,7 +505,7 @@ export default function SeoSitesPage() {
                   </div>
                 )}
               </Card>
-            )}
+            ) : null}
 
             {/* Score history chart */}
             {chartData.length >= 2 && (

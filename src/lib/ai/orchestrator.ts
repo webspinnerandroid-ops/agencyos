@@ -1083,13 +1083,10 @@ async function callFalImageAPI(
   const endpoint = `${resolution.providerBaseUrl}/${resolution.model}`;
   const body: Record<string, unknown> = { prompt };
 
-  // Best-effort size hint: map the app's "WxH" sizes to fal's aspect tokens.
-  // Unknown models ignore it, so it can never break generation.
-  const size = options?.size ?? "1024x1024";
-  if (/1792x1024/i.test(size)) body.image_size = "landscape_16_9";
-  else if (/1024x1792/i.test(size)) body.image_size = "portrait_9_16";
-  else if (/1024x1024|512x512|256x256/i.test(size)) body.image_size = "square";
-
+  // Only send the well-supported knobs. The "WxH" sizes differ per model
+  // (image_size / aspect_ratio / size), so we omit size entirely and let each
+  // model use its default — a wrong size token can 400 a model that doesn't
+  // accept it.
   if (options?.n && options.n > 1) body.num_images = Math.min(options.n, 4);
   if (options?.referenceImage) body.image_url = options.referenceImage;
 

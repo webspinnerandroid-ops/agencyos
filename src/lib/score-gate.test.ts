@@ -136,5 +136,5 @@ describe("mapReusedImages", () => {
 });
 
 it("exposes the documented retry budget", () => {
-  expect(MAX_SCORE_ATTEMPTS).toBe(3); // 1 draft + 2 gate retries
+  expect(MAX_SCORE_ATTEMPTS).toBe(5); // 1 draft + 4 gate retries
 });

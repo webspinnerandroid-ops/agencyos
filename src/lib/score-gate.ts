@@ -17,7 +17,7 @@ import type { AeoGeoResult } from "@/lib/aeo-geo";
 import type { BlogImageSpec, GeneratedBlogImage } from "@/lib/blog-images";
 
 /** Extra generation attempts after the first draft misses the gate. */
-export const MAX_SCORE_RETRIES = 2;
+export const MAX_SCORE_RETRIES = 4;
 
 /** Total generation attempts allowed before the gate rejects the content. */
 export const MAX_SCORE_ATTEMPTS = 1 + MAX_SCORE_RETRIES;

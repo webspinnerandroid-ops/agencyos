@@ -63,7 +63,8 @@ export type AITask =
   | "embeddings"
   | "seo_audit"
   | "seo_campaign_generation"
-  | "team_chat";
+  | "team_chat"
+  | "content_rewrite";
 
 // Map tasks to their primary provider type for fallback matching
 const TASK_PROVIDER_TYPE_MAP: Record<AITask, ProviderType> = {
@@ -78,6 +79,7 @@ const TASK_PROVIDER_TYPE_MAP: Record<AITask, ProviderType> = {
   seo_audit: "text",
   seo_campaign_generation: "text",
   team_chat: "text",
+  content_rewrite: "text",
 };
 
 // Map legacy AIProvider enum values to DB provider names for backward compat

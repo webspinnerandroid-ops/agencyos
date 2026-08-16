@@ -47,8 +47,9 @@ interface RewriteResponse {
   rewritten: boolean;
   keyword: string;
   title: string;
-  original: { seo: { total: number; checks: Check[] } | null; aeoGeo: { total: number; checks: Check[] } | null };
-  final: { seo: { total: number; checks: Check[] } | null; aeoGeo: { total: number; checks: Check[] } | null };
+  rewriteError?: string;
+  original: { seo: { total: number; checks: Check[] } | null; aeoGeo: { total: number; aeoScore: number; geoSscore: number; checks: Check[] } | null };
+  final: { seo: { total: number; checks: Check[] } | null; aeoGeo: { total: number; aeoScore: number; geoSscore: number; checks: Check[] } | null };
 }
 
 function scoreTone(v: number | null | undefined): string {
@@ -159,6 +160,12 @@ export default function SeoRewriterPage() {
         <>
           {/* Score comparison */}
           <Card className="p-5">
+            {result.rewriteError && (
+              <div className="mb-4 p-3 rounded-md bg-destructive/10 border border-destructive/30 text-sm text-destructive">
+                The AI rewrite call failed — the original content was returned unchanged:
+                {result.rewriteError}
+              </div>
+            )}
             <div className="flex items-center gap-2 mb-4">
               <TrendingUp className="size-4 text-primary" />
               <h2 className="text-lg font-semibold">Before → After</h2>
@@ -174,8 +181,8 @@ export default function SeoRewriterPage() {
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               {[
                 { label: "SEO", before: result.originalScores.seo, after: result.finalScores.seo },
-                { label: "AEO", before: result.original?.aeoGeo?.checks?.filter((c) => c.pillar === "AEO").reduce((s, c) => s + c.earned, 0) ?? result.originalScores.aeoGeo, after: result.final?.aeoGeo?.checks?.filter((c) => c.pillar === "AEO").reduce((s, c) => s + c.earned, 0) ?? result.finalScores.aeoGeo },
-                { label: "GEO", before: result.original?.aeoGeo?.checks?.filter((c) => c.pillar === "GEO").reduce((s, c) => s + c.earned, 0) ?? result.originalScores.aeoGeo, after: result.final?.aeoGeo?.checks?.filter((c) => c.pillar === "GEO").reduce((s, c) => s + c.earned, 0) ?? result.finalScores.aeoGeo },
+                { label: "AEO", before: result.original?.aeoGeo?.aeoScore ?? result.originalScores.aeoGeo, after: result.final?.aeoGeo?.aeoScore ?? result.finalScores.aeoGeo },
+                { label: "GEO", before: result.original?.aeoGeo?.geoSscore ?? result.originalScores.aeoGeo, after: result.final?.aeoGeo?.geoSscore ?? result.finalScores.aeoGeo },
                 { label: "Gate", before: result.gate, after: result.gate },
               ].map((s) => (
                 <div key={s.label} className="p-3 rounded-lg bg-muted/50 text-center">

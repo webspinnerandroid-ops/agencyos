@@ -55,6 +55,8 @@ export interface RewriteResult {
   rewritten: boolean;
   keyword: string;
   title: string;
+  /** Set when a model call failed — the original content is returned untouched. */
+  rewriteError?: string;
 }
 
 /** Pull a meta description the model embedded as "Meta description: …". */
@@ -110,6 +112,7 @@ export async function rewriteToPassGate(
   let currentTitle = title;
   let currentMeta = extractMetaDescription(text);
   let final: AnalyzeResult = original;
+  let rewriteError: string | undefined;
 
   for (let attempt = 1; attempt <= MAX_SCORE_ATTEMPTS; attempt++) {
     const scored = await scoreText(currentBody, currentTitle, keyword, currentMeta);
@@ -144,12 +147,14 @@ export async function rewriteToPassGate(
 
 Rules for every rewrite:
 - Keep the same topic, primary keyword "${keyword}", and overall meaning — do not change facts or tone.
+- WRITE AT LEAST 2,000 WORDS — a thin rewrite cannot pass the length check, so expand with thorough sections, examples, and actionable detail.
 - Begin with a single line exactly like: Meta description: <a 120-160 character description that contains the primary keyword>.
 - Improve the structure: a clear opening definition, H2/H3 subheadings, short paragraphs (under 120 words).
 - Include the primary keyword naturally in the title, first paragraph, a heading, and the meta description.
 - Add a FAQ section with 3-5 direct question/answer pairs.
 - Add concrete data points / statistics / years.
 - Include at least one numbered how-to/step list.
+- Include 1-2 images as markdown, e.g. ![alt text containing the primary keyword](https://example.com/image.jpg) — the image alt MUST contain the keyword.
 - Include at least one outbound reference link.
 - Preserve the author's original voice and any existing internal links.
 - Return the REWRITTEN CONTENT in valid markdown, no extra commentary.`;
@@ -157,10 +162,10 @@ Rules for every rewrite:
     const userPrompt = `ORIGINAL TITLE: ${currentTitle}\nPRIMARY KEYWORD: ${keyword}\n\n${feedback}\n\n## CURRENT CONTENT TO REWRITE\n${currentBody.slice(0, 24000)}`;
 
     try {
-      const rewritten = await generateText("content_rewrite" as never, userPrompt, opts?.tenantId ?? "", {
+      const rewritten = await generateText("content_rewrite", userPrompt, opts?.tenantId ?? "", {
         systemPrompt,
         temperature: 0.6,
-        maxTokens: 4000,
+        maxTokens: 8000,
       });
       const cleaned = (rewritten ?? "").trim();
       // The model may return a JSON-ish envelope; prefer markdown as-is.
@@ -171,9 +176,12 @@ Rules for every rewrite:
       const h1 = currentBody.match(/^#\s+(.+)$/m);
       if (h1) currentTitle = h1[1].trim().slice(0, 120) || currentTitle;
     } catch (err) {
-      // A model failure must not lose the user's text — stop trying.
-      console.warn("[rewriter] rewrite attempt failed:", (err as Error).message);
+      // A model failure must not lose the user's text — stop trying and tell
+      // the caller why instead of silently returning the unchanged original.
+      const message = err instanceof Error ? err.message : "AI provider error";
+      console.warn("[rewriter] rewrite attempt failed:", message);
       final = scored;
+      rewriteError = message;
       break;
     }
   }
@@ -204,6 +212,7 @@ Rules for every rewrite:
     rewritten: finalScores.passed && !originalPassed,
     keyword,
     title: final.title || title,
+    rewriteError,
   };
 }
 

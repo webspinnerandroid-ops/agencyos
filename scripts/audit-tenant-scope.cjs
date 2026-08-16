@@ -185,6 +185,11 @@ const IGNORE = new Set([
   // (never a tenant-supplied value) and is never reachable from a user
   // session. Verified.
   "src/lib/inngest/functions/autoAuditMonitoredSites.ts",
+  // auth/dev-login route: DEV-ONLY (404s unless ALLOW_DEV_LOGIN=true, which
+  // is only set in local .env.local) — checks one hard-coded owner account's
+  // super_admin role by user_id to mint a magic-link token. Single-row role
+  // check on a known account, never reachable in production. Verified.
+  "src/app/api/auth/dev-login/route.ts",
 ]);
 
 const CHAIN_WINDOW = 900; // chars after .from(...) — enough for chained filters

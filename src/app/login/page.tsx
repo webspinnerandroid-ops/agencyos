@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { ShieldCheck } from 'lucide-react';
+import { ShieldCheck, KeyRound } from 'lucide-react';
 import { createBrowserClient } from '@supabase/ssr';
 import { Card, CardContent, CardHeader, CardTitle, CardFooter } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -28,6 +28,42 @@ export default function LoginPage() {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   );
+
+  // DEV-ONLY: one-click super-admin sign-in via a passwordless magic link.
+  // The button only renders when NEXT_PUBLIC_DEV_LOGIN=true (local .env.local
+  // only) and the backend hard-404s unless ALLOW_DEV_LOGIN=true — production
+  // is never affected.
+  const DEV_LOGIN_ENABLED = process.env.NEXT_PUBLIC_DEV_LOGIN === "true";
+  const [devLoginLoading, setDevLoginLoading] = useState(false);
+  const handleDevLogin = async () => {
+    setDevLoginLoading(true);
+    setError("");
+    try {
+      const res = await fetch("/api/auth/dev-login", { method: "POST", credentials: "include" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.token) {
+        setError(data.error ?? "Dev login failed.");
+        setDevLoginLoading(false);
+        return;
+      }
+      const { error } = await supabase.auth.verifyOtp({
+        type: "magiclink",
+        token_hash: data.token,
+      });
+      if (error) {
+        setError(error.message);
+        setDevLoginLoading(false);
+        return;
+      }
+      redirectWhenReady(
+        (msg) => { setError(msg); setDevLoginLoading(false); },
+        () => { window.location.href = "/dashboard"; }
+      );
+    } catch (err: any) {
+      setError(err?.message ?? "Dev login failed.");
+      setDevLoginLoading(false);
+    }
+  };
 
   // Navigate only once the session cookie is actually visible server-side.
   // Without this, a hard navigation to /dashboard right after sign-in can
@@ -237,6 +273,17 @@ export default function LoginPage() {
             <Button type="submit" className="w-full bg-primary text-primary-foreground" disabled={loading}>
               {loading ? 'Signing in...' : 'Sign In'}
             </Button>
+            {DEV_LOGIN_ENABLED && (
+              <button
+                type="button"
+                onClick={handleDevLogin}
+                disabled={devLoginLoading}
+                className="mt-3 w-full rounded-md border border-dashed border-primary/40 py-2 text-xs font-medium text-primary hover:bg-primary/5 disabled:opacity-50 flex items-center justify-center gap-1.5"
+              >
+                <KeyRound className="size-3.5" />
+                {devLoginLoading ? "Signing in…" : "Dev sign-in (super admin)"}
+              </button>
+            )}
           </form>
           )}
         </CardContent>

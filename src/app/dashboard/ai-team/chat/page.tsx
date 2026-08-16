@@ -38,6 +38,7 @@ import {
   deleteChat as deleteChatAction,
   setChatFolder,
   type TeamChat,
+  type TeamChatSummary,
   type TeamMessage,
 } from "@/lib/ai-team-chat";
 import { EMPLOYEE_KEYS } from "@/lib/ai/employee-keys";
@@ -72,6 +73,37 @@ function employeeRole(key: string | null): string {
   return EMPLOYEE_PERSONAS[key]?.role ?? "";
 }
 
+/**
+ * Unread indicator light for a chat. Green = routine replies, orange =
+ * important (a draft/plan landed), red = urgent (a failure). Hidden when
+ * there's nothing unread.
+ */
+function UnreadDot({
+  chat,
+}: {
+  chat: { unreadCount?: number; unreadPriority?: string };
+}) {
+  const count = chat.unreadCount ?? 0;
+  if (count === 0) return null;
+  const color =
+    chat.unreadPriority === "urgent"
+      ? "bg-red-500"
+      : chat.unreadPriority === "important"
+        ? "bg-orange-500"
+        : "bg-emerald-500";
+  return (
+    <span
+      className="ml-auto inline-flex items-center gap-1 shrink-0"
+      title={`${count} new message${count === 1 ? "" : "s"}`}
+    >
+      <span className={`size-2 rounded-full ${color}`} />
+      <span className="text-[10px] font-semibold text-muted-foreground">
+        {count}
+      </span>
+    </span>
+  );
+}
+
 function formatTime(iso: string): string {
   try {
     return new Date(iso).toLocaleTimeString([], {
@@ -97,7 +129,7 @@ function mergeMessages(
 }
 
 export default function AiTeamChatPage() {
-  const [chats, setChats] = useState<TeamChat[]>([]);
+  const [chats, setChats] = useState<TeamChatSummary[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [messages, setMessages] = useState<TeamMessage[]>([]);
   const [input, setInput] = useState("");
@@ -138,6 +170,39 @@ export default function AiTeamChatPage() {
   };
   const threadRef = useRef<HTMLDivElement>(null);
 
+  // Per-chat last-read timestamps (localStorage) — drives the unread
+  // indicator lights. Marked read when a chat is opened and while the user
+  // is watching it during polling.
+  const [lastReadAt, setLastReadAt] = useState<Record<string, string>>(() => {
+    try {
+      return JSON.parse(
+        window.localStorage.getItem("chat-last-read") ?? "{}"
+      ) as Record<string, string>;
+    } catch {
+      return {};
+    }
+  });
+  const persistLastRead = (next: Record<string, string>) => {
+    try {
+      window.localStorage.setItem("chat-last-read", JSON.stringify(next));
+    } catch {
+      // ignore
+    }
+  };
+  const markRead = useCallback((chatId: string | null) => {
+    if (!chatId) return;
+    setLastReadAt((prev) => {
+      // Throttle so constant polling doesn't rewrite storage every 4s.
+      const prevAt = prev[chatId];
+      if (prevAt && Date.now() - new Date(prevAt).getTime() < 15000) {
+        return prev;
+      }
+      const next = { ...prev, [chatId]: new Date().toISOString() };
+      persistLastRead(next);
+      return next;
+    });
+  }, []);
+
   // Staleness clock for status chips — refreshed every 30s so a dead task
   // resolves to the "didn't complete — Retry" state without needing a new
   // message poll. (Date.now in state, not render.)
@@ -154,8 +219,17 @@ export default function AiTeamChatPage() {
     (async () => {
       setError(null);
       try {
-        let list: TeamChat[] = [];
-        const existing = await getChats();
+        let list: TeamChatSummary[] = [];
+        const lastRead: Record<string, string> = (() => {
+          try {
+            return JSON.parse(
+              window.localStorage.getItem("chat-last-read") ?? "{}"
+            ) as Record<string, string>;
+          } catch {
+            return {};
+          }
+        })();
+        const existing = await getChats(lastRead);
         if (existing.success && existing.data) list = existing.data;
 
         const team = await getOrCreateTeamChat();
@@ -222,6 +296,7 @@ export default function AiTeamChatPage() {
   // Load messages whenever the active chat changes.
   useEffect(() => {
     if (!activeChatId) return;
+    markRead(activeChatId);
     let cancelled = false;
     (async () => {
       const res = await getMessages(activeChatId);
@@ -248,6 +323,9 @@ export default function AiTeamChatPage() {
       if (stopped || !res.success || !res.data) return;
       const msgs = res.data;
       setMessages((prev) => mergeMessages(prev, msgs));
+      // The owner is watching this chat — keep its light off while replies
+      // stream in.
+      markRead(activeChatId);
       const landed = new Set(
         msgs
           .map((m) => m.metadata?.taskId)
@@ -396,13 +474,10 @@ export default function AiTeamChatPage() {
   const teamRoom = chats.find((c) => c.kind === "team");
   const rooms = chats.filter((c) => c.kind === "room");
   const dms = chats.filter((c) => c.kind === "employee");
-  // Show all employees in the sidebar; existing DMs are marked.
-  const dmKeys = new Set(dms.map((d) => d.employee_key));
-
   // Rooms grouped by folder (unfiled last), plus the distinct folder names
   // for the folder picker in the chat header.
   const folderGroups = useMemo(() => {
-    const map = new Map<string | null, TeamChat[]>();
+    const map = new Map<string | null, TeamChatSummary[]>();
     for (const r of rooms) {
       const f = r.folder?.trim() || null;
       if (!map.has(f)) map.set(f, []);
@@ -495,6 +570,7 @@ export default function AiTeamChatPage() {
           >
             <Users className="size-4 text-primary shrink-0" />
             <span className="truncate">Team Room</span>
+            {teamRoom && <UnreadDot chat={teamRoom} />}
           </button>
 
           {/* Start a new chat — rooms are named, unlimited per workspace, and
@@ -573,6 +649,7 @@ export default function AiTeamChatPage() {
                           >
                             <MessagesSquare className="size-4 text-muted-foreground shrink-0" />
                             <span className="truncate">{room.title}</span>
+                            <UnreadDot chat={room} />
                           </button>
                           <button
                             onClick={() => void removeChat(room.id, room.title)}
@@ -630,9 +707,7 @@ export default function AiTeamChatPage() {
                         {persona?.role ?? "AI Employee"}
                       </span>
                     </span>
-                    {dmKeys.has(key) && (
-                      <span className="ml-auto size-1.5 rounded-full bg-primary shrink-0" />
-                    )}
+                    {dm && <UnreadDot chat={dm} />}
                   </button>
                   {dm && (
                     <button

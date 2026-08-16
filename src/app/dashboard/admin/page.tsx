@@ -1,13 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useState, useTransition } from "react";
+import { createBrowserClient } from "@supabase/ssr";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Building2, Users, FileText, Key, TrendingUp, Shield, X, UserCog, Menu, Wallet, LayoutTemplate } from "lucide-react";
+import { Loader2, Building2, Users, FileText, Key, TrendingUp, Shield, X, UserCog, Menu, Wallet, LayoutTemplate, LogIn } from "lucide-react";
 import { getDashboardStats, getAllTenants, getLicenses, getLicenseAudit, issueLicense, updateLicensePlan, renewLicense, revokeLicense, deleteLicense, deleteUser, deleteTenant, getAllUsers, assignLevel, grantHub, revokeHub, type TenantSummary, type LicenseRecord, type LicenseAuditEntry, type UserRecord } from "./actions";
 
 // Hub-and-spoke add-ons the super admin can grant/revoke without payment.
@@ -129,6 +130,66 @@ export default function AdminDashboardPage() {
         : { type: "error", message: r.error ?? "Failed to delete license." });
       loadData();
     });
+  };
+
+  const supabaseBrowser = createBrowserClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  );
+  const [loginAsTenant, setLoginAsTenant] = useState<string | null>(null);
+
+  /**
+   * "Login as..." — one-way support access. The tenant must have opted in
+   * (Settings → Admin Assistance); the route hard-fails otherwise. The API
+   * mints a one-time magic link for the tenant's owner and we complete it
+   * here, so the browser now holds the TENANT's session — never the reverse.
+   */
+  const handleLoginAs = async (tenant: TenantSummary) => {
+    if (!confirm(`Sign in as the owner of "${tenant.name}"?\n\nThe tenant must have enabled admin assistance. This switches your session to their panel (one-way).`)) return;
+    setLoginAsTenant(tenant.id);
+    setFeedback(null);
+    try {
+      const res = await fetch("/api/admin/login-as", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tenantId: tenant.id }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.token) {
+        setFeedback({ type: "error", message: data.error ?? "Login-as failed." });
+        setLoginAsTenant(null);
+        return;
+      }
+      const { error } = await supabaseBrowser.auth.verifyOtp({
+        type: "magiclink",
+        token_hash: data.token,
+      });
+      if (error) {
+        setFeedback({ type: "error", message: error.message });
+        setLoginAsTenant(null);
+        return;
+      }
+      // Wait for the session cookie to be visible server-side, then go.
+      let attempts = 0;
+      const check = async () => {
+        attempts += 1;
+        const sres = await fetch("/api/auth/session", { credentials: "include" });
+        if (sres.ok) {
+          window.location.href = "/dashboard";
+          return;
+        }
+        if (attempts < 8) setTimeout(check, 350);
+        else {
+          setFeedback({ type: "error", message: "Session established — refresh and try again." });
+          setLoginAsTenant(null);
+        }
+      };
+      void check();
+    } catch (err: any) {
+      setFeedback({ type: "error", message: err?.message ?? "Login-as failed." });
+      setLoginAsTenant(null);
+    }
   };
 
   const handleDeleteTenant = (tenant: TenantSummary) => {
@@ -396,7 +457,24 @@ export default function AdminDashboardPage() {
             <td className="py-3 px-3"><Badge variant="outline">{t.plan_id ?? "-"}</Badge></td>
             <td className="py-3 px-3"><Badge className={statusColor(t.subscription_status)}>{t.subscription_status ?? "none"}</Badge></td>
             <td className="py-3 px-3 text-muted-foreground">{new Date(t.created_at).toLocaleDateString()}</td>
-            <td className="py-3 px-3"><Button variant="ghost" size="sm" className="text-destructive" onClick={() => handleDeleteTenant(t)}>Delete</Button></td>
+            <td className="py-3 px-3">
+              <div className="flex gap-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void handleLoginAs(t)}
+                  disabled={loginAsTenant === t.id}
+                  title="Enter this tenant's panel (requires their opt-in — one-way)"
+                >
+                  {loginAsTenant === t.id ? (
+                    <><Loader2 className="size-3 animate-spin mr-1" /> Signing in…</>
+                  ) : (
+                    <><LogIn className="size-3 mr-1" /> Login as</>
+                  )}
+                </Button>
+                <Button variant="ghost" size="sm" className="text-destructive" onClick={() => handleDeleteTenant(t)}>Delete</Button>
+              </div>
+            </td>
           </tr>
         ))}
         </tbody></table></div>

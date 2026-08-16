@@ -190,6 +190,16 @@ const IGNORE = new Set([
   // super_admin role by user_id to mint a magic-link token. Single-row role
   // check on a known account, never reachable in production. Verified.
   "src/app/api/auth/dev-login/route.ts",
+  // tenant/admin-access route: reads/writes the CALLER'S OWN tenant row
+  // (tenants) by primary key id — the id comes from the session's tenant,
+  // never from the client, so it can only ever touch the caller's own row.
+  // Reviewed and verified.
+  "src/app/api/tenant/admin-access/route.ts",
+  // admin/login-as route: SUPER_ADMIN ONLY (requireRole) — reads one tenant
+  // row by PK to check the opt-in flag, then mints a magic link for that
+  // tenant's owner. Global admin tool, same trust class as the other
+  // admin/* routes. Reviewed and verified.
+  "src/app/api/admin/login-as/route.ts",
 ]);
 
 const CHAIN_WINDOW = 900; // chars after .from(...) — enough for chained filters

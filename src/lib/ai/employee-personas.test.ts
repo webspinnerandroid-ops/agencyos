@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   EMPLOYEE_PERSONAS,
   buildEmployeeSystemPrompt,
+  employeeKeyNameList,
 } from "./employee-personas";
 
 describe("employee personas", () => {
@@ -54,5 +55,25 @@ describe("employee personas", () => {
     const prompt = buildEmployeeSystemPrompt("unknown_key");
     expect(prompt).toContain("Agency Team Member");
     expect(prompt).toContain("Never fabricate");
+  });
+
+  it("every persona carries the universal identity guardrail", () => {
+    for (const key of Object.keys(EMPLOYEE_PERSONAS)) {
+      const prompt = buildEmployeeSystemPrompt(key);
+      expect(prompt, key).toContain("Identity — absolute, never violated");
+      expect(prompt, key).toContain("never by a first name");
+      expect(prompt, key).toMatch(/never use a codename, key, or internal identifier/i);
+    }
+  });
+
+  it("employeeKeyNameList pairs every key with its display name", () => {
+    const list = employeeKeyNameList();
+    expect(list).toContain("stan (Barry");
+    expect(list).toContain("nina (Malory");
+    // Raw keys alone must never appear as if they were names.
+    const lines = list.split(", ").map((s) => s.trim());
+    for (const line of lines) {
+      expect(line).toMatch(/\([A-Z]/);
+    }
   });
 });

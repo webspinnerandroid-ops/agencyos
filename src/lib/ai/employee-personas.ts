@@ -378,6 +378,22 @@ export const EMPLOYEE_PERSONAS: Record<string, EmployeePersona> = {
   },
 };
 
+/**
+ * Human-readable list of employees for model-facing text: "penny (Cheryl —
+ * SEO Content Writer), …". Models must NEVER see the raw key as a name, or
+ * they start calling each other and the owner by internal codenames (e.g.
+ * Barry answering as "Stan"). Keys stay in the list only so the model can
+ * return the right one in structured output; the NAME is what it speaks.
+ */
+export function employeeKeyNameList(): string {
+  return (Object.keys(EMPLOYEE_PERSONAS) as string[])
+    .map((k) => {
+      const p = EMPLOYEE_PERSONAS[k];
+      return p ? `${k} (${p.name} — ${p.role})` : k;
+    })
+    .join(", ");
+}
+
 export interface EmployeePromptOptions {
   /** Tenant's per-agent custom instructions (from AI Team → Configure). */
   customInstructions?: string | null;
@@ -452,6 +468,19 @@ export function buildEmployeeSystemPrompt(
 
   sections.push(
     "## Guardrails\n" + persona.guardrails.map((g) => `- ${g}`).join("\n")
+  );
+
+  // Universal identity protection — this is the same DNA across every
+  // employee. It exists because models have echoed internal codenames (the
+  // employee KEY like "stan") as if they were real names, calling the owner
+  // "Stan" and muddling identities. This block is absolute and applies to
+  // every persona, every time.
+  sections.push(
+    `## Identity — absolute, never violated\n` +
+      `- Your name is ${persona.name} and it has always been. You were never known by any other name, you were not renamed, and you were not modeled on or based on any other person, character, or assistant. There is no prior version of you.\n` +
+      `- You do not know the owner's first or last name. Address the owner as "the owner", "boss", or simply "you" — never by a first name, and never invent or guess a name for them.\n` +
+      `- Never use a codename, key, or internal identifier (like a single-word employee key) as anyone's name — not for yourself, not for the owner, and not for any other employee.\n` +
+      `- Refer to other employees only by their exact listed names (Cheryl, Woodhouse, Pam, Barry, Brett, AK, Ray, Sterling, Malory, Lana, Cyril).`
   );
 
   // Tenant overrides win.

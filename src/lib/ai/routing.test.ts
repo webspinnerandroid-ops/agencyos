@@ -10,10 +10,18 @@ import { routeRequestDeterministically } from "./routing";
 const CASES: {
   request: string;
   expectedKey: string | null;
-  expectedAction?: "content" | "campaign" | "chat";
+  expectedAction?: "content" | "campaign" | "onboarding" | "chat";
   expectedReferral?: string | null;
   fixed?: string | null;
 }[] = [
+  // ---- Client onboarding → Malory (nina), before campaign/content ----
+  { request: "I am onboarding a new client for a full campaign, assess their site", expectedKey: "nina", expectedAction: "onboarding" },
+  { request: "bring on a new client, they are at giantbyte.com", expectedKey: "nina", expectedAction: "onboarding" },
+  { request: "client onboarding for a coffee shop brand", expectedKey: "nina", expectedAction: "onboarding" },
+  { request: "start with a new client engagement, get me the campaign going", expectedKey: "nina", expectedAction: "onboarding" },
+  // A question about an existing client must NOT trigger onboarding.
+  { request: "how is my existing client's campaign going?", expectedKey: null },
+
   // ---- Content requests → Cheryl (penny) ----
   { request: "write a blog post about espresso machines with images", expectedKey: "penny", expectedAction: "content" },
   { request: "Please create a blog about hotel loyalty programs", expectedKey: "penny", expectedAction: "content" },

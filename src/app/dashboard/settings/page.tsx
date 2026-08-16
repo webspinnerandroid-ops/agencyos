@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
-import { Key, Palette, Globe, Users, Link2, Store, Clapperboard, ShieldCheck } from "lucide-react";
+import { Key, Palette, Globe, Users, Link2, Store, Clapperboard, ShieldCheck, Handshake } from "lucide-react";
 
 const links = [
   { href: "/dashboard/settings/ai", icon: Key, title: "AI Settings", description: "Manage API keys and task-model mappings." },
+  { href: "/dashboard/settings/admin-access", icon: Handshake, title: "Admin Assistance", description: "Opt in to let platform support sign in to your panel (one-way)." },
   { href: "/dashboard/settings/white-label", icon: Palette, title: "White-Label", description: "Logo, brand colour, and custom domain." },
   { href: "/dashboard/settings/social", icon: Users, title: "Social Accounts", description: "Connect social media platforms." },
   { href: "/dashboard/settings/blog", icon: Link2, title: "Blog Platforms", description: "Connect WordPress, Joomla, and more." },

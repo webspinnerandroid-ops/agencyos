@@ -9,7 +9,7 @@ import { EMPLOYEE_KEYS } from "@/lib/ai/employee-keys";
 
 export interface DispatchDecision {
   employeeKey: string;
-  action: "content" | "campaign" | "chat" | "other";
+  action: "content" | "campaign" | "onboarding" | "chat" | "other";
   topic: string;
   note: string;
   /** When a DM employee is asked something outside their lane, the key of
@@ -24,6 +24,15 @@ export interface DispatchDecision {
  */
 export const CONTENT_REQUEST_RE =
   /\b(write|create|generate|draft|produce|compose|make|prepare|start)\b[^\n]{0,60}\b(blog|article|post|content|piece|guide|whitepaper|newsletter|landing\s+page|email|copy|caption|script)\b/i;
+
+/**
+ * Bringing on a NEW CLIENT / onboarding — Malory (nina) runs it step by
+ * step, employee by employee. Checked BEFORE campaign/content because
+ * onboarding requests often also mention campaigns ("onboarding a new
+ * client for a full campaign").
+ */
+export const ONBOARDING_REQUEST_RE =
+  /\b(onboard|onboarding|bring(ing)? (on|in) (a|the|this) new client|tak(e|ing) (on|in) (a|the|this) new client|start(ing)? (with|on)? ?(a|the|this)? ?(new )?client (onboarding|engagement|account)|new client (onboarding|engagement|account)|client onboarding)\b/i;
 
 /**
  * Requests to PLAN a campaign (the whole 0→100 mapped out with dated blogs +
@@ -98,6 +107,17 @@ export const DOMAIN_ROUTES: { re: RegExp; employeeKey: string }[] = [
  * with no fixed-employee override. Pure: no model calls.
  */
 function naturalRoute(request: string): DispatchDecision | null {
+  // Client onboarding → Malory, before campaign/content matching (onboarding
+  // messages often mention campaigns and content).
+  if (ONBOARDING_REQUEST_RE.test(request)) {
+    return {
+      employeeKey: "nina",
+      action: "onboarding",
+      topic: topicFromRequest(request),
+      note: "Client onboarding — step by step, employee by employee.",
+    };
+  }
+
   // Explicitly addressed to one employee → route to them, no model call.
   // The address chooses WHO answers; the action stays chat unless the
   // addressed employee is the one whose pipeline the request maps to

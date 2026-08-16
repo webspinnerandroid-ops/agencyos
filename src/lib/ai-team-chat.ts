@@ -72,6 +72,71 @@ export interface ActionResponse<T = void> {
 
 /** All known employee keys — defined in src/lib/ai/employee-keys.ts (client-safe). */
 // ----------------------------------------------------------------------------
+// Chat task execution — serialized per chat + retry-with-backoff.
+// ----------------------------------------------------------------------------
+
+/**
+ * Per-chat execution chains. Multiple sends to the same chat are processed
+ * ONE AT A TIME (first task fully completes — including its final reply —
+ * before the next starts), so replies from different employees never
+ * interleave into a jumbled thread.
+ */
+const chatQueues = new Map<string, Promise<void>>();
+
+function enqueueChatTask(
+  chatId: string,
+  fn: () => Promise<void>
+): Promise<void> {
+  const prev = chatQueues.get(chatId) ?? Promise.resolve();
+  const next = prev.then(fn, fn);
+  chatQueues.set(chatId, next);
+  void next.finally(() => {
+    if (chatQueues.get(chatId) === next) chatQueues.delete(chatId);
+  });
+  return next;
+}
+
+/**
+ * Run a chat task with retry-with-backoff. `processTeamTask` only throws for
+ * failures before its internal try/catch (Supabase client creation, the
+ * chat lookup, the tenant check) — exactly the "died before posting
+ * anything" case that used to leave a chat stuck at "reviewing" forever.
+ * Those are retried with backoff; if every attempt fails, a visible failure
+ * status is posted so the client's spinner always resolves.
+ */
+async function runTaskWithRetry(payload: TeamTaskPayload): Promise<void> {
+  const attempts = 3;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      await processTeamTask(payload);
+      return;
+    } catch (err) {
+      console.warn(
+        `[team-chat] Task attempt ${i + 1}/${attempts} failed before dispatch:`,
+        err
+      );
+      if (i < attempts - 1) {
+        await new Promise((r) => setTimeout(r, 1500 * 2 ** i)); // 1.5s, 3s
+      }
+    }
+  }
+  // Last resort — never leave the thread hanging.
+  try {
+    const sb = tenantScopedClient(await createServiceClient(), payload.tenantId);
+    await sb.from("team_messages").insert({
+      chat_id: payload.chatId,
+      role: "system",
+      employee_key: null,
+      content:
+        "Something went wrong processing that request — it failed after retrying. Please send it again.",
+      metadata: { status: true, stage: "failed", taskId: payload.taskId },
+    });
+  } catch (err) {
+    console.error("[team-chat] Could not post final failure:", err);
+  }
+}
+
+// ----------------------------------------------------------------------------
 // Chat helpers
 // ----------------------------------------------------------------------------
 
@@ -148,8 +213,22 @@ export async function getOrCreateEmployeeChat(
   }
 }
 
+/**
+ * A chat plus its unread indicator state. `unreadCount` is the number of
+ * employee messages newer than the owner's last read time for that chat;
+ * `unreadPriority` is the highest severity among them (urgent > important >
+ * normal) so the sidebar light can color green/orange/red. The last-read map
+ * lives client-side (localStorage) and is passed in by the chat page.
+ */
+export interface TeamChatSummary extends TeamChat {
+  unreadCount?: number;
+  unreadPriority?: "urgent" | "important" | "normal";
+}
+
 /** List this tenant's chats (team room + DMs) for the current workspace. */
-export async function getChats(): Promise<ActionResponse<TeamChat[]>> {
+export async function getChats(
+  lastReadAt?: Record<string, string>
+): Promise<ActionResponse<TeamChatSummary[]>> {
   try {
     const tenantId = await getTenantId();
     const supabase = tenantScopedClient(await createServiceClient(), tenantId);
@@ -161,7 +240,51 @@ export async function getChats(): Promise<ActionResponse<TeamChat[]>> {
       .eq("workspace_id", workspaceId)
       .order("created_at");
     if (error) throw new Error(error.message);
-    return { success: true, data: (data ?? []) as TeamChat[] };
+    const rows = (data ?? []) as TeamChat[];
+
+    // Unread state: employee messages newer than the last-read timestamp,
+    // with the highest priority among them driving the light color.
+    const ids = rows.map((r) => r.id);
+    const unread: Record<
+      string,
+      { count: number; priority: "urgent" | "important" | "normal" }
+    > = {};
+    if (ids.length > 0) {
+      const { data: msgs } = await supabase
+        .from("team_messages")
+        .select("chat_id, created_at, role, metadata")
+        .in("chat_id", ids)
+        .order("created_at", { ascending: false })
+        .limit(1000);
+      const rank = { urgent: 3, important: 2, normal: 1 } as const;
+      for (const m of msgs ?? []) {
+        if (m.role !== "employee") continue;
+        const u = unread[m.chat_id] ?? {
+          count: 0,
+          priority: "normal" as const,
+        };
+        const readAt = lastReadAt?.[m.chat_id];
+        if (readAt && new Date(m.created_at) <= new Date(readAt)) continue;
+        u.count += 1;
+        const raw = ((m.metadata as Record<string, unknown>)?.priority ??
+          "normal") as string;
+        const pr: "urgent" | "important" | "normal" =
+          raw === "urgent"
+            ? "urgent"
+            : raw === "important"
+              ? "important"
+              : "normal";
+        if (rank[pr] > rank[u.priority]) u.priority = pr;
+        unread[m.chat_id] = u;
+      }
+    }
+
+    const summary: TeamChatSummary[] = rows.map((r) => ({
+      ...r,
+      unreadCount: unread[r.id]?.count ?? 0,
+      unreadPriority: unread[r.id]?.priority ?? "normal",
+    }));
+    return { success: true, data: summary };
   } catch (err) {
     return { success: false, error: (err as Error).message };
   }
@@ -468,7 +591,12 @@ export async function sendChatMessage(
           });
           return;
         }
-        void processTeamTask(payload);
+        // Inline: run in this process, serialized per chat (one task at a
+        // time per chat — no interleaved replies) and retried with backoff
+        // so a task that dies before dispatch re-runs instead of leaving a
+        // stuck status. NOT awaited: the HTTP request returns immediately
+        // and the UI polls the thread.
+        void enqueueChatTask(payload.chatId, () => runTaskWithRetry(payload));
       },
     });
     if (!result.success) return { success: false, error: result.error };

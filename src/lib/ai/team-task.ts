@@ -23,6 +23,7 @@ import {
 } from "@/lib/knowledgebase";
 import {
   buildEmployeeSystemPrompt,
+  employeeKeyNameList,
   EMPLOYEE_PERSONAS,
 } from "@/lib/ai/employee-personas";
 import { scoreEmployeeOutput } from "@/lib/ai/eval";
@@ -267,12 +268,17 @@ async function buildChatContext(
 const DISPATCH_SCHEMA = {
   type: "object",
   properties: {
-    employeeKey: { type: "string", description: "One of: " + EMPLOYEE_KEYS.join(", ") },
+    employeeKey: {
+      type: "string",
+      // Display names only — never raw keys as names. The model returns the
+      // key, but only sees it paired with the real name it must speak.
+      description: "One of (key — name — role): " + employeeKeyNameList(),
+    },
     action: {
       type: "string",
-      enum: ["content", "campaign", "chat", "other"],
+      enum: ["content", "campaign", "onboarding", "chat", "other"],
       description:
-        "content = the user is asking to WRITE/CREATE blog posts or content (hand to Cheryl). campaign = the user is asking to PLAN a full campaign (dated blogs + socials — keep it with Malory). chat = answer a question or advise. other = anything else.",
+        "content = the user is asking to WRITE/CREATE blog posts or content (hand to Cheryl). campaign = the user is asking to PLAN a full campaign (dated blogs + socials — keep it with Malory). onboarding = the user is bringing on a NEW CLIENT / starting client onboarding (keep it with Malory, who runs it step by step). chat = answer a question or advise. other = anything else.",
     },
     topic: {
       type: "string",
@@ -304,9 +310,10 @@ async function dispatchRequest(
     buildEmployeeSystemPrompt("nina", { workspaceContext }) +
     "\n\nYou are dispatching work inside the AI agency. Read the owner's message and decide " +
     "which employee should handle it and whether it is a content-creation request.\n" +
-    "Employee keys: " +
-    EMPLOYEE_KEYS.join(", ") +
+    "Employees (key — name — role): " +
+    employeeKeyNameList() +
     ". Content requests (write/create a blog post, article, or content) always go to penny (Cheryl). " +
+    "You speak the employees' NAMES (Cheryl, Woodhouse, Pam, Barry, Brett, AK, Ray, Sterling, Malory, Lana, Cyril), never their keys.\n" +
     "Examples:\n" +
     '- "check our page speed and core web vitals" → {"employeeKey":"scout","action":"chat","topic":"","note":"technical SEO"}\n' +
     '- "schedule a meeting for tomorrow" → {"employeeKey":"eva","action":"chat","topic":"","note":"calendar"}\n' +
@@ -314,8 +321,12 @@ async function dispatchRequest(
     '- "hello, what can you do?" → {"employeeKey":"nina","action":"chat","topic":"","note":"general question for Malory"}\n' +
     "Return ONLY valid JSON matching the schema.";
 
+  const forcedName = forced
+    ? EMPLOYEE_PERSONAS[forced as keyof typeof EMPLOYEE_PERSONAS]?.name ??
+      forced
+    : null;
   const prompt = forced
-    ? `The owner sent this to ${forced} directly: "${request}". Classify it for ${forced}.`
+    ? `The owner sent this directly to ${forcedName}. Classify it for ${forcedName} — return the employeeKey that matches ${forcedName}.`
     : `Owner's message: "${request}". Decide who handles it.` +
       (chatContext
         ? `\n\nContext from earlier in this chat (use it to stay consistent):\n${chatContext}`
@@ -333,7 +344,14 @@ async function dispatchRequest(
     const suggested = decision.employeeKey;
     return {
       employeeKey: forced ?? (suggested ?? "nina"),
-      action: decision.action === "content" ? "content" : "chat",
+      action:
+        decision.action === "content"
+          ? "content"
+          : decision.action === "campaign"
+            ? "campaign"
+            : decision.action === "onboarding"
+              ? "onboarding"
+              : "chat",
       topic: decision.topic ?? "",
       note: decision.note ?? "",
       // In a DM the classifier can still suggest another employee; keep the
@@ -1155,8 +1173,8 @@ async function maloryPlanCampaign(
     `Blogs anchor the topic; socials promote, tease, and recap each blog. Use realistic dates STARTING NEXT WEEK. ` +
     `Today's actual date is ${new Date().toISOString().slice(0, 10)} — your dueDate values MUST be on or after that date, in the future, never in the past. ` +
     `Assign every piece an owner from the team — penny (Cheryl) writes blogs, sonny (Pam) runs socials, and bring ` +
-    `in the right specialist where it fits (gauge for paid promotions, scout for technical pieces, linda for anything ` +
-    `legal, stan for lead-gen offers).` +
+    `in the right specialist where it fits (Sterling for paid promotions, AK for technical pieces, Cyril for anything ` +
+    `legal, Barry for lead-gen offers).` +
     "\n\n## CRITICAL OUTPUT INSTRUCTION\n" +
     "Return ONLY valid JSON matching the exact structure below. Do NOT include any markdown formatting, code fences, or explanatory text outside the JSON object. Use EXACTLY these field names — do not rename them, do not add your own fields." +
     "\n\n{\n" +
@@ -1168,7 +1186,7 @@ async function maloryPlanCampaign(
     '      "topic": "string (the post topic/title)",\n' +
     '      "dueDate": "string (YYYY-MM-DD)",\n' +
     '      "platform": "string (only for social items: instagram | tiktok | facebook | linkedin | x; omit for blogs)",\n' +
-    '      "owner": "string (employee key: penny for blogs, sonny for socials, gauge for paid, scout for technical, linda for legal, stan for lead-gen)",\n' +
+    '      "owner": "string (employee key: penny for blogs, sonny for socials, gauge for paid, scout for technical, linda for legal, stan (Barry) for lead-gen)",\n' +
     '      "keywords": ["string (1-3 target keywords; focus keyword first — optional)"],\n' +
     '      "internalLink": "string (existing client page to link to internally — optional)",\n' +
     '      "externalLinks": ["string (reputable external URLs to cite — optional, 0-3)"]\n' +
@@ -1263,10 +1281,188 @@ async function maloryPlanCampaign(
   };
 }
 
+// ----------------------------------------------------------------------------
+// Client onboarding — Malory runs it step by step, employee by employee.
+// ----------------------------------------------------------------------------
+
+/**
+ * Malory's onboarding kickoff: introduce the client, hand the connection
+ * checklist to Woodhouse to gather/sync, and lay out the step-by-step
+ * sequence. Nothing jumps ahead — each step waits for the previous one.
+ */
+/**
+ * Best-effort client name + website pulled from an onboarding message.
+ * A failed parse never blocks onboarding — the caller falls back to
+ * "your new client".
+ */
+export function extractClientFromMessage(userMessage: string): {
+  name: string | null;
+  website: string;
+} {
+  const nameMatch = userMessage.match(
+    /(?:client|company|brand|business)(?:\s+is|\s+name[d]?s?|\s+for|\s+called|\s+named|\s*[:=])?\s+["']?([A-Z][A-Za-z0-9&'-]*(?:\s+[A-Za-z0-9&'-]+){0,5})/i
+  );
+  const website =
+    userMessage.match(/https?:\/\/[^\s]+/i)?.[0] ??
+    userMessage.match(/\b([a-z0-9-]+\.(?:com|net|org|io|co|dev|site|app|ai))\b/i)?.[0] ??
+    "";
+  if (!nameMatch) return { name: null, website };
+  let name = nameMatch[1].trim();
+  // "the company is Acme Roasters at acmeroasters.com" → stop at the domain
+  // (the capture class excludes "." so the TLD is cut off — a lone lowercase
+  // token after "at" still reads as a domain).
+  const atParts = name.split(/\s+at\s+/i);
+  if (atParts.length > 1 && /^[a-z0-9-]+(?:\.[a-z]{2,})?$/i.test(atParts[atParts.length - 1].trim())) {
+    name = atParts[0];
+  }
+  // Cut at sentence punctuation, drop leading/trailing connector words.
+  name = name.split(/[.!?,;]/)[0].trim();
+  name = name
+    .replace(/^(?:called|named|is|name|for|the|a|an)\s+/i, "")
+    .replace(/\s+(?:at|for|is|and|the|of|with|from|by|on|in|to|a|an)\s*$/i, "")
+    .trim();
+  if (!name || name.toLowerCase().includes("campaign") || name.toLowerCase() === "a new client") {
+    return { name: null, website };
+  }
+  return { name, website };
+}
+
+async function maloryOnboardClient(params: {
+  tenantId: string;
+  userMessage: string;
+  workspaceContext: string;
+  workspaceId: string | null;
+  chatContext: string;
+}): Promise<{
+  replyContent: string;
+  replyMeta: Record<string, unknown>;
+  woodhouseContent: string | null;
+}> {
+  const { tenantId, userMessage, workspaceId } = params;
+
+  const { name: parsedName, website } = extractClientFromMessage(userMessage);
+  const clientName = parsedName ?? "your new client";
+  const clientLabel = website ? `${clientName} (${website})` : clientName;
+
+  const setup = await buildSetupChecklist(tenantId, workspaceId);
+  const missing = setup.filter((i) => !i.done);
+  const checklistLines = setup.map((i) =>
+    `${i.done ? "[x]" : "[ ]"} ${i.label}${i.done ? "" : ` — ${i.hint}`}`
+  );
+
+  const woodhouseContent =
+    `On it. I'm gathering the connections needed to run ${clientName}'s campaign. Here's where we stand:\n\n` +
+    checklistLines.join("\n") +
+    (missing.length > 0
+      ? `\n\nI'll sync each missing connection — I'll update this thread as they come in.`
+      : `\n\nEverything's already connected — nothing to sync.`);
+
+  const replyContent =
+    `Onboarding started for **${clientLabel}**. I'll run this one step at a time, employee by employee — nothing jumps ahead.\n\n` +
+    `**Step 1 — Woodhouse gathers the connections.** Woodhouse is collecting everything the campaign needs to run:` +
+    `\n` +
+    checklistLines.join("\n") +
+    (missing.length > 0
+      ? `\n\nOnce those are synced, say \"connections ready\" and I'll move to **Step 2 — Cheryl builds the content foundation** (blog pillars, keywords, first drafts), then **Step 3 — Pam sets up social**, and finally **Step 4 — I map the campaign plan on the calendar**.`
+      : `\n\nAll connections are already in place — say \"next step\" and I'll move to **Step 2 — Cheryl builds the content foundation**.`);
+
+  return {
+    replyContent,
+    replyMeta: { action: "onboarding_started", clientName, website },
+    woodhouseContent,
+  };
+}
+
 class TaskCancelledError extends Error {
   constructor() {
     super("Task cancelled by user");
     this.name = "TaskCancelledError";
+  }
+}
+
+/**
+ * Severity for the sidebar indicator light on an employee reply:
+ *   urgent (red)    — failures / alerts
+ *   important (orange) — a draft, plan, or other deliverable is ready
+ *   normal (green)  — a routine chat reply
+ */
+function actionPriority(
+  action: string
+): "urgent" | "important" | "normal" {
+  if (/^(content|campaign|chat|reputation|legal|onboarding)_failed$/.test(action)) {
+    return "urgent";
+  }
+  if (action === "content_generated" || action === "campaign_planned") {
+    return "important";
+  }
+  return "normal";
+}
+
+/**
+ * Copy a conversation (the owner's message + the employee's reply) into that
+ * employee's DM chat, so any chat held with them anywhere (Team Room, group
+ * room) is also found under Direct Messages.
+ */
+async function mirrorToEmployeeDm(params: {
+  tenantId: string;
+  workspaceId: string | null;
+  employeeKey: string;
+  sourceChatId: string;
+  userMessage: string;
+  replyContent: string;
+  replyMeta: Record<string, unknown>;
+}): Promise<void> {
+  try {
+    const sb = tenantScopedClient(await createServiceClient(), params.tenantId);
+
+    let dmId: string | null = null;
+    const { data: existing } = await sb
+      .from("team_chats")
+      .select("id")
+      .eq("workspace_id", params.workspaceId)
+      .eq("kind", "employee")
+      .eq("employee_key", params.employeeKey)
+      .maybeSingle();
+    if (existing) {
+      dmId = existing.id;
+    } else {
+      const { data: created, error } = await sb
+        .from("team_chats")
+        .insert({
+          workspace_id: params.workspaceId,
+          client_id: null,
+          title: params.employeeKey,
+          kind: "employee",
+          employee_key: params.employeeKey,
+        })
+        .select("id")
+        .single();
+      if (!error && created) dmId = created.id;
+    }
+    if (!dmId || dmId === params.sourceChatId) return;
+
+    await sb.from("team_messages").insert([
+      {
+        chat_id: dmId,
+        role: "user",
+        employee_key: null,
+        content: params.userMessage,
+        metadata: { mirror: true, sourceChatId: params.sourceChatId },
+      },
+      {
+        chat_id: dmId,
+        role: "employee",
+        employee_key: params.employeeKey,
+        content: params.replyContent,
+        metadata: {
+          ...params.replyMeta,
+          mirror: true,
+          sourceChatId: params.sourceChatId,
+        },
+      },
+    ]);
+  } catch (err) {
+    console.warn("[team-task] DM mirror failed:", err);
   }
 }
 
@@ -1478,11 +1674,14 @@ export async function processTeamTask(payload: TeamTaskPayload): Promise<void> {
     const isContentPipeline =
       targetKey === "penny" && decision.action === "content";
     const isCampaignPipeline = decision.action === "campaign";
+    const isOnboardingPipeline = decision.action === "onboarding";
     const statusText = isContentPipeline
       ? `${employeeDisplayName} is writing the post and generating the images — this takes a couple of minutes. I'll post the draft here when it's ready.`
       : isCampaignPipeline
         ? `Malory is mapping out the campaign plan — this takes a minute or two. I'll post the calendar link when it's ready.`
-        : `${employeeDisplayName} is putting together a reply…`;
+        : isOnboardingPipeline
+          ? `Malory is kicking off the onboarding — introducing the client to the team and getting the connection checklist together…`
+          : `${employeeDisplayName} is putting together a reply…`;
     await supabase.from("team_messages").insert({
       chat_id: chatId,
       role: "system",
@@ -1494,7 +1693,9 @@ export async function processTeamTask(payload: TeamTaskPayload): Promise<void> {
           ? "working"
           : isCampaignPipeline
             ? "planning"
-            : "replying",
+            : isOnboardingPipeline
+              ? "onboarding"
+              : "replying",
         taskId,
       },
     });
@@ -1507,7 +1708,52 @@ export async function processTeamTask(payload: TeamTaskPayload): Promise<void> {
     let replyContent = "";
     let replyMeta: Record<string, unknown> = {};
 
-    if (decision.action === "campaign") {
+    if (decision.action === "onboarding") {
+      try {
+        const result = await maloryOnboardClient({
+          tenantId,
+          userMessage,
+          workspaceContext,
+          workspaceId,
+          chatContext,
+        });
+        // Woodhouse posts her connection checklist (visible handoff) before
+        // Malory's step-by-step plan lands.
+        if (result.woodhouseContent) {
+          await supabase.from("team_messages").insert({
+            chat_id: chatId,
+            role: "employee",
+            employee_key: "eva",
+            content: result.woodhouseContent,
+            metadata: {
+              action: "connections_checklist",
+              priority: "normal",
+              taskId,
+            },
+          });
+          // And it's mirrored into Woodhouse's own DM too.
+          void mirrorToEmployeeDm({
+            tenantId,
+            workspaceId,
+            employeeKey: "eva",
+            sourceChatId: chatId,
+            userMessage,
+            replyContent: result.woodhouseContent,
+            replyMeta: { action: "connections_checklist", priority: "normal" },
+          });
+        }
+        replyContent = result.replyContent;
+        replyMeta = result.replyMeta;
+      } catch (err) {
+        replyContent = `I hit a snag kicking off the onboarding: ${
+          err instanceof Error ? err.message : "unknown error"
+        }. Ask me again or check the AI settings — the models need a configured API key.`;
+        replyMeta = {
+          action: "onboarding_failed",
+          error: err instanceof Error ? err.message : "unknown",
+        };
+      }
+    } else if (decision.action === "campaign") {
       const topic = decision.topic?.trim() || userMessage;
       try {
         const plan = await maloryPlanCampaign(
@@ -1668,12 +1914,16 @@ export async function processTeamTask(payload: TeamTaskPayload): Promise<void> {
       throw new TaskCancelledError();
     }
 
+    // Severity for the sidebar indicator light (green/orange/red).
+    const priority = actionPriority(
+      typeof replyMeta.action === "string" ? replyMeta.action : ""
+    );
     await supabase.from("team_messages").insert({
       chat_id: chatId,
       role: "employee",
       employee_key: targetKey,
       content: replyContent,
-      metadata: { ...replyMeta, taskId },
+      metadata: { ...replyMeta, taskId, priority },
     });
 
     // Surface the finished work in the top-nav bell (approval / update / alert).
@@ -1684,6 +1934,20 @@ export async function processTeamTask(payload: TeamTaskPayload): Promise<void> {
       replyContent,
       replyMeta,
     });
+
+    // Any conversation held with an employee in a room/team chat is also
+    // mirrored into their DM chat so it can be found under Direct Messages.
+    if (room.kind !== "employee") {
+      void mirrorToEmployeeDm({
+        tenantId,
+        workspaceId,
+        employeeKey: targetKey,
+        sourceChatId: chatId,
+        userMessage,
+        replyContent,
+        replyMeta: { ...replyMeta, priority },
+      });
+    }
   } catch (err) {
     if (err instanceof TaskCancelledError) {
       // The cancel action already posted the "Stopped by you." status — just

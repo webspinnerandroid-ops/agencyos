@@ -36,6 +36,7 @@ import {
   CartesianGrid,
 } from "recharts";
 import { ScoreBreakdown } from "@/components/seo/score-breakdown";
+import { RewriteComparisonTable } from "@/components/seo/rewrite-comparison";
 
 interface AuditMeta {
   kind?: string;
@@ -45,6 +46,7 @@ interface AuditMeta {
   original_score_geo?: number | null;
   final_score_aeo?: number | null;
   final_score_geo?: number | null;
+  original_checks_json?: { seo: EngineCheck[]; aeoGeo: EngineCheck[] } | null;
   attempts?: number | null;
   passed?: boolean | null;
   keyword?: string | null;
@@ -483,6 +485,20 @@ export default function SeoSitesPage() {
                     <Bar dataKey="after" name="After" fill="#6366f1" radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>
+                <div className="mt-6">
+                  <RewriteComparisonTable
+                    beforeSeo={latest.meta?.original_checks_json?.seo ?? []}
+                    beforeAeoGeo={latest.meta?.original_checks_json?.aeoGeo ?? []}
+                    afterSeo={latest.checks_json?.seo ?? []}
+                    afterAeoGeo={latest.checks_json?.aeoGeo ?? []}
+                    beforeSeoScore={latest.meta?.original_score_seo ?? null}
+                    afterSeoScore={latest.seo_score}
+                    beforeAeoScore={latest.meta?.original_score_aeo ?? null}
+                    afterAeoScore={latest.aeo_score}
+                    beforeGeoScore={latest.meta?.original_score_geo ?? null}
+                    afterGeoScore={latest.geo_score}
+                  />
+                </div>
                 {latest?.meta?.rewrittenBody && (
                   <div className="mt-5 pt-4 border-t">
                     <div className="flex items-center justify-between gap-2 mb-2">

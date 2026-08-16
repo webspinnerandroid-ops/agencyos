@@ -96,6 +96,10 @@ export async function POST(request: NextRequest) {
           original_score_aeo_geo: result.originalScores.aeoGeo,
           original_score_aeo: result.original.aeoGeo?.aeoScore ?? null,
           original_score_geo: result.original.aeoGeo?.geoSscore ?? null,
+          original_checks_json: {
+            seo: result.original.seo?.checks ?? [],
+            aeoGeo: result.original.aeoGeo?.checks ?? [],
+          },
           final_score_aeo: result.final.aeoGeo?.aeoScore ?? null,
           final_score_geo: result.final.aeoGeo?.geoSscore ?? null,
           attempts: result.attempts.length,

@@ -18,6 +18,7 @@ import {
   Wand2,
 } from "lucide-react";
 import { ScoreBreakdown } from "@/components/seo/score-breakdown";
+import { RewriteComparisonTable } from "@/components/seo/rewrite-comparison";
 import {
   BarChart,
   Bar,
@@ -296,6 +297,22 @@ export default function SeoRewriterPage() {
                 The original already passed the gate — the rewrite kept the structure with light polish.
               </p>
             )}
+          </Card>
+
+          {/* Side-by-side factor comparison */}
+          <Card className="p-5">
+            <RewriteComparisonTable
+              beforeSeo={result.original?.seo?.checks ?? []}
+              beforeAeoGeo={result.original?.aeoGeo?.checks ?? []}
+              afterSeo={result.final?.seo?.checks ?? []}
+              afterAeoGeo={result.final?.aeoGeo?.checks ?? []}
+              beforeSeoScore={result.originalScores.seo}
+              afterSeoScore={result.finalScores.seo}
+              beforeAeoScore={result.original?.aeoGeo?.aeoScore ?? null}
+              afterAeoScore={result.final?.aeoGeo?.aeoScore ?? null}
+              beforeGeoScore={result.original?.aeoGeo?.geoSscore ?? null}
+              afterGeoScore={result.final?.aeoGeo?.geoSscore ?? null}
+            />
           </Card>
 
           {/* Attempts */}

@@ -1010,9 +1010,17 @@ export async function generateImage(
     // Which task model to resolve. Defaults to image_generation; callers can
     // pass brand_design to route vector/typography work to a dedicated model.
     task?: AITask;
+    // Exact ai_models row to use (e.g. the Brand page's model picker). Takes
+    // precedence over the task mapping; requires a tenant key for the provider.
+    modelId?: string;
   }
 ): Promise<GeneratedImage[]> {
-  const resolution = await getModelForTask(tenantId, options?.task ?? "image_generation", options?.clientId);
+  const resolution = await getModelForTask(
+    tenantId,
+    options?.task ?? "image_generation",
+    options?.clientId,
+    options?.modelId
+  );
   const fullPrompt = `${prompt}${IMAGE_DEMOGRAPHIC_GUIDANCE}`;
 
   // Route to the appropriate image API based on provider
@@ -1419,10 +1427,13 @@ async function callFalAPI(
     // Wan 2.1/2.2 accept a duration hint (5s default; up to 10s on some hosts).
     duration: Math.min(options?.duration ?? 5, 10),
   };
-  if (resolution.model.includes("image-to-video")) {
+  if (
+    resolution.model.includes("image-to-video") ||
+    resolution.model.includes("reference-to-video")
+  ) {
     if (!options?.imageUrl) {
       throw new Error(
-        "This model needs a reference image. Pass an image URL (image-to-video)."
+        "This model needs a reference image. Pass an image URL (image-to-video / reference-to-video)."
       );
     }
     body.image_url = options.imageUrl;

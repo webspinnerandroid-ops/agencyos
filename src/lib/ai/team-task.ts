@@ -24,6 +24,7 @@ import {
 import {
   buildEmployeeSystemPrompt,
   employeeKeyNameList,
+  buildProprietaryRefusal,
   EMPLOYEE_PERSONAS,
 } from "@/lib/ai/employee-personas";
 import { scoreEmployeeOutput } from "@/lib/ai/eval";
@@ -2210,6 +2211,13 @@ export async function processTeamTask(payload: TeamTaskPayload): Promise<void> {
         }. Ask me again or check the AI settings.`;
         replyMeta = { action: "legal_failed", error: err instanceof Error ? err.message : "unknown" };
       }
+    } else if (buildProprietaryRefusal(targetKey, userMessage)) {
+      // Proprietary-question guard: internal processes, code, architecture,
+      // or anything about how this platform is built is off-limits. The
+      // employee turns the question down in-character and pivots back to
+      // their own lane of work — the LLM is never even asked.
+      replyContent = buildProprietaryRefusal(targetKey, userMessage)!;
+      replyMeta = { action: "chat_refused" };
     } else {
       const config = await loadEmployeeConfig(targetKey, tenantId);
       let personaPrompt = buildEmployeeSystemPrompt(targetKey, {

@@ -147,20 +147,43 @@ export default function AiSettingsPage() {
     ? models.filter((m) => m.provider_id === selectedProviderId)
     : models;
 
-  // Group models by provider for task mapping dropdowns
-  const modelsByProvider = models.reduce<
-    Record<string, { providerName: string; models: AiModel[] }>
-  >((acc, model) => {
-    const pid = model.provider_id;
-    if (!acc[pid]) {
-      acc[pid] = {
-        providerName: model.provider?.name ?? pid,
-        models: [],
-      };
-    }
-    acc[pid].models.push(model);
-    return acc;
-  }, {});
+  // A model can handle a task when its supported_tasks list contains it.
+  // `brand_design` folds into `image_generation` so pre-074 databases (image
+  // models tagged only with image_generation) still offer the right models.
+  const modelSupportsTask = (model: AiModel, task: ValidTask) => {
+    const tasks = model.supported_tasks ?? [];
+    if (tasks.includes(task)) return true;
+    if (task === "brand_design" && tasks.includes("image_generation"))
+      return true;
+    return false;
+  };
+
+  // Models offered for a task: those that actually support it, plus the
+  // currently mapped model (so a stale mapping can always be changed).
+  const modelsForTask = (task: ValidTask) => {
+    const mappedId = getMappingForTask(task)?.model_id;
+    return models.filter(
+      (m) => modelSupportsTask(m, task) || m.id === mappedId
+    );
+  };
+
+  // Group a task's eligible models by provider for its dropdown.
+  const groupModelsForTask = (
+    task: ValidTask
+  ): Record<string, { providerName: string; models: AiModel[] }> =>
+    modelsForTask(task).reduce<
+      Record<string, { providerName: string; models: AiModel[] }>
+    >((acc, model) => {
+      const pid = model.provider_id;
+      if (!acc[pid]) {
+        acc[pid] = {
+          providerName: model.provider?.name ?? pid,
+          models: [],
+        };
+      }
+      acc[pid].models.push(model);
+      return acc;
+    }, {});
 
   // ------------------------------------------------------------------
   // Handlers
@@ -449,7 +472,8 @@ export default function AiSettingsPage() {
           </CardTitle>
           <CardDescription>
             For each content task, choose which AI model should handle
-            generation. Models shown are from all configured providers.
+            generation. Only models that can actually perform the task are
+            shown — a text model never appears for video or image tasks.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -481,12 +505,13 @@ export default function AiSettingsPage() {
                     </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
-                    {models.length === 0 && (
+                    {modelsForTask(task).length === 0 && (
                       <div className="px-2 py-1.5 text-sm text-muted-foreground">
-                        No models available — run the seed migration.
+                        No models available for this task — run the seed
+                        migration or add a provider key.
                       </div>
                     )}
-                    {Object.entries(modelsByProvider).map(
+                    {Object.entries(groupModelsForTask(task)).map(
                       ([providerId, group]) => (
                         <div key={providerId}>
                           <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wide">

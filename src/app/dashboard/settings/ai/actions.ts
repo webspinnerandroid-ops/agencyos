@@ -317,6 +317,28 @@ export async function saveTaskModelMapping(
     const tenantId = await getTenantId();
     const supabase = await createServiceClient();
 
+    // Server-side backstop: only allow mapping a model that can actually
+    // handle the task (the dropdown filters client-side). `brand_design`
+    // folds into `image_generation` for pre-074 databases.
+    const { data: modelRow, error: modelErr } = await supabase
+      .from("ai_models")
+      .select("supported_tasks")
+      .eq("id", modelId)
+      .maybeSingle();
+    if (modelErr || !modelRow) {
+      return { success: false, error: "Model not found." };
+    }
+    const supported: string[] = modelRow.supported_tasks ?? [];
+    const canHandle =
+      supported.includes(task) ||
+      (task === "brand_design" && supported.includes("image_generation"));
+    if (!canHandle) {
+      return {
+        success: false,
+        error: `That model can't handle ${task.replace(/_/g, " ")} — pick one that supports the task.`,
+      };
+    }
+
     // Check if a mapping already exists for this tenant + task (client_id IS NULL)
     const { data: existing } = await supabase
       .from("task_model_mappings")

@@ -28,11 +28,20 @@ export async function GET(request: NextRequest) {
       .eq("is_active", true);
     const keyedProviderIds = new Set((tenantKeys ?? []).map((k: any) => k.provider_id));
 
-    // Models with their provider.
-    const { data, error } = await supabase
+    // Models with their provider. `brand_design` folds into
+    // `image_generation` so pre-074 databases (image models tagged only with
+    // image_generation) still return the right models for the Brand page.
+    let query = supabase
       .from("ai_models")
-      .select("id, model_identifier, supported_tasks, is_deprecated, provider:ai_providers(id, name, type)")
-      .contains("supported_tasks", [task]);
+      .select("id, model_identifier, supported_tasks, is_deprecated, provider:ai_providers(id, name, type)");
+    if (task === "brand_design") {
+      query = query.or(
+        "supported_tasks.cs.{brand_design},supported_tasks.cs.{image_generation}"
+      );
+    } else {
+      query = query.contains("supported_tasks", [task]);
+    }
+    const { data, error } = await query;
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });

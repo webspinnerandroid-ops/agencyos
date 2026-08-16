@@ -16,6 +16,7 @@ export function buildNavSections(isSuperAdmin: boolean): NavSection[] {
         { href: "/dashboard/ai-team", label: "AI Team" },
         { href: "/dashboard/generate", label: "Generate" },
         { href: "/dashboard/generate-images", label: "Images" },
+        { href: "/dashboard/brand-design", label: "Brand Design" },
         { href: "/dashboard/generate-videos", label: "Videos" },
         { href: "/dashboard/posts", label: "Posts" },
         { href: "/dashboard/calendar", label: "Calendar" },

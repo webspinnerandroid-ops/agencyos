@@ -15,7 +15,30 @@
 -- the DB as fal-ai/wan-25-preview/text-to-video (migration 035). If fal retires
 -- one later, Admin → APIs → "Verify fal.ai availability" flags it deprecated.
 --
--- Idempotent — ON CONFLICT DO NOTHING.
+-- Self-healing: first remove any guessed/renamed identifiers from an earlier
+-- draft of this migration, then upsert the verified set (idempotent).
+
+-- 1. Purge stale/guessed identifiers (no-ops if they were never inserted).
+DELETE FROM ai_models WHERE model_identifier IN (
+  'fal-ai/wan/v3.0/text-to-video',
+  'fal-ai/wan/v3.0/image-to-video',
+  'fal-ai/wan/v2.5/text-to-video',
+  'fal-ai/wan/v2.5/image-to-video',
+  'fal-ai/seedance/v2.5/text-to-video',
+  'fal-ai/seedance/v2.5/image-to-video',
+  'fal-ai/minimax/h3/text-to-video',
+  'fal-ai/minimax/h3/image-to-video',
+  'fal-ai/minimax/h3/subject-to-video',
+  'fal-ai/veo/3.1/text-to-video',
+  'fal-ai/veo/3.1/image-to-video',
+  'fal-ai/flux/v2/dev',
+  'fal-ai/flux/v2/pro',
+  'fal-ai/gemini-pro/nano-banana-pro',
+  'fal-ai/gemini-pro/nano-banana',
+  'fal-ai/recraft-v3',
+  'fal-ai/gpt-image/2',
+  'fal-ai/gpt-image/1'
+);
 
 -- ---------------------------------------------------------------------------
 -- VIDEO models (fal.ai provider …207, type video)
@@ -28,7 +51,9 @@ INSERT INTO ai_models (id, provider_id, model_identifier, supported_tasks) VALUE
   ('28000000-0000-0000-0000-000000000005', '00000000-0000-0000-0000-000000000207', 'minimax/h3/reference-to-video',       ARRAY['video_generation']),
   ('28000000-0000-0000-0000-000000000006', '00000000-0000-0000-0000-000000000207', 'fal-ai/seedance-2-5/text-to-video',   ARRAY['video_generation']),
   ('28000000-0000-0000-0000-000000000007', '00000000-0000-0000-0000-000000000207', 'fal-ai/veo3.1/image-to-video',        ARRAY['video_generation'])
-ON CONFLICT (id) DO NOTHING;
+ON CONFLICT (id) DO UPDATE SET
+  model_identifier = EXCLUDED.model_identifier,
+  supported_tasks = EXCLUDED.supported_tasks;
 
 -- ---------------------------------------------------------------------------
 -- IMAGE models (fal.ai provider …207 — one key covers video + image)
@@ -39,4 +64,6 @@ INSERT INTO ai_models (id, provider_id, model_identifier, supported_tasks) VALUE
   ('29000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000207', 'fal-ai/recraft/v3/text-to-image',    ARRAY['image_generation']),
   ('29000000-0000-0000-0000-000000000004', '00000000-0000-0000-0000-000000000207', 'fal-ai/nano-banana-pro',             ARRAY['image_generation']),
   ('29000000-0000-0000-0000-000000000005', '00000000-0000-0000-0000-000000000207', 'openai/gpt-image-2',                 ARRAY['image_generation'])
-ON CONFLICT (id) DO NOTHING;
+ON CONFLICT (id) DO UPDATE SET
+  model_identifier = EXCLUDED.model_identifier,
+  supported_tasks = EXCLUDED.supported_tasks;

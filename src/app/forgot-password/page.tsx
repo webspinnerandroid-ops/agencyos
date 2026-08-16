@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import Link from 'next/link';
+import { isDisposableEmail } from '@/lib/disposable-email';
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState('');
@@ -22,6 +23,12 @@ export default function ForgotPasswordPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+
+    if (isDisposableEmail(email)) {
+      setError('This email provider is not allowed. Please use a real email address.');
+      return;
+    }
+
     setLoading(true);
 
     const { error } = await supabase.auth.resetPasswordForEmail(email, {

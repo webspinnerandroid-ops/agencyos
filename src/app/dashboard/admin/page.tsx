@@ -52,6 +52,9 @@ function actionLabel(action: string): string {
     hub_granted: "Hub granted",
     hub_revoked: "Hub revoked",
     license_deleted: "License deleted",
+    blocked_signup: "Disposable signup blocked",
+    workspace_member_granted: "Workspace access granted",
+    workspace_member_revoked: "Workspace access revoked",
   };
   return map[action] ?? action;
 }
@@ -61,6 +64,7 @@ function auditBadgeClass(action: string): string {
   if (action.includes("deleted")) return "bg-orange-100 text-orange-700";
   if (action.includes("role")) return "bg-blue-100 text-blue-700";
   if (action.includes("hub")) return "bg-purple-100 text-purple-700";
+  if (action.includes("workspace")) return "bg-teal-100 text-teal-700";
   return "bg-gray-100 text-gray-700";
 }
 

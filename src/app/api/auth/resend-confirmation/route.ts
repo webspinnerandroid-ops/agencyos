@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { rateLimitRequest } from "@/lib/rate-limit";
+import { isDisposableEmail } from "@/lib/disposable-email";
 
 /**
  * POST /api/auth/resend-confirmation
@@ -24,6 +25,12 @@ export async function POST(request: NextRequest) {
     const email = String(body.email ?? "").trim().toLowerCase();
     if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
       return NextResponse.json({ error: "A valid email is required" }, { status: 400 });
+    }
+
+    // Disposable / temp-mail domains can't request confirmation links — the
+    // account should never have existed, and this blocks the resend path too.
+    if (isDisposableEmail(email)) {
+      return NextResponse.json({ ok: true });
     }
 
     const supabase = createClient(

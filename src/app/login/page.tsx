@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import Link from 'next/link';
+import { isDisposableEmail } from '@/lib/disposable-email';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -143,6 +144,12 @@ export default function LoginPage() {
     setError('');
     setNotConfirmed(false);
     setResent(false);
+
+    if (isDisposableEmail(email)) {
+      setError('This email provider is not allowed. Please use a real email address.');
+      return;
+    }
+
     setLoading(true);
 
     const { error } = await supabase.auth.signInWithPassword({

@@ -24,20 +24,32 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "email, password, and companyName required" }, { status: 400 });
     }
 
-    // Disposable / temp-mail domain blocklist (spam signup protection).
-    if (isDisposableEmail(email)) {
-      return NextResponse.json(
-        { error: "Please use a real email address — disposable/temporary mail providers are not allowed." },
-        { status: 422 }
-      );
-    }
-
     // Use direct Supabase admin client (bypasses RLS, no cookie binding)
     const supabase = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!,
       { auth: { autoRefreshToken: false, persistSession: false } }
     );
+
+    // Disposable / temp-mail domain blocklist (spam signup protection).
+    if (isDisposableEmail(email)) {
+      // Best-effort audit: record the blocked attempt so super admins can review
+      // spam in the Admin → Audit Log. Must never block or alter the rejection.
+      try {
+        const domain = String(email).split("@").pop() ?? "";
+        await supabase.from("admin_audit_log").insert({
+          actor_email: email,
+          action: "blocked_signup",
+          target_type: "email",
+          target_label: email,
+          details: { reason: "disposable/temp-mail domain", domain },
+        });
+      } catch { /* audit must never block the rejection */ }
+      return NextResponse.json(
+        { error: "Please use a real email address — disposable/temporary mail providers are not allowed." },
+        { status: 422 }
+      );
+    }
 
     // 0. Create user via admin API. email_confirm: false — Supabase sends the
     // confirmation email and the account can't sign in until it's verified.

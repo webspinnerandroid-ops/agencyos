@@ -2,6 +2,7 @@
 
 import { createServiceClient } from "@/lib/supabase/server";
 import { getTenantId, getRole, getUserEmail } from "@/lib/auth";
+import { createNotification } from "@/lib/in-app-notifications";
 
 /** Append an entry to the license audit log (best-effort, never fails the op). */
 async function auditLicense(
@@ -54,6 +55,32 @@ async function auditAdmin(
     });
   } catch (err) {
     console.error("[admin] audit log write failed:", err);
+  }
+}
+
+/**
+ * Notify every super admin (in-app alert) about a blocked admin action so a
+ * rogue delete/demote attempt can never pass silently. Best-effort.
+ */
+async function notifySuperAdmins(title: string, body: string): Promise<void> {
+  try {
+    const supabase = await createServiceClient();
+    const { data } = await supabase
+      .from("user_roles")
+      .select("user_id, tenant_id")
+      .eq("role", "super_admin");
+    for (const r of data ?? []) {
+      await createNotification({
+        tenantId: r.tenant_id,
+        userId: r.user_id,
+        kind: "alert",
+        title,
+        body,
+        link: "/dashboard/admin",
+      });
+    }
+  } catch (err) {
+    console.error("[admin] super-admin notify failed:", err);
   }
 }
 
@@ -634,6 +661,10 @@ export async function deleteUser(userId: string): Promise<ActionResponse> {
         targetLabel: targetEmail ?? userId,
         details: { reason: "target is a super admin" },
       });
+      await notifySuperAdmins(
+        "Blocked user delete",
+        `An attempt to delete a super admin account (${targetEmail ?? userId}) was blocked.`
+      );
       throw new Error("Super admin accounts can never be deleted.");
     }
 
@@ -700,6 +731,10 @@ export async function deleteTenant(
         targetLabel: tInfo?.name ?? tenantId,
         details: { reason: "tenant holds a super-admin role" },
       });
+      await notifySuperAdmins(
+        "Blocked tenant delete",
+        `An attempt to delete the super admin's tenant (${tInfo?.name ?? tenantId}) was blocked.`
+      );
       throw new Error("The super admin's tenant can never be deleted.");
     }
     const attachedUserIds = [...new Set((roleRows ?? []).map((r) => r.user_id))];
@@ -932,6 +967,10 @@ export async function assignLevel(
           targetLabel: targetEmail ?? userId,
           details: { from: existing.role, to: role, reason: "target is a super admin" },
         });
+        await notifySuperAdmins(
+          "Blocked role change",
+          `An attempt to demote a super admin account (${targetEmail ?? userId}) was blocked.`
+        );
         throw new Error("Super admin accounts can never be demoted.");
       }
       const { error } = await supabase

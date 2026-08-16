@@ -189,6 +189,123 @@ function getServiceSupabase() {
 }
 
 // ============================================================================
+// Token metering (best-effort — never breaks generation)
+//
+// Usage is billed per token per model at the rates in `model_rates` (USD, per
+// 1M tokens, input/output separately). Asset generations (image/video/voice)
+// are metered per asset at the model's asset price. All writes are fire-and-
+// forget and degrade to a console warning if the token tables don't exist yet
+// (migration 077).
+// ============================================================================
+
+async function bumpTokenBalance(tenantId: string, amountUsd: number): Promise<void> {
+  if (!amountUsd) return;
+  const supabase = getServiceSupabase();
+  const { data: bal } = await supabase
+    .from("tenant_balances")
+    .select("used_this_cycle_usd")
+    .eq("tenant_id", tenantId)
+    .maybeSingle();
+  if (bal) {
+    await supabase
+      .from("tenant_balances")
+      .update({
+        used_this_cycle_usd: Number(bal.used_this_cycle_usd ?? 0) + amountUsd,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("tenant_id", tenantId);
+  } else {
+    await supabase
+      .from("tenant_balances")
+      .insert({ tenant_id: tenantId, used_this_cycle_usd: amountUsd });
+  }
+}
+
+async function recordTokenUsage(
+  tenantId: string,
+  model: string,
+  usage: { prompt_tokens?: number; completion_tokens?: number } | undefined,
+  task: string
+): Promise<void> {
+  try {
+    const input = usage?.prompt_tokens ?? 0;
+    const output = usage?.completion_tokens ?? 0;
+    if (!input && !output) return;
+    const supabase = getServiceSupabase();
+    const { data: rate } = await supabase
+      .from("model_rates")
+      .select("input_per_1m_usd, output_per_1m_usd")
+      .eq("model_identifier", model)
+      .maybeSingle();
+    const inRate = Number(rate?.input_per_1m_usd ?? 0);
+    const outRate = Number(rate?.output_per_1m_usd ?? 0);
+
+    const rows: Record<string, unknown>[] = [];
+    if (input > 0) {
+      rows.push({
+        tenant_id: tenantId,
+        type: "usage",
+        unit_type: "token_in",
+        unit_qty: input,
+        rate_usd: inRate,
+        total_usd: (input / 1_000_000) * inRate,
+        model_identifier: model,
+        task,
+      });
+    }
+    if (output > 0) {
+      rows.push({
+        tenant_id: tenantId,
+        type: "usage",
+        unit_type: "token_out",
+        unit_qty: output,
+        rate_usd: outRate,
+        total_usd: (output / 1_000_000) * outRate,
+        model_identifier: model,
+        task,
+      });
+    }
+    if (rows.length) await supabase.from("token_ledger").insert(rows);
+    const totalUsd = rows.reduce((s, r) => s + Number(r.total_usd ?? 0), 0);
+    await bumpTokenBalance(tenantId, totalUsd);
+  } catch (err) {
+    console.warn("[token-metering] skipped:", err instanceof Error ? err.message : err);
+  }
+}
+
+async function recordAssetUsage(
+  tenantId: string,
+  model: string,
+  count: number,
+  task: string
+): Promise<void> {
+  try {
+    if (!count) return;
+    const supabase = getServiceSupabase();
+    const { data: rate } = await supabase
+      .from("model_rates")
+      .select("asset_price_usd")
+      .eq("model_identifier", model)
+      .maybeSingle();
+    const price = Number(rate?.asset_price_usd ?? 0);
+    const totalUsd = count * price;
+    await supabase.from("token_ledger").insert({
+      tenant_id: tenantId,
+      type: "usage",
+      unit_type: "asset",
+      unit_qty: count,
+      rate_usd: price,
+      total_usd: totalUsd,
+      model_identifier: model,
+      task,
+    });
+    await bumpTokenBalance(tenantId, totalUsd);
+  } catch (err) {
+    console.warn("[token-metering] asset skipped:", err instanceof Error ? err.message : err);
+  }
+}
+
+// ============================================================================
 // Encryption helpers
 // ============================================================================
 
@@ -737,6 +854,7 @@ export async function generateText(
     throw new Error("No content returned from AI provider");
   }
 
+  void recordTokenUsage(tenantId, model, result.usage, task);
   return content;
 }
 
@@ -907,6 +1025,7 @@ export async function generateStructuredOutput<T>(
       }
     };
 
+    void recordTokenUsage(tenantId, model, result.usage, task);
     const parsed = tryParse(content);
     if (parsed) return parsed;
 
@@ -944,6 +1063,7 @@ export async function generateStructuredOutput<T>(
       })
     );
 
+    void recordTokenUsage(tenantId, model, result.usage, task);
     const toolCalls = result.choices[0]?.message?.tool_calls;
     if (toolCalls && toolCalls.length > 0) {
       const functionArgs = toolCalls[0].function.arguments;
@@ -1024,24 +1144,27 @@ export async function generateImage(
   const fullPrompt = `${prompt}${IMAGE_DEMOGRAPHIC_GUIDANCE}`;
 
   // Route to the appropriate image API based on provider
+  let images: GeneratedImage[];
   if (resolution.providerName === "Google Imagen" || resolution.providerBaseUrl.includes("googleapis")) {
-    return callGoogleImagenAPI(resolution, fullPrompt, options);
+    images = await callGoogleImagenAPI(resolution, fullPrompt, options);
+  } else if (resolution.providerName === "OpenAI Image" || resolution.providerBaseUrl.includes("openai")) {
+    images = await callDalleImageAPI(resolution, fullPrompt, options);
+  } else if (resolution.providerName === "Stability AI" || resolution.providerBaseUrl.includes("stability")) {
+    images = await callStabilityImageAPI(resolution, fullPrompt, options);
+  } else if (resolution.providerName === "fal.ai" || resolution.providerBaseUrl.includes("fal.run")) {
+    images = await callFalImageAPI(resolution, fullPrompt, options);
+  } else {
+    // Default: OpenAI-compatible image endpoint
+    images = await callDalleImageAPI(resolution, fullPrompt, options);
   }
 
-  if (resolution.providerName === "OpenAI Image" || resolution.providerBaseUrl.includes("openai")) {
-    return callDalleImageAPI(resolution, fullPrompt, options);
-  }
-
-  if (resolution.providerName === "Stability AI" || resolution.providerBaseUrl.includes("stability")) {
-    return callStabilityImageAPI(resolution, fullPrompt, options);
-  }
-
-  if (resolution.providerName === "fal.ai" || resolution.providerBaseUrl.includes("fal.run")) {
-    return callFalImageAPI(resolution, fullPrompt, options);
-  }
-
-  // Default: OpenAI-compatible image endpoint
-  return callDalleImageAPI(resolution, fullPrompt, options);
+  void recordAssetUsage(
+    tenantId,
+    resolution.model,
+    images.length,
+    options?.task ?? "image_generation"
+  );
+  return images;
 }
 
 async function callDalleImageAPI(

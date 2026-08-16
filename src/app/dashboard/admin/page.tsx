@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Building2, Users, FileText, Key, TrendingUp, Shield, X, UserCog, Menu, Wallet, LayoutTemplate, LogIn } from "lucide-react";
 import { getDashboardStats, getAllTenants, getLicenses, getLicenseAudit, issueLicense, updateLicensePlan, renewLicense, revokeLicense, deleteLicense, deleteUser, deleteTenant, getAllUsers, assignLevel, grantHub, revokeHub, getAdminAudit, type TenantSummary, type LicenseRecord, type LicenseAuditEntry, type AdminAuditEntry, type UserRecord } from "./actions";
+import TokenBilling from "./token-billing";
 
 // Hub-and-spoke add-ons the super admin can grant/revoke without payment.
 const HUBS = [
@@ -539,6 +540,8 @@ export default function AdminDashboardPage() {
           </tbody></table></div>
         )}
       </CardContent></Card>
+
+      <TokenBilling />
     </div>
   );
 }

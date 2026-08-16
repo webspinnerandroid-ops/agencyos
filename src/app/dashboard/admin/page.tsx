@@ -87,7 +87,7 @@ export default function AdminDashboardPage() {
   };
 
   const handleDeleteUser = (userId: string, email: string) => {
-    if (!confirm(`Permanently delete user ${email}?\n\nThis removes their auth account and all role assignments. Their posts remain with the tenant. This cannot be undone.`)) return;
+    if (!confirm(`Permanently delete user ${email}?\n\nThis removes their auth account, all role assignments, and detaches their posts (content stays with the tenant). This cannot be undone.`)) return;
     if (!confirm("Are you absolutely sure? There is no recovery.")) return;
     startTransition(async () => {
       const r = await deleteUser(userId);
@@ -274,7 +274,11 @@ export default function AdminDashboardPage() {
               {!u.is_trial && <Badge className={statusColor(u.license_status)}>{u.license_status ?? "none"}</Badge>}
             </td>
             <td className="py-3 px-3">
-              <Button variant="ghost" size="sm" className="text-destructive" onClick={() => handleDeleteUser(u.user_id, u.email)}>Delete</Button>
+              {u.role === "super_admin" ? (
+                <span className="text-xs text-muted-foreground" title="Super admin accounts can never be deleted">Protected</span>
+              ) : (
+                <Button variant="ghost" size="sm" className="text-destructive" onClick={() => handleDeleteUser(u.user_id, u.email)}>Delete</Button>
+              )}
             </td>
             <td className="py-3 px-3">
               {!u.tenant_id ? (
@@ -472,7 +476,11 @@ export default function AdminDashboardPage() {
                     <><LogIn className="size-3 mr-1" /> Login as</>
                   )}
                 </Button>
-                <Button variant="ghost" size="sm" className="text-destructive" onClick={() => handleDeleteTenant(t)}>Delete</Button>
+                {t.protected ? (
+                  <span className="text-xs text-muted-foreground" title="Holds the super admin — can never be deleted">Protected</span>
+                ) : (
+                  <Button variant="ghost" size="sm" className="text-destructive" onClick={() => handleDeleteTenant(t)}>Delete</Button>
+                )}
               </div>
             </td>
           </tr>

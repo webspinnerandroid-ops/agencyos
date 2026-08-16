@@ -41,6 +41,8 @@ export interface TenantSummary {
   client_count: number;
   subscription_status: string | null;
   plan_id: string | null;
+  /** True when this tenant holds a super-admin role — it can never be deleted. */
+  protected?: boolean;
 }
 
 export interface LicenseRecord {
@@ -159,9 +161,10 @@ export async function getAllTenants(): Promise<ActionResponse<TenantSummary[]>> 
 
     const result: TenantSummary[] = [];
     for (const t of tenants) {
-      const [{ count: cc }, { data: sub }] = await Promise.all([
+      const [{ count: cc }, { data: sub }, { data: roles }] = await Promise.all([
         supabase.from("clients").select("*", { count: "exact", head: true }).eq("tenant_id", t.id),
         supabase.from("subscriptions").select("plan_id, status").eq("tenant_id", t.id).maybeSingle(),
+        supabase.from("user_roles").select("role").eq("tenant_id", t.id).limit(50),
       ]);
       result.push({
         id: t.id,
@@ -171,6 +174,7 @@ export async function getAllTenants(): Promise<ActionResponse<TenantSummary[]>> 
         client_count: cc ?? 0,
         subscription_status: sub?.status ?? null,
         plan_id: sub?.plan_id ?? null,
+        protected: (roles ?? []).some((r) => r.role === "super_admin"),
       });
     }
     return { success: true, data: result };
@@ -494,13 +498,33 @@ export async function deleteLicense(licenseId: string): Promise<ActionResponse> 
 
 /**
  * Permanently deletes a user account: their auth identity (auth.admin) and
- * every user_roles row. Tenant data is untouched — the user's posts etc.
- * remain with the tenant(s) they worked in.
+ * every user_roles row. Their posts are detached (created_by → NULL) so the
+ * content stays with the tenant; anything else they authored that carries a
+ * created_by FK is detached the same way.
+ *
+ * Super admins can never be deleted — this is a hard guarantee.
  */
 export async function deleteUser(userId: string): Promise<ActionResponse> {
   try {
     await requireSuperAdmin();
     const supabase = await createServiceClient();
+
+    // Hard guarantee: the super admin can never be deleted or removed.
+    const { data: theirRoles } = await supabase
+      .from("user_roles")
+      .select("role")
+      .eq("user_id", userId);
+    if ((theirRoles ?? []).some((r) => r.role === "super_admin")) {
+      throw new Error("Super admin accounts can never be deleted.");
+    }
+
+    // Detach content they authored so the FK doesn't block the auth delete
+    // (this is what made deletes look like they "did nothing" before).
+    const { error: detachError } = await supabase
+      .from("posts")
+      .update({ created_by: null })
+      .eq("created_by", userId);
+    if (detachError) throw new Error(detachError.message);
 
     const { error: rolesError } = await supabase
       .from("user_roles")
@@ -531,11 +555,15 @@ export async function deleteTenant(
     await requireSuperAdmin();
     const supabase = await createServiceClient();
 
-    // 1. Users attached to this tenant (to decide auth cleanup afterward).
+    // Hard guarantee: a tenant that holds a super-admin role can never be
+    // deleted — that would remove the super admin from everything.
     const { data: roleRows } = await supabase
       .from("user_roles")
-      .select("user_id")
+      .select("user_id, role")
       .eq("tenant_id", tenantId);
+    if ((roleRows ?? []).some((r) => r.role === "super_admin")) {
+      throw new Error("The super admin's tenant can never be deleted.");
+    }
     const attachedUserIds = [...new Set((roleRows ?? []).map((r) => r.user_id))];
 
     // 2. Collect media object URLs for Bunny cleanup (best-effort).
@@ -737,11 +765,15 @@ export async function assignLevel(
     // Does the user already have a role row? If so, just update the level.
     const { data: existing } = await supabase
       .from("user_roles")
-      .select("user_id, tenant_id")
+      .select("user_id, tenant_id, role")
       .eq("user_id", userId)
       .maybeSingle();
 
     if (existing) {
+      // Hard guarantee: a super admin can never be demoted.
+      if (existing.role === "super_admin" && role !== "super_admin") {
+        throw new Error("Super admin accounts can never be demoted.");
+      }
       const { error } = await supabase
         .from("user_roles")
         .update({ role })

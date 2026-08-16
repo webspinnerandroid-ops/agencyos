@@ -1008,7 +1008,7 @@ async function buildSetupChecklist(
     }
   };
 
-  const [brand, kb, socials, blogs, emails] = await Promise.all([
+  const [brand, kb, socials, google, blogs, emails] = await Promise.all([
     exists(
       supabase
         .from("brand_profiles")
@@ -1039,6 +1039,16 @@ async function buildSetupChecklist(
     ),
     exists(
       supabase
+        .from("tenant_connections")
+        .select("id")
+        .eq("tenant_id", tenantId)
+        .eq("connected", true)
+        .in("provider", ["google_analytics", "search_console"])
+        .limit(1)
+        .maybeSingle()
+    ),
+    exists(
+      supabase
         .from("blog_platforms")
         .select("id")
         .eq("tenant_id", tenantId)
@@ -1060,31 +1070,37 @@ async function buildSetupChecklist(
     {
       label: "Workspace customized (brand profile)",
       done: brand,
-      hint: "Add your brand voice, colors, and tone so every piece sounds like you.",
+      hint: "How-to: open Settings, fill in your brand voice, colors, and tone so every piece sounds like you.",
       url: "/dashboard/settings",
     },
     {
       label: "Website content in the Knowledge Base",
       done: kb,
-      hint: "Import or scrape your site so internal links, topics, and facts are real, not guessed.",
+      hint: "How-to: open Knowledge Base and import/scrape your site so internal links, topics, and facts are real, not guessed.",
       url: "/dashboard/knowledgebase",
     },
     {
       label: "Social accounts connected",
       done: socials,
-      hint: "Connect Instagram, TikTok, Facebook, LinkedIn or X so social posts can be scheduled and published.",
-      url: "/dashboard/settings?tab=social",
+      hint: "How-to: open Settings → Social Accounts, pick the platform, click Connect, and authorize in the popup. Facebook and Instagram connect via OAuth today; X, LinkedIn, YouTube, TikTok, Threads and Pinterest are supported as OAuth rolls out.",
+      url: "/dashboard/settings/social",
+    },
+    {
+      label: "Google accounts connected (Analytics + Search Console)",
+      done: google,
+      hint: "How-to: open Connections, click Connect Google, authorize with the client's Google account, then pick the GA4 property and the Search Console site so real rankings and traffic start tracking.",
+      url: "/dashboard/connections",
     },
     {
       label: "Blog / CMS connected",
       done: blogs,
-      hint: "Connect WordPress (or your CMS) so blogs can be published to your site with the right category.",
-      url: "/dashboard/settings?tab=blog",
+      hint: "How-to: open Settings → Blog, choose your CMS, and connect it (WordPress via a token or OAuth) so blogs publish to the client's site with the right category.",
+      url: "/dashboard/settings/blog",
     },
     {
       label: "Email inbox connected",
       done: emails,
-      hint: "Connect Gmail/Outlook so the team can handle inbox and calendar work for you.",
+      hint: "How-to: open Settings → Email, connect Gmail or Outlook via OAuth (authorize in the popup) so Woodhouse can triage inbox and calendar work.",
       url: "/dashboard/settings?tab=email",
     },
   ];
@@ -1287,6 +1303,31 @@ async function maloryPlanCampaign(
 // ----------------------------------------------------------------------------
 
 /**
+ * After Step 1 (Woodhouse's connection checklist) the owner confirms the
+ * connections are in place — "connections ready" / "next step" — which
+ * advances onboarding to Step 2 (Cheryl builds the content foundation). The
+ * continuation only fires in a chat that already started onboarding, so a
+ * stray "next step" elsewhere is never hijacked.
+ */
+const ONBOARDING_CONTINUE_RE =
+  /\b(connections? (are )?ready|ready with (the )?connections?|all (the )?connections? (are )?(in|ready)|everything(s)? (is|are) ?(synced|connected|ready)|next step|let.s (start|move) (step )?2)\b/i;
+
+async function chatStartedOnboarding(chatId: string): Promise<boolean> {
+  const sb = await createServiceClient();
+  const { data } = await sb
+    .from("team_messages")
+    .select("metadata")
+    .eq("chat_id", chatId)
+    .eq("role", "employee")
+    .order("created_at", { ascending: false })
+    .limit(20);
+  return (data ?? []).some((m) => {
+    const action = (m.metadata as Record<string, unknown>)?.action;
+    return action === "onboarding_started" || action === "connections_checklist";
+  });
+}
+
+/**
  * Malory's onboarding kickoff: introduce the client, hand the connection
  * checklist to Woodhouse to gather/sync, and lay out the step-by-step
  * sequence. Nothing jumps ahead — each step waits for the previous one.
@@ -1337,6 +1378,115 @@ async function maloryOnboardClient(params: {
   };
 }
 
+/**
+ * Step 2 of onboarding — Cheryl builds the content foundation: three blog
+ * pillars (awareness / consideration / decision) with focus keywords, then a
+ * real first draft for the top pillar (gate-checked, images, saved to posts).
+ * Returns the reply text + metadata so Step 3 (Pam's social setup) can follow
+ * with another "next step".
+ */
+async function cherylBuildFoundation(params: {
+  tenantId: string;
+  workspaceContext: string;
+  workspaceId: string | null;
+  chatContext: string;
+}): Promise<{ replyContent: string; replyMeta: Record<string, unknown> }> {
+  const { tenantId, workspaceContext, workspaceId, chatContext } = params;
+
+  const pillars = await generateStructuredOutput<{
+    pillars: {
+      topic?: string;
+      keyword?: string;
+      focusKeyword?: string;
+      primaryKeyword?: string;
+      kw?: string;
+      why?: string;
+    }[];
+  }>(
+    "team_chat",
+    buildEmployeeSystemPrompt("penny", { workspaceContext, chatContext }) +
+      "\n\nYou are laying the content foundation for a new client. Propose 3 blog pillar topics — one per funnel stage (awareness, consideration, decision) — each with a focus keyword and a one-line rationale. Ground everything in the workspace context; do not invent facts about the client.",
+    "Propose 3 blog pillars with focus keywords for this client's campaign.",
+    tenantId,
+    {
+      type: "object",
+      properties: {
+        pillars: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              topic: { type: "string", description: "Blog pillar title" },
+              keyword: {
+                type: "string",
+                description: "Focus keyword for this pillar (use the exact field name \"keyword\")",
+              },
+              why: { type: "string", description: "One-line rationale" },
+            },
+            required: ["topic", "keyword", "why"],
+          },
+        },
+      },
+      required: ["pillars"],
+    },
+    { functionName: "content_foundation", maxTokens: 2048, temperature: 0.5 }
+  );
+
+  // Models vary on the keyword field name — accept the common variants and
+  // strip markdown so the reply never shows "`undefined`".
+  const clean = (s: unknown) =>
+    String(s ?? "")
+      .replace(/[`*_]/g, "")
+      .trim();
+  const rawList = Array.isArray(pillars.pillars) ? pillars.pillars : [];
+  const list = rawList
+    .filter((p) => p && p.topic)
+    .slice(0, 3)
+    .map((p) => ({
+      topic: clean(p.topic),
+      keyword: clean(
+        p.keyword ?? p.focusKeyword ?? p.primaryKeyword ?? p.kw ?? ""
+      ),
+      why: clean(p.why ?? ""),
+    }));
+  if (list.length === 0) throw new Error("Content foundation came back empty");
+
+  // The first draft is a real, gate-checked post for the top pillar.
+  const first = list[0];
+  const draft = await cherylGenerateBlog(
+    tenantId,
+    first.topic,
+    workspaceContext,
+    workspaceId,
+    chatContext,
+    first.keyword ? [first.keyword] : []
+  );
+
+  const pillarLines = list
+    .map(
+      (p, i) =>
+        `${i + 1}. **${p.topic}** — focus keyword: \`${p.keyword}\`${
+          p.why ? ` (${p.why})` : ""
+        }`
+    )
+    .join("\n");
+
+  return {
+    replyContent:
+      `Content foundation for the client is in place — **${list.length} pillars** the campaign will build around:\n\n` +
+      pillarLines +
+      `\n\nAnd here's the first draft, written around the top pillar: **${draft.title}** ` +
+      `(${(draft.body || "").split(/\s+/).filter(Boolean).length} words, SEO/AEO/GEO gate-checked, featured + inline images). ` +
+      `Open it from the link to review, then say **\"next step\"** and I'll hand **Step 3 — Pam's social setup** to Pam.`,
+    replyMeta: {
+      action: "content_foundation",
+      postId: draft.postId,
+      postTitle: draft.title,
+      postUrl: `/dashboard/posts?post=${draft.postId}`,
+    },
+  };
+}
+
 class TaskCancelledError extends Error {
   constructor() {
     super("Task cancelled by user");
@@ -1356,7 +1506,11 @@ function actionPriority(
   if (/^(content|campaign|chat|reputation|legal|onboarding)_failed$/.test(action)) {
     return "urgent";
   }
-  if (action === "content_generated" || action === "campaign_planned") {
+  if (
+    action === "content_generated" ||
+    action === "content_foundation" ||
+    action === "campaign_planned"
+  ) {
     return "important";
   }
   return "normal";
@@ -1582,13 +1736,30 @@ export async function processTeamTask(payload: TeamTaskPayload): Promise<void> {
           ? (room.participants as string[])
           : null;
 
-    let decision = await dispatchRequest(
-      tenantId,
-      userMessage,
-      fixedEmployee,
-      workspaceContext,
-      chatContext
-    );
+    // Onboarding continuation: "connections ready" / "next step" in a chat
+    // that already started onboarding advances to Step 2 (Cheryl builds the
+    // content foundation) instead of being re-dispatched as a new request.
+    let decision: DispatchDecision;
+    if (
+      (room.kind !== "employee" || room.employee_key === "nina") &&
+      ONBOARDING_CONTINUE_RE.test(userMessage) &&
+      (await chatStartedOnboarding(chatId))
+    ) {
+      decision = {
+        employeeKey: "penny",
+        action: "onboarding_continue",
+        topic: "",
+        note: "Step 2 — Cheryl builds the content foundation (blog pillars, keywords, first drafts).",
+      };
+    } else {
+      decision = await dispatchRequest(
+        tenantId,
+        userMessage,
+        fixedEmployee,
+        workspaceContext,
+        chatContext
+      );
+    }
 
     // Keep a group chat's answers among the invited employees. A request for
     // someone not in the room is answered by the first participant, who
@@ -1638,14 +1809,19 @@ export async function processTeamTask(payload: TeamTaskPayload): Promise<void> {
     const isContentPipeline =
       targetKey === "penny" && decision.action === "content";
     const isCampaignPipeline = decision.action === "campaign";
-    const isOnboardingPipeline = decision.action === "onboarding";
+    const isOnboardingPipeline =
+      decision.action === "onboarding" ||
+      decision.action === "onboarding_continue";
+    const isFoundationPipeline = decision.action === "onboarding_continue";
     const statusText = isContentPipeline
       ? `${employeeDisplayName} is writing the post and generating the images — this takes a couple of minutes. I'll post the draft here when it's ready.`
       : isCampaignPipeline
         ? `Malory is mapping out the campaign plan — this takes a minute or two. I'll post the calendar link when it's ready.`
-        : isOnboardingPipeline
-          ? `Malory is kicking off the onboarding — introducing the client to the team and getting the connection checklist together…`
-          : `${employeeDisplayName} is putting together a reply…`;
+        : isFoundationPipeline
+          ? `Cheryl is building the content foundation — blog pillars, keywords, and the first draft. This takes a couple of minutes…`
+          : isOnboardingPipeline
+            ? `Malory is kicking off the onboarding — introducing the client to the team and getting the connection checklist together…`
+            : `${employeeDisplayName} is putting together a reply…`;
     await supabase.from("team_messages").insert({
       chat_id: chatId,
       role: "system",
@@ -1714,6 +1890,27 @@ export async function processTeamTask(payload: TeamTaskPayload): Promise<void> {
         }. Ask me again or check the AI settings — the models need a configured API key.`;
         replyMeta = {
           action: "onboarding_failed",
+          error: err instanceof Error ? err.message : "unknown",
+        };
+      }
+    } else if (decision.action === "onboarding_continue") {
+      // Step 2 of onboarding — Cheryl builds the content foundation: 3 blog
+      // pillars with keywords, then a real gate-checked first draft.
+      try {
+        const foundation = await cherylBuildFoundation({
+          tenantId,
+          workspaceContext,
+          workspaceId,
+          chatContext,
+        });
+        replyContent = foundation.replyContent;
+        replyMeta = foundation.replyMeta;
+      } catch (err) {
+        replyContent = `I hit a snag building the content foundation: ${
+          err instanceof Error ? err.message : "unknown error"
+        }. Ask me again or check the AI settings — the models need a configured API key.`;
+        replyMeta = {
+          action: "content_failed",
           error: err instanceof Error ? err.message : "unknown",
         };
       }

@@ -9,7 +9,13 @@ import { EMPLOYEE_KEYS } from "@/lib/ai/employee-keys";
 
 export interface DispatchDecision {
   employeeKey: string;
-  action: "content" | "campaign" | "onboarding" | "chat" | "other";
+  action:
+    | "content"
+    | "campaign"
+    | "onboarding"
+    | "onboarding_continue"
+    | "chat"
+    | "other";
   topic: string;
   note: string;
   /** When a DM employee is asked something outside their lane, the key of

@@ -189,6 +189,10 @@ export default function AiTeamChatPage() {
       // ignore
     }
   };
+  // Live mirror of lastReadAt for the unread-count poll below (avoids stale
+  // closure over state in the interval callback). Kept in sync inside
+  // markRead — writing refs during render is disallowed.
+  const lastReadRef = useRef(lastReadAt);
   const markRead = useCallback((chatId: string | null) => {
     if (!chatId) return;
     setLastReadAt((prev) => {
@@ -199,6 +203,7 @@ export default function AiTeamChatPage() {
       }
       const next = { ...prev, [chatId]: new Date().toISOString() };
       persistLastRead(next);
+      lastReadRef.current = next;
       return next;
     });
   }, []);
@@ -326,10 +331,26 @@ export default function AiTeamChatPage() {
       // The owner is watching this chat — keep its light off while replies
       // stream in.
       markRead(activeChatId);
+      // A task only counts as landed when its FINAL message arrives — an
+      // employee reply (the handoff and intermediate checklists like
+      // Woodhouse's connection checklist don't count) or a terminal failure/
+      // cancellation status. The "reviewing"/"working" status lines carry
+      // the same taskId, so counting any message with it would clear the poll
+      // on the first tick and the real replies would never be fetched.
+      const isFinal = (m: (typeof msgs)[number]) => {
+        if (typeof m.metadata?.taskId !== "string") return false;
+        const meta = m.metadata as Record<string, unknown>;
+        if (m.role === "system") {
+          return meta.stage === "failed" || meta.stage === "cancelled";
+        }
+        return (
+          m.role === "employee" &&
+          !meta.dispatch &&
+          meta.action !== "connections_checklist"
+        );
+      };
       const landed = new Set(
-        msgs
-          .map((m) => m.metadata?.taskId)
-          .filter((t): t is string => typeof t === "string")
+        msgs.filter(isFinal).map((m) => m.metadata?.taskId as string)
       );
       setPendingTasks((prev) => {
         const next = prev.filter((t) => !landed.has(t));
@@ -343,6 +364,41 @@ export default function AiTeamChatPage() {
       clearInterval(iv);
     };
   }, [activeChatId, pendingTasks.length]);
+
+  // Keep the sidebar unread lights fresh without a full page refresh: every
+  // 10s re-pull the chat list with unread counts. The active chat is excluded
+  // (it's already marked read + watched), so lights tick down/up live as
+  // messages land in other chats and as this one is read.
+  useEffect(() => {
+    let stopped = false;
+    const tick = async () => {
+      if (stopped) return;
+      const res = await getChats(lastReadRef.current);
+      if (stopped || !res.success || !res.data) return;
+      const fresh = res.data;
+      setChats((prev) => {
+        const freshById = new Map(fresh.map((c) => [c.id, c]));
+        const merged = prev.map((c) => {
+          const n = freshById.get(c.id);
+          return n
+            ? { ...c, unreadCount: n.unreadCount, unreadPriority: n.unreadPriority }
+            : c;
+        });
+        for (const n of fresh) {
+          if (!merged.some((c) => c.id === n.id)) merged.push(n);
+        }
+        return merged.sort((a, b) =>
+          a.created_at.localeCompare(b.created_at)
+        );
+      });
+    };
+    void tick();
+    const iv = setInterval(tick, 10000);
+    return () => {
+      stopped = true;
+      clearInterval(iv);
+    };
+  }, []);
 
   useEffect(() => {
     threadRef.current?.scrollTo({

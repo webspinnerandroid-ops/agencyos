@@ -514,6 +514,15 @@ function inferProviderFromBaseUrl(baseUrl: string): AIProvider {
   return "openai";
 }
 
+// Provider HTTP timeouts. A hung provider (dead endpoint, stalled connection)
+// must fail and surface a visible error (or retry) instead of leaving a chat
+// or generation task spinning forever with no reply — that silent hang is how
+// AI-team tasks got stuck at "reviewing" with nothing ever completing.
+// AbortSignal.timeout requires Node 17.3+.
+const FETCH_TIMEOUT_MS = 120_000;
+const SHORT_FETCH_TIMEOUT_MS = 30_000;
+const POLL_FETCH_TIMEOUT_MS = 20_000;
+
 // ============================================================================
 // Retry with exponential backoff
 // ============================================================================
@@ -647,6 +656,7 @@ async function callOpenAICompatibleAPI(
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
 
   if (!response.ok) {
@@ -997,6 +1007,7 @@ async function callDalleImageAPI(
       Authorization: `Bearer ${resolution.apiKey}`,
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
 
   if (!response.ok) {
@@ -1029,6 +1040,7 @@ async function callStabilityImageAPI(
       Accept: "application/json",
     },
     body: formData,
+    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   });
 
   if (!response.ok) {
@@ -1113,6 +1125,7 @@ async function callGoogleImagenAPI(
         "x-goog-api-key": resolution.apiKey,
       },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     }
   );
 
@@ -1182,6 +1195,7 @@ async function callNanoBananaGenerateContent(
         "x-goog-api-key": resolution.apiKey,
       },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
     }
   );
 
@@ -1294,6 +1308,7 @@ async function callFalAPI(
       Authorization: `Key ${resolution.apiKey}`,
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(SHORT_FETCH_TIMEOUT_MS),
   });
   if (!submitRes.ok) {
     const errorText = await submitRes.text();
@@ -1313,6 +1328,7 @@ async function callFalAPI(
     await new Promise((r) => setTimeout(r, 5000));
     const pollRes = await fetch(statusUrl, {
       headers: { Authorization: `Key ${resolution.apiKey}` },
+      signal: AbortSignal.timeout(POLL_FETCH_TIMEOUT_MS),
     });
     if (!pollRes.ok) continue;
     const pollData = await pollRes.json();
@@ -1320,6 +1336,7 @@ async function callFalAPI(
     if (status === "COMPLETED") {
       const resultRes = await fetch(pollData.response_url as string, {
         headers: { Authorization: `Key ${resolution.apiKey}` },
+        signal: AbortSignal.timeout(POLL_FETCH_TIMEOUT_MS),
       });
       if (resultRes.ok) {
         const result = await resultRes.json();
@@ -1378,6 +1395,7 @@ async function callWanAPI(
       Authorization: `Bearer ${resolution.apiKey}`,
     },
     body: JSON.stringify(submitBody),
+    signal: AbortSignal.timeout(SHORT_FETCH_TIMEOUT_MS),
   });
   if (!submitRes.ok) {
     const errorText = await submitRes.text();
@@ -1397,6 +1415,7 @@ async function callWanAPI(
     await new Promise((r) => setTimeout(r, 5000));
     const pollRes = await fetch(`${resolution.providerBaseUrl}/tasks/${taskId}`, {
       headers: { Authorization: `Bearer ${resolution.apiKey}` },
+      signal: AbortSignal.timeout(POLL_FETCH_TIMEOUT_MS),
     });
     if (!pollRes.ok) continue;
     const pollData = await pollRes.json();
@@ -1440,6 +1459,7 @@ async function callRunwayAPI(
       model: resolution.model,
       promptText: prompt,
     }),
+    signal: AbortSignal.timeout(60_000),
   });
 
   if (!response.ok) {
@@ -1473,6 +1493,7 @@ async function callHeyGenAPI(
       script: prompt,
       dimension: { width: 1920, height: 1080 },
     }),
+    signal: AbortSignal.timeout(60_000),
   });
 
   if (!response.ok) {
@@ -1504,6 +1525,7 @@ async function callPikaAPI(
       model: resolution.model,
       prompt,
     }),
+    signal: AbortSignal.timeout(60_000),
   });
 
   if (!response.ok) {
@@ -1581,6 +1603,7 @@ async function callElevenLabsAPI(
         similarity_boost: options?.similarityBoost ?? 0.75,
       },
     }),
+    signal: AbortSignal.timeout(60_000),
   });
 
   if (!response.ok) {
@@ -1616,6 +1639,7 @@ async function callPlayHTAPI(
       text,
       voice: _options?.voiceId ?? "s3://voice-cloning-zero-shot/american-male-1",
     }),
+    signal: AbortSignal.timeout(60_000),
   });
 
   if (!response.ok) {
@@ -1679,6 +1703,7 @@ async function callOpenAIEmbedAPI(
       model: resolution.model,
       input: texts,
     }),
+    signal: AbortSignal.timeout(60_000),
   });
 
   if (!response.ok) {
@@ -1711,6 +1736,7 @@ async function callCohereEmbedAPI(
       texts,
       input_type: "search_document",
     }),
+    signal: AbortSignal.timeout(60_000),
   });
 
   if (!response.ok) {
@@ -1741,6 +1767,7 @@ async function callVoyageEmbedAPI(
       model: resolution.model,
       input: texts,
     }),
+    signal: AbortSignal.timeout(60_000),
   });
 
   if (!response.ok) {
@@ -1772,6 +1799,7 @@ async function callJinaEmbedAPI(
       model: resolution.model,
       input: texts,
     }),
+    signal: AbortSignal.timeout(60_000),
   });
 
   if (!response.ok) {

@@ -369,25 +369,26 @@ export async function sendChatMessage(
       workspaceId: room.workspace_id,
       content: message,
       queue: async (payload: TeamTaskPayload) => {
-        // Production enqueues to the Inngest worker; dev runs the same
-        // pipeline inline (fire-and-forget) so the local server needs no
-        // deployed worker to receive the event.
-        if (process.env.NODE_ENV === "production" && process.env.INNGEST_EVENT_KEY) {
-          try {
-            await inngest.send({
-              name: "ai-team/employee-task",
-              data: payload,
-            });
-            return;
-          } catch (err) {
-            console.warn(
-              "[sendChatMessage] Inngest send failed — running task inline:",
-              err
-            );
-          }
+        // Run the chat pipeline in THIS long-lived process (fire-and-forget)
+        // instead of round-tripping through Inngest Cloud. A chat task posts
+        // progress messages as it goes and can take minutes (dispatch, then a
+        // full blog with images and up to 5 score-gate retries); an external
+        // cloud callback can time out or be dropped mid-run, which left tasks
+        // stuck at "reviewing" with no handoff and no reply. The VPS runs
+        // `next start` as a persistent process, so the async task survives the
+        // request and the UI polls the thread to see each stage land live.
+        // Set AI_TEAM_INNGEST=true to opt back into the Inngest worker.
+        if (
+          process.env.AI_TEAM_INNGEST === "true" &&
+          process.env.NODE_ENV === "production" &&
+          process.env.INNGEST_EVENT_KEY
+        ) {
+          await inngest.send({
+            name: "ai-team/employee-task",
+            data: payload,
+          });
+          return;
         }
-        // Same pipeline, but don't hold the request open: the UI polls the
-        // thread and sees each stage land live.
         void processTeamTask(payload);
       },
     });

@@ -66,6 +66,7 @@ async function bunnyUpload(path: string, body: Buffer, contentType: string): Pro
         "Content-Type": contentType,
       },
       body,
+      signal: AbortSignal.timeout(60_000),
     });
     if (!res.ok) {
       console.error(
@@ -136,7 +137,7 @@ export async function persistVideoToStorage(
   }
 
   try {
-    const res = await fetch(url);
+    const res = await fetch(url, { signal: AbortSignal.timeout(60_000) });
     if (!res.ok) {
       console.warn("[storage] Video download failed:", res.status, url.slice(0, 120));
       return { url, sizeBytes: null };

@@ -27,6 +27,49 @@ async function auditLicense(
   }
 }
 
+/**
+ * Append an entry to the general admin audit log (best-effort, never fails
+ * the op). Covers delete-user/tenant, role changes, hub grants, license
+ * deletes, and BLOCKED attempts.
+ */
+async function auditAdmin(
+  supabase: Awaited<ReturnType<typeof createServiceClient>>,
+  entry: {
+    action: string;
+    targetType: string;
+    targetId?: string | null;
+    targetLabel?: string | null;
+    details?: Record<string, unknown>;
+  }
+): Promise<void> {
+  try {
+    const email = await getUserEmail();
+    await supabase.from("admin_audit_log").insert({
+      actor_email: email,
+      action: entry.action,
+      target_type: entry.targetType,
+      target_id: entry.targetId ?? null,
+      target_label: entry.targetLabel ?? null,
+      details: entry.details ?? {},
+    });
+  } catch (err) {
+    console.error("[admin] audit log write failed:", err);
+  }
+}
+
+/** Best-effort lookup of a user's email by id (admin auth API). */
+async function getUserEmailById(
+  supabase: Awaited<ReturnType<typeof createServiceClient>>,
+  userId: string
+): Promise<string | null> {
+  try {
+    const { data } = await supabase.auth.admin.getUserById(userId);
+    return data?.user?.email ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export interface ActionResponse<T = void> {
   success: boolean;
   data?: T;
@@ -279,6 +322,48 @@ export async function getLicenseAudit(
   }
 }
 
+export interface AdminAuditEntry {
+  id: string;
+  actor_email: string | null;
+  action: string;
+  target_type: string | null;
+  target_id: string | null;
+  target_label: string | null;
+  details: Record<string, unknown> | null;
+  created_at: string;
+}
+
+/** True when the error is a missing admin_audit_log table (migration 071 not applied yet). */
+function isMissingAuditTable(err: unknown): boolean {
+  const msg =
+    (err as { message?: string } | null)?.message ??
+    (err instanceof Error ? err.message : String(err));
+  return /admin_audit_log.*does not exist|does not exist/.test(msg);
+}
+
+/** Recent general admin audit entries (delete/role/hub/license actions). */
+export async function getAdminAudit(
+  limit = 100
+): Promise<ActionResponse<AdminAuditEntry[]>> {
+  try {
+    await requireSuperAdmin();
+    const supabase = await createServiceClient();
+    const { data, error } = await supabase
+      .from("admin_audit_log")
+      .select("id, actor_email, action, target_type, target_id, target_label, details, created_at")
+      .order("created_at", { ascending: false })
+      .limit(limit);
+    if (error) {
+      // Degrade gracefully until migration 071 is applied: no log, no crash.
+      if (isMissingAuditTable(error)) return { success: true, data: [] };
+      throw new Error(error.message);
+    }
+    return { success: true, data: (data ?? []) as AdminAuditEntry[] };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
 export async function revokeLicense(licenseId: string): Promise<ActionResponse> {
   try {
     await requireSuperAdmin();
@@ -439,6 +524,13 @@ export async function grantHub(
     } else {
       await supabase.from("tenant_settings").insert({ tenant_id: tenantId, settings });
     }
+    await auditAdmin(supabase, {
+      action: "hub_granted",
+      targetType: "hub",
+      targetId: hubId,
+      targetLabel: tenantId,
+      details: { tenantId, hubs: Array.from(new Set([...hubs, hubId])) },
+    });
     return { success: true };
   } catch (err) {
     return { success: false, error: (err as Error).message };
@@ -475,6 +567,13 @@ export async function revokeHub(
         .update({ settings, updated_at: new Date().toISOString() })
         .eq("tenant_id", tenantId);
     }
+    await auditAdmin(supabase, {
+      action: "hub_revoked",
+      targetType: "hub",
+      targetId: hubId,
+      targetLabel: tenantId,
+      details: { tenantId, hubs: next },
+    });
     return { success: true };
   } catch (err) {
     return { success: false, error: (err as Error).message };
@@ -488,8 +587,20 @@ export async function deleteLicense(licenseId: string): Promise<ActionResponse> 
   try {
     await requireSuperAdmin();
     const supabase = await createServiceClient();
+    const { data: lic } = await supabase
+      .from("licenses")
+      .select("license_key, tenant_id, plan_id")
+      .eq("id", licenseId)
+      .maybeSingle();
     const { error } = await supabase.from("licenses").delete().eq("id", licenseId);
     if (error) throw new Error(error.message);
+    await auditAdmin(supabase, {
+      action: "license_deleted",
+      targetType: "license",
+      targetId: licenseId,
+      targetLabel: lic?.license_key ?? licenseId,
+      details: { tenantId: lic?.tenant_id ?? null, planId: lic?.plan_id ?? null },
+    });
     return { success: true };
   } catch (err) {
     return { success: false, error: (err as Error).message };
@@ -514,7 +625,15 @@ export async function deleteUser(userId: string): Promise<ActionResponse> {
       .from("user_roles")
       .select("role")
       .eq("user_id", userId);
+    const targetEmail = await getUserEmailById(supabase, userId);
     if ((theirRoles ?? []).some((r) => r.role === "super_admin")) {
+      await auditAdmin(supabase, {
+        action: "blocked_user_delete",
+        targetType: "user",
+        targetId: userId,
+        targetLabel: targetEmail ?? userId,
+        details: { reason: "target is a super admin" },
+      });
       throw new Error("Super admin accounts can never be deleted.");
     }
 
@@ -535,6 +654,13 @@ export async function deleteUser(userId: string): Promise<ActionResponse> {
     const { error: authError } = await supabase.auth.admin.deleteUser(userId);
     if (authError) throw new Error(authError.message);
 
+    await auditAdmin(supabase, {
+      action: "user_deleted",
+      targetType: "user",
+      targetId: userId,
+      targetLabel: targetEmail ?? userId,
+      details: { rolesRemoved: (theirRoles ?? []).map((r) => r.role) },
+    });
     return { success: true };
   } catch (err) {
     return { success: false, error: (err as Error).message };
@@ -562,6 +688,18 @@ export async function deleteTenant(
       .select("user_id, role")
       .eq("tenant_id", tenantId);
     if ((roleRows ?? []).some((r) => r.role === "super_admin")) {
+      const { data: tInfo } = await supabase
+        .from("tenants")
+        .select("name")
+        .eq("id", tenantId)
+        .maybeSingle();
+      await auditAdmin(supabase, {
+        action: "blocked_tenant_delete",
+        targetType: "tenant",
+        targetId: tenantId,
+        targetLabel: tInfo?.name ?? tenantId,
+        details: { reason: "tenant holds a super-admin role" },
+      });
       throw new Error("The super admin's tenant can never be deleted.");
     }
     const attachedUserIds = [...new Set((roleRows ?? []).map((r) => r.user_id))];
@@ -614,6 +752,19 @@ export async function deleteTenant(
         [...new Set(mediaUrls)].map((u) => deleteStoredImage(u))
       );
     }
+
+    const { data: tInfo } = await supabase
+      .from("tenants")
+      .select("name")
+      .eq("id", tenantId)
+      .maybeSingle();
+    await auditAdmin(supabase, {
+      action: "tenant_deleted",
+      targetType: "tenant",
+      targetId: tenantId,
+      targetLabel: tInfo?.name ?? tenantId,
+      details: { deletedAccounts },
+    });
 
     return { success: true, data: { deletedAccounts } };
   } catch (err) {
@@ -769,9 +920,18 @@ export async function assignLevel(
       .eq("user_id", userId)
       .maybeSingle();
 
+    const targetEmail = await getUserEmailById(supabase, userId);
+
     if (existing) {
       // Hard guarantee: a super admin can never be demoted.
       if (existing.role === "super_admin" && role !== "super_admin") {
+        await auditAdmin(supabase, {
+          action: "blocked_role_change",
+          targetType: "role",
+          targetId: userId,
+          targetLabel: targetEmail ?? userId,
+          details: { from: existing.role, to: role, reason: "target is a super admin" },
+        });
         throw new Error("Super admin accounts can never be demoted.");
       }
       const { error } = await supabase
@@ -779,6 +939,13 @@ export async function assignLevel(
         .update({ role })
         .eq("user_id", userId);
       if (error) throw new Error(error.message);
+      await auditAdmin(supabase, {
+        action: "role_changed",
+        targetType: "role",
+        targetId: userId,
+        targetLabel: targetEmail ?? userId,
+        details: { from: existing.role, to: role, tenantId: existing.tenant_id },
+      });
       return { success: true };
     }
 
@@ -805,6 +972,13 @@ export async function assignLevel(
       .insert({ user_id: userId, tenant_id: tenantId, role });
     if (insertError) throw new Error(insertError.message);
 
+    await auditAdmin(supabase, {
+      action: "role_assigned",
+      targetType: "role",
+      targetId: userId,
+      targetLabel: targetEmail ?? userId,
+      details: { role, tenantId },
+    });
     return { success: true };
   } catch (err) {
     return { success: false, error: (err as Error).message };

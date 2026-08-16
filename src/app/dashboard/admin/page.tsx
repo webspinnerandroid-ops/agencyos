@@ -9,7 +9,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Building2, Users, FileText, Key, TrendingUp, Shield, X, UserCog, Menu, Wallet, LayoutTemplate, LogIn } from "lucide-react";
-import { getDashboardStats, getAllTenants, getLicenses, getLicenseAudit, issueLicense, updateLicensePlan, renewLicense, revokeLicense, deleteLicense, deleteUser, deleteTenant, getAllUsers, assignLevel, grantHub, revokeHub, type TenantSummary, type LicenseRecord, type LicenseAuditEntry, type UserRecord } from "./actions";
+import { getDashboardStats, getAllTenants, getLicenses, getLicenseAudit, issueLicense, updateLicensePlan, renewLicense, revokeLicense, deleteLicense, deleteUser, deleteTenant, getAllUsers, assignLevel, grantHub, revokeHub, getAdminAudit, type TenantSummary, type LicenseRecord, type LicenseAuditEntry, type AdminAuditEntry, type UserRecord } from "./actions";
 
 // Hub-and-spoke add-ons the super admin can grant/revoke without payment.
 const HUBS = [
@@ -40,6 +40,30 @@ function levelLabel(role: string) {
   return lvl?.name ?? role;
 }
 
+function actionLabel(action: string): string {
+  const map: Record<string, string> = {
+    user_deleted: "User deleted",
+    blocked_user_delete: "User delete blocked",
+    tenant_deleted: "Tenant deleted",
+    blocked_tenant_delete: "Tenant delete blocked",
+    role_changed: "Role changed",
+    role_assigned: "Role assigned",
+    blocked_role_change: "Role change blocked",
+    hub_granted: "Hub granted",
+    hub_revoked: "Hub revoked",
+    license_deleted: "License deleted",
+  };
+  return map[action] ?? action;
+}
+
+function auditBadgeClass(action: string): string {
+  if (action.startsWith("blocked_")) return "bg-red-100 text-red-700";
+  if (action.includes("deleted")) return "bg-orange-100 text-orange-700";
+  if (action.includes("role")) return "bg-blue-100 text-blue-700";
+  if (action.includes("hub")) return "bg-purple-100 text-purple-700";
+  return "bg-gray-100 text-gray-700";
+}
+
 function statusColor(s: string | null) {
   if (s === "active") return "bg-green-100 text-green-700";
   if (s === "trialing") return "bg-blue-100 text-blue-700";
@@ -52,6 +76,7 @@ export default function AdminDashboardPage() {
   const [tenants, setTenants] = useState<TenantSummary[]>([]);
   const [licenses, setLicenses] = useState<LicenseRecord[]>([]);
   const [users, setUsers] = useState<UserRecord[]>([]);
+  const [audit, setAudit] = useState<AdminAuditEntry[]>([]);
   const [feedback, setFeedback] = useState<{ type: string; message: string } | null>(null);
   const [isLoading, startLoading] = useTransition();
   const [isPending, startTransition] = useTransition();
@@ -67,11 +92,12 @@ export default function AdminDashboardPage() {
 
   const loadData = useCallback(() => {
     startLoading(async () => {
-      const [s, t, l, u] = await Promise.all([getDashboardStats(), getAllTenants(), getLicenses(), getAllUsers()]);
+      const [s, t, l, u, a] = await Promise.all([getDashboardStats(), getAllTenants(), getLicenses(), getAllUsers(), getAdminAudit(100)]);
       if (s.success) setStats(s.data);
       if (t.success) setTenants(t.data ?? []);
       if (l.success) setLicenses(l.data ?? []);
       if (u.success) setUsers(u.data ?? []);
+      if (a.success) setAudit(a.data ?? []);
     });
   }, []);
 
@@ -486,6 +512,28 @@ export default function AdminDashboardPage() {
           </tr>
         ))}
         </tbody></table></div>
+      </CardContent></Card>
+
+      <Card><CardHeader><CardTitle className="flex items-center gap-2"><Shield className="size-5 text-primary" /> Audit Log</CardTitle></CardHeader><CardContent>
+        {audit.length === 0 ? (
+          <p className="text-muted-foreground text-sm">No admin actions logged yet.</p>
+        ) : (
+          <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b text-left"><th className="py-2 px-3 text-muted-foreground">When</th><th className="py-2 px-3 text-muted-foreground">Actor</th><th className="py-2 px-3 text-muted-foreground">Action</th><th className="py-2 px-3 text-muted-foreground">Target</th><th className="py-2 px-3 text-muted-foreground">Details</th></tr></thead><tbody>
+          {audit.map(a => (
+            <tr key={a.id} className="border-b last:border-0">
+              <td className="py-2 px-3 text-muted-foreground whitespace-nowrap">{new Date(a.created_at).toLocaleString()}</td>
+              <td className="py-2 px-3">{a.actor_email ?? "—"}</td>
+              <td className="py-2 px-3"><Badge className={auditBadgeClass(a.action)}>{actionLabel(a.action)}</Badge></td>
+              <td className="py-2 px-3">{a.target_label ?? a.target_id ?? "—"}</td>
+              <td className="py-2 px-3 text-muted-foreground">{
+                a.details && Object.keys(a.details).length > 0
+                  ? JSON.stringify(a.details)
+                  : ""
+              }</td>
+            </tr>
+          ))}
+          </tbody></table></div>
+        )}
       </CardContent></Card>
     </div>
   );

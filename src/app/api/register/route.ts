@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { rateLimitRequest } from "@/lib/rate-limit";
+import { isDisposableEmail } from "@/lib/disposable-email";
 
 export async function POST(request: NextRequest) {
   try {
@@ -21,6 +22,14 @@ export async function POST(request: NextRequest) {
 
     if (!email || !password || !companyName) {
       return NextResponse.json({ error: "email, password, and companyName required" }, { status: 400 });
+    }
+
+    // Disposable / temp-mail domain blocklist (spam signup protection).
+    if (isDisposableEmail(email)) {
+      return NextResponse.json(
+        { error: "Please use a real email address — disposable/temporary mail providers are not allowed." },
+        { status: 422 }
+      );
     }
 
     // Use direct Supabase admin client (bypasses RLS, no cookie binding)

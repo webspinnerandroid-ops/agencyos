@@ -47,6 +47,9 @@ export interface TeamChat {
   employee_key: string | null;
   /** Group rooms: the employee keys currently in the chat. */
   participants?: string[] | null;
+  /** Optional folder/project label (migration 068). Null until the column
+   * lands — select("*") omits it, so clients must treat it as optional. */
+  folder?: string | null;
   created_at: string;
 }
 
@@ -248,6 +251,82 @@ export async function getTenantWorkspaces(): Promise<
       success: true,
       data: (data ?? []) as { id: string; name: string }[],
     };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+/**
+ * Delete a chat and its entire message history. team_messages cascades on
+ * chat_id, so one delete removes the thread; tenant ownership is enforced
+ * before anything is removed. Rooms and DMs may be deleted; the Team Room
+ * auto-recreates on next load (the UI hides the control for it).
+ */
+export async function deleteChat(
+  chatId: string
+): Promise<ActionResponse<void>> {
+  try {
+    const tenantId = await getTenantId();
+    await requireRole("agency_editor");
+    const supabase = tenantScopedClient(await createServiceClient(), tenantId);
+
+    const { data: chat } = await supabase
+      .from("team_chats")
+      .select("*")
+      .eq("id", chatId)
+      .maybeSingle();
+    assertTenantOwner(chat as TeamChat | null, tenantId, "chat");
+
+    const { error } = await supabase.from("team_chats").delete().eq("id", chatId);
+    if (error) throw new Error(error.message);
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+/**
+ * File a chat into a folder/project (or clear its folder with null). The
+ * folder is a free-form label capped at 60 chars. If the folder column
+ * doesn't exist yet (migration 068 not applied), fail with a clear message
+ * instead of a cryptic Postgres error.
+ */
+export async function setChatFolder(
+  chatId: string,
+  folder: string | null
+): Promise<ActionResponse<TeamChat>> {
+  try {
+    const tenantId = await getTenantId();
+    await requireRole("agency_editor");
+    const supabase = tenantScopedClient(await createServiceClient(), tenantId);
+
+    const { data: chat } = await supabase
+      .from("team_chats")
+      .select("*")
+      .eq("id", chatId)
+      .maybeSingle();
+    assertTenantOwner(chat as TeamChat | null, tenantId, "chat");
+
+    const clean = folder
+      ? folder.trim().replace(/\s+/g, " ").slice(0, 60)
+      : null;
+
+    const { data, error } = await supabase
+      .from("team_chats")
+      .update({ folder: clean })
+      .eq("id", chatId)
+      .select("*")
+      .single();
+    if (error) {
+      if (/column .*folder.* does not exist|Could not find the 'folder' column/i.test(error.message)) {
+        return {
+          success: false,
+          error: "Folders aren't enabled yet — apply migration 068 to add the folder column.",
+        };
+      }
+      throw new Error(error.message);
+    }
+    return { success: true, data: data as TeamChat };
   } catch (err) {
     return { success: false, error: (err as Error).message };
   }

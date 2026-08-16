@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type FormEvent,
@@ -19,6 +20,8 @@ import {
   CalendarRange,
   Check,
   Square,
+  Trash2,
+  Folder,
 } from "lucide-react";
 import { EMPLOYEE_PERSONAS } from "@/lib/ai/employee-personas";
 import { EmployeeAvatar } from "@/components/EmployeeAvatar";
@@ -32,6 +35,8 @@ import {
   createChatRoom,
   cancelTeamTask,
   inviteEmployeeToChat,
+  deleteChat as deleteChatAction,
+  setChatFolder,
   type TeamChat,
   type TeamMessage,
 } from "@/lib/ai-team-chat";
@@ -132,6 +137,15 @@ export default function AiTeamChatPage() {
     });
   };
   const threadRef = useRef<HTMLDivElement>(null);
+
+  // Staleness clock for status chips — refreshed every 30s so a dead task
+  // resolves to the "didn't complete — Retry" state without needing a new
+  // message poll. (Date.now in state, not render.)
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  useEffect(() => {
+    const iv = setInterval(() => setNowTick(Date.now()), 30000);
+    return () => clearInterval(iv);
+  }, []);
 
   const activeChat = chats.find((c) => c.id === activeChatId) ?? null;
 
@@ -259,36 +273,108 @@ export default function AiTeamChatPage() {
     });
   }, [messages.length, pendingTasks.length]);
 
+  const sendContent = useCallback(
+    async (content: string) => {
+      if (!content || !activeChatId) return;
+      setError(null);
+      try {
+        const res = await fetch("/api/ai-team/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chatId: activeChatId, content }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setError(data.error ?? "Failed to send message");
+        } else {
+          if (Array.isArray(data.messages)) {
+            setMessages((prev) => mergeMessages(prev, data.messages));
+          }
+          // The endpoint returns fast — the work runs in the background, so
+          // track the task id until its final message arrives via polling.
+          if (typeof data.taskId === "string" && data.taskId) {
+            setPendingTasks((prev) => [...prev, data.taskId]);
+          }
+        }
+      } catch {
+        setError("Network error — check your connection and try again.");
+      }
+    },
+    [activeChatId]
+  );
+
   const send = useCallback(async () => {
     const content = input.trim();
-    if (!content || !activeChatId) return;
+    if (!content) return;
     setInput("");
-    setError(null);
-    try {
-      const res = await fetch("/api/ai-team/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chatId: activeChatId, content }),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        setError(data.error ?? "Failed to send message");
-        setInput(content); // restore for retry
-      } else {
-        if (Array.isArray(data.messages)) {
-          setMessages((prev) => mergeMessages(prev, data.messages));
-        }
-        // The endpoint returns fast — the work runs in the background, so
-        // track the task id until its final message arrives via polling.
-        if (typeof data.taskId === "string" && data.taskId) {
-          setPendingTasks((prev) => [...prev, data.taskId]);
-        }
+    await sendContent(content);
+  }, [input, sendContent]);
+
+  // A status chip with a taskId spins until the task's final message lands.
+  // If the task died before posting anything else (old builds that round-
+  // tripped through the cloud worker lost runs silently), the chip would spin
+  // forever — so the Retry button re-sends the original request that preceded
+  // that stuck status, giving the owner a way out of a dead task.
+  const retryStuck = useCallback(
+    async (msg: TeamMessage) => {
+      const priorUser = [...messages]
+        .filter(
+          (m) => m.role === "user" && m.created_at <= msg.created_at
+        )
+        .pop();
+      if (!priorUser) {
+        setError("Couldn't find the original request to retry.");
+        return;
       }
-    } catch {
-      setError("Network error — check your connection and try again.");
-      setInput(content);
+      await sendContent(priorUser.content);
+    },
+    [messages, sendContent]
+  );
+
+  const removeChat = useCallback(
+    async (chatId: string, title: string) => {
+      if (
+        !window.confirm(
+          `Delete "${title}" and its entire message history? This can't be undone.`
+        )
+      )
+        return;
+      const res = await deleteChatAction(chatId);
+      if (!res.success) {
+        setError(res.error ?? "Failed to delete chat.");
+        return;
+      }
+      setChats((prev) => prev.filter((c) => c.id !== chatId));
+      if (activeChatId === chatId) {
+        const team = chats.find((c) => c.kind === "team");
+        setActiveChatId(team ? team.id : null);
+        setMessages([]);
+        setPendingTasks([]);
+      }
+    },
+    [activeChatId, chats]
+  );
+
+  const [folderDraft, setFolderDraft] = useState("");
+  // Set when Enter commits the folder so the immediate onBlur (caused by the
+  // commit clearing the input) doesn't overwrite the folder with an empty
+  // value. Reset on the next blur.
+  const suppressBlur = useRef(false);
+
+  const applyFolder = useCallback(async () => {
+    if (!activeChatId || activeChat?.kind === "team") return;
+    const value = folderDraft.trim();
+    const folder = value ? value.replace(/\s+/g, " ").slice(0, 60) : null;
+    const res = await setChatFolder(activeChatId, folder);
+    if (!res.success || !res.data) {
+      setError(res.error ?? "Failed to set folder.");
+      return;
     }
-  }, [input, activeChatId]);
+    setChats((prev) =>
+      prev.map((c) => (c.id === res.data!.id ? res.data! : c))
+    );
+    setFolderDraft("");
+  }, [activeChatId, activeChat?.kind, folderDraft]);
 
   const createRoom = async (e: FormEvent) => {
     e.preventDefault();
@@ -312,6 +398,27 @@ export default function AiTeamChatPage() {
   const dms = chats.filter((c) => c.kind === "employee");
   // Show all employees in the sidebar; existing DMs are marked.
   const dmKeys = new Set(dms.map((d) => d.employee_key));
+
+  // Rooms grouped by folder (unfiled last), plus the distinct folder names
+  // for the folder picker in the chat header.
+  const folderGroups = useMemo(() => {
+    const map = new Map<string | null, TeamChat[]>();
+    for (const r of rooms) {
+      const f = r.folder?.trim() || null;
+      if (!map.has(f)) map.set(f, []);
+      map.get(f)!.push(r);
+    }
+    return [...map.entries()].sort((a, b) => {
+      if (a[0] === null) return 1;
+      if (b[0] === null) return -1;
+      return a[0]!.localeCompare(b[0]!);
+    });
+  }, [rooms]);
+  const allFolders = useMemo(
+    () =>
+      [...new Set(chats.map((c) => c.folder?.trim() || "").filter(Boolean))].sort(),
+    [chats]
+  );
 
   // Employees currently in the active chat (a DM has one; a group room has N).
   const activeParticipants: string[] = activeChat
@@ -443,17 +550,40 @@ export default function AiTeamChatPage() {
               </div>
               {historyOpen && (
                 <div className="max-h-40 overflow-y-auto">
-                  {rooms.map((room) => (
-                    <button
-                      key={room.id}
-                      onClick={() => setActiveChatId(room.id)}
-                      className={`w-full flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-muted/50 transition-colors ${
-                        activeChat?.id === room.id ? "bg-muted/70 font-semibold" : ""
-                      }`}
-                    >
-                      <MessagesSquare className="size-4 text-muted-foreground shrink-0" />
-                      <span className="truncate">{room.title}</span>
-                    </button>
+                  {folderGroups.map(([folder, items]) => (
+                    <div key={folder ?? "__unfiled"}>
+                      <p className="px-3 pt-2 pb-0.5 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                        {folder ? (
+                          <>
+                            <Folder className="size-3" /> {folder}
+                          </>
+                        ) : (
+                          "Unfiled"
+                        )}
+                      </p>
+                      {items.map((room) => (
+                        <div key={room.id} className="group flex items-center">
+                          <button
+                            onClick={() => setActiveChatId(room.id)}
+                            className={`flex-1 min-w-0 flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-muted/50 transition-colors ${
+                              activeChat?.id === room.id
+                                ? "bg-muted/70 font-semibold"
+                                : ""
+                            }`}
+                          >
+                            <MessagesSquare className="size-4 text-muted-foreground shrink-0" />
+                            <span className="truncate">{room.title}</span>
+                          </button>
+                          <button
+                            onClick={() => void removeChat(room.id, room.title)}
+                            title="Delete chat"
+                            className="mr-1 p-1 rounded-md text-muted-foreground/60 hover:text-destructive hover:bg-destructive/10 opacity-0 group-hover:opacity-100 transition-opacity"
+                          >
+                            <Trash2 className="size-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
                   ))}
                 </div>
               )}
@@ -470,38 +600,50 @@ export default function AiTeamChatPage() {
               const dm = dms.find((d) => d.employee_key === key);
               const persona = EMPLOYEE_PERSONAS[key];
               return (
-                <button
-                  key={key}
-                  onClick={async () => {
-                    if (dm) {
-                      setActiveChatId(dm.id);
-                      return;
-                    }
-                    const res = await getOrCreateEmployeeChat(key);
-                    if (res.success && res.data) {
-                      setChats((prev) =>
-                        prev.some((c) => c.id === res.data!.id)
-                          ? prev
-                          : [...prev, res.data!]
-                      );
-                      setActiveChatId(res.data.id);
-                    }
-                  }}
-                  className={`w-full flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-muted/50 transition-colors ${
-                    activeChat?.employee_key === key ? "bg-muted/70 font-semibold" : ""
-                  }`}
-                >
-                  <EmployeeAvatar employeeKey={key} name={persona?.name ?? key} size={28} />
-                  <span className="min-w-0">
-                    <span className="block truncate">{persona?.name ?? key}</span>
-                    <span className="block text-[11px] text-muted-foreground truncate">
-                      {persona?.role ?? "AI Employee"}
+                <div key={key} className="group flex items-center">
+                  <button
+                    onClick={async () => {
+                      if (dm) {
+                        setActiveChatId(dm.id);
+                        return;
+                      }
+                      const res = await getOrCreateEmployeeChat(key);
+                      if (res.success && res.data) {
+                        setChats((prev) =>
+                          prev.some((c) => c.id === res.data!.id)
+                            ? prev
+                            : [...prev, res.data!]
+                        );
+                        setActiveChatId(res.data.id);
+                      }
+                    }}
+                    className={`flex-1 min-w-0 flex items-center gap-2 px-3 py-2 text-left text-sm hover:bg-muted/50 transition-colors ${
+                      activeChat?.employee_key === key
+                        ? "bg-muted/70 font-semibold"
+                        : ""
+                    }`}
+                  >
+                    <EmployeeAvatar employeeKey={key} name={persona?.name ?? key} size={28} />
+                    <span className="min-w-0">
+                      <span className="block truncate">{persona?.name ?? key}</span>
+                      <span className="block text-[11px] text-muted-foreground truncate">
+                        {persona?.role ?? "AI Employee"}
+                      </span>
                     </span>
-                  </span>
-                  {dmKeys.has(key) && (
-                    <span className="ml-auto size-1.5 rounded-full bg-primary shrink-0" />
+                    {dmKeys.has(key) && (
+                      <span className="ml-auto size-1.5 rounded-full bg-primary shrink-0" />
+                    )}
+                  </button>
+                  {dm && (
+                    <button
+                      onClick={() => void removeChat(dm.id, persona?.name ?? key)}
+                      title="Delete chat"
+                      className="mr-1 p-1 rounded-md text-muted-foreground/60 hover:text-destructive hover:bg-destructive/10 opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      <Trash2 className="size-3.5" />
+                    </button>
                   )}
-                </button>
+                </div>
               );
             })}
           </div>
@@ -510,6 +652,43 @@ export default function AiTeamChatPage() {
         {/* Thread */}
         <section className="rounded-lg border bg-card flex flex-col h-[65vh] md:h-[70vh]">
           <div className="px-4 py-3 border-b flex items-center gap-2">
+            {/* Folder control — file this chat into a folder/project. Enter
+                or blur commits; a blurred Enter is suppressed so the commit
+                isn't immediately undone by the empty blur. */}
+            {activeChat && activeChat.kind !== "team" && (
+              <div className="ml-auto flex items-center gap-1">
+                <Folder className="size-3.5 text-muted-foreground" />
+                <input
+                  list="chat-folder-list"
+                  value={folderDraft}
+                  onChange={(e) => setFolderDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      suppressBlur.current = true;
+                      void applyFolder();
+                    }
+                  }}
+                  onBlur={() => {
+                    if (suppressBlur.current) {
+                      suppressBlur.current = false;
+                      return;
+                    }
+                    void applyFolder();
+                  }}
+                  placeholder={
+                    activeChat.folder?.trim() || "Folder…"
+                  }
+                  title="File this chat into a folder/project"
+                  className="w-28 rounded-md border border-input bg-background px-2 py-1 text-xs text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+                <datalist id="chat-folder-list">
+                  {allFolders.map((f) => (
+                    <option key={f} value={f} />
+                  ))}
+                </datalist>
+              </div>
+            )}
             {/* Workspace label + move control — chats are isolated per
                 workspace; moving relocates a chat for per-client campaigns. */}
             {activeChat && workspaces.length > 1 && (
@@ -635,17 +814,48 @@ export default function AiTeamChatPage() {
                           m.metadata?.taskId === statusTaskId
                       )
                     : true; // legacy rows without a taskId — never spin
+                // A status older than 4 minutes with no resolving message is
+                // a dead task (the old builds lost runs silently) — stop
+                // spinning and offer a Retry instead of loading forever.
+                const ageMs =
+                  nowTick - new Date(msg.created_at).getTime();
+                const stuck =
+                  !resolved && !!statusTaskId && ageMs > 4 * 60 * 1000;
                 return (
                   <div key={msg.id} className="flex justify-center py-0.5">
-                    <div className="inline-flex items-center gap-2 rounded-full bg-muted/50 border px-3 py-1 text-[11px] text-muted-foreground">
-                      {resolved ? (
+                    <div
+                      className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] ${
+                        stuck
+                          ? "bg-amber-50 border-amber-200 text-amber-700"
+                          : "bg-muted/50 border-transparent text-muted-foreground"
+                      }`}
+                    >
+                      {stuck ? (
+                        <>
+                          <span className="font-bold" aria-hidden>
+                            !
+                          </span>
+                          <span className="whitespace-pre-wrap break-words">
+                            This request didn&apos;t complete — the task was
+                            lost.{" "}
+                          </span>
+                          <button
+                            onClick={() => void retryStuck(msg)}
+                            className="font-semibold underline underline-offset-2 hover:text-amber-900"
+                          >
+                            Retry
+                          </button>
+                        </>
+                      ) : resolved ? (
                         <Check className="size-3 text-emerald-500" />
                       ) : (
                         <Loader2 className="size-3 animate-spin" />
                       )}
-                      <span className="whitespace-pre-wrap break-words">
-                        {msg.content}
-                      </span>
+                      {!stuck && (
+                        <span className="whitespace-pre-wrap break-words">
+                          {msg.content}
+                        </span>
+                      )}
                     </div>
                   </div>
                 );

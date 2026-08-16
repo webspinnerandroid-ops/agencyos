@@ -742,6 +742,36 @@ export async function generateText(
 // generateStructuredOutput
 // ============================================================================
 
+/**
+ * Convert a JSON Schema (as used for structured output) into a concrete
+ * example value, recursively. Used to show the model the exact output shape
+ * in the prompt — models follow examples far more reliably than schema dumps.
+ * Returns null when the schema can't be introspected (caller omits the hint).
+ */
+function buildSchemaExample(schema: unknown): unknown | null {
+  if (!schema || typeof schema !== "object") return null;
+  const s = schema as Record<string, unknown>;
+  if (s.type === "array" || Array.isArray(s.items)) {
+    const item = buildSchemaExample(s.items ?? { type: "string" });
+    return item === null ? null : [item];
+  }
+  if (s.type === "object" || s.properties) {
+    const props = s.properties as Record<string, unknown> | undefined;
+    if (!props || typeof props !== "object" || Object.keys(props).length === 0) {
+      return null;
+    }
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(props)) {
+      const ex = buildSchemaExample(v);
+      if (ex !== null) out[k] = ex;
+    }
+    return Object.keys(out).length > 0 ? out : null;
+  }
+  if (s.type === "number" || s.type === "integer") return 0;
+  if (s.type === "boolean") return false;
+  return "string";
+}
+
 export async function generateStructuredOutput<T>(
   task: AITask,
   systemPrompt: string,
@@ -803,12 +833,24 @@ export async function generateStructuredOutput<T>(
     // Smaller tasks like social captions will just use what they need.
     const maxTokens = options?.maxTokens ?? 16384;
 
+    // In JSON mode the tool definition (which carries the schema) is never
+    // sent, so models like DeepSeek frequently invent their own field names
+    // (or answer empty) because they don't know the exact shape to produce.
+    // An EXAMPLE of the desired output is far more effective than the JSON
+    // Schema itself (a schema dump makes them echo the structure back).
+    const schemaExample = buildSchemaExample(schema);
+    const schemaHint =
+      schemaExample !== null
+        ? `\n\nReturn ONLY the data. Use EXACTLY this shape (the values are examples — replace them with your real content, do not rename the keys):\n${JSON.stringify(schemaExample)}\n`
+        : "";
+    const schemaPrompt = `${userPrompt}${schemaHint}`;
+
     // NOTE: Do NOT send responseFormat: { type: "json_object" } to DeepSeek —
     // it can return empty content. Rely on the strong JSON system prompt instead.
     const makeJsonCall = (tokens: number) =>
       callOpenAICompatibleAPI(providerBaseUrl, apiKey, model, [
         { role: "system", content: jsonSystemPrompt },
-        { role: "user", content: userPrompt },
+        { role: "user", content: schemaPrompt },
       ], {
         temperature: options?.temperature ?? 0.3,
         maxTokens: tokens,

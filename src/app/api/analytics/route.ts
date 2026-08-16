@@ -8,6 +8,7 @@ import {
   type ConnectionRecord,
   type TrafficSourceOption,
   getAccessToken,
+  isMissingWorkspaceColumn,
   listProviderResources,
 } from "@/lib/connections";
 
@@ -263,15 +264,49 @@ export async function GET(request: NextRequest) {
       search_console: { active: null, resources: [] },
     };
     try {
-      const { data: conns, error: connErr } = await supabase
+      const workspaceId = (await getCurrentWorkspaceId().catch(() => null)) ?? null;
+      let connQuery = supabase
         .from("tenant_connections")
         .select("*")
         .eq("tenant_id", tenantId)
         .eq("connected", true)
         .in("provider", ["google_analytics", "search_console"]);
+      if (workspaceId) {
+        connQuery = connQuery.or(
+          `workspace_id.is.null,workspace_id.eq.${workspaceId}`
+        );
+      }
+      let { data: conns, error: connErr } = await connQuery;
+      // Migration 070 not applied yet — fall back to the tenant-wide list.
+      if (connErr && isMissingWorkspaceColumn(connErr)) {
+        const legacy = await supabase
+          .from("tenant_connections")
+          .select("*")
+          .eq("tenant_id", tenantId)
+          .eq("connected", true)
+          .in("provider", ["google_analytics", "search_console"]);
+        conns = legacy.data ?? [];
+        connErr = legacy.error ?? null;
+      }
       if (!connErr) {
-        for (const raw of conns ?? []) {
-          const conn = raw as ConnectionRecord;
+        // Prefer the workspace-scoped connection over the legacy tenant-wide
+        // row when both exist for a provider (multi-workspace tenants).
+        const all = (conns ?? []) as ConnectionRecord[];
+        const seen = new Set<string>();
+        const ordered: ConnectionRecord[] = [];
+        for (const c of all) {
+          if (c.workspace_id === workspaceId && !seen.has(c.provider)) {
+            ordered.push(c);
+            seen.add(c.provider);
+          }
+        }
+        for (const c of all) {
+          if (!seen.has(c.provider)) {
+            ordered.push(c);
+            seen.add(c.provider);
+          }
+        }
+        for (const conn of ordered) {
           const entry = trafficSources[conn.provider];
           entry.active = conn.selected_resource ?? null;
           if (Array.isArray(conn.available_resources) && conn.available_resources.length) {

@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getTenantId } from "@/lib/auth";
+import { getCurrentWorkspaceId } from "@/lib/workspace";
 import {
   type ConnectionProvider,
   type ConnectionRecord,
@@ -10,6 +11,7 @@ import {
   encodeTokenBundle,
   getAccessToken,
   googleOAuthConfigured,
+  isMissingWorkspaceColumn,
   listGA4Properties,
   listProviderResources,
   listSearchConsoleSites,
@@ -21,11 +23,43 @@ export interface ActionResponse<T = void> {
   error?: string;
 }
 
+/**
+ * Fetch a tenant's connections for one provider, preferring the row scoped to
+ * the current workspace and falling back to the legacy tenant-wide (NULL
+ * workspace) row. This lets multi-workspace tenants track different GA4
+ * properties / SC sites per client while pre-070 rows keep working.
+ */
+async function resolveConnection(
+  tenantId: string,
+  workspaceId: string | null,
+  provider?: ConnectionProvider
+): Promise<ConnectionRecord | null> {
+  const supabase = await createServiceClient();
+  let query = supabase
+    .from("tenant_connections")
+    .select("*")
+    .eq("tenant_id", tenantId);
+  if (provider) query = query.eq("provider", provider);
+
+  // This base query works before AND after migration 070: pre-070 every row
+  // has a null workspace_id so the preference below naturally picks it.
+  const { data } = await query;
+  const rows = (data ?? []) as ConnectionRecord[];
+  if (rows.length === 0) return null;
+  if (!workspaceId) return rows[0];
+  // Workspace-scoped row wins; otherwise the legacy NULL row.
+  return (
+    rows.find((r) => r.workspace_id === workspaceId) ??
+    rows.find((r) => !r.workspace_id) ??
+    rows[0]
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Read
 // ---------------------------------------------------------------------------
 
-/** List the tenant's connections, minus token material. */
+/** List the workspace's connections, minus token material. */
 export async function getConnections(): Promise<
   ActionResponse<(Omit<ConnectionRecord, "encrypted_token">)[]> & {
     googleConfigured: boolean;
@@ -33,13 +67,38 @@ export async function getConnections(): Promise<
 > {
   try {
     const tenantId = await getTenantId();
+    const workspaceId = await getCurrentWorkspaceId().catch(() => null);
     const supabase = await createServiceClient();
-    const { data, error } = await supabase
+
+    // Include the legacy tenant-wide rows so pre-070 connections keep showing.
+    // If migration 070 hasn't been applied the workspace_id column is missing
+    // — fall back to the tenant-wide list rather than breaking the page.
+    let query = supabase
       .from("tenant_connections")
       .select(
-        "id, tenant_id, provider, account_email, account_name, scopes, selected_resource, resource_label, connected, last_synced_at, created_at, updated_at"
+        "id, tenant_id, workspace_id, provider, account_email, account_name, scopes, selected_resource, resource_label, connected, last_synced_at, created_at, updated_at"
       )
       .eq("tenant_id", tenantId);
+    if (workspaceId) {
+      query = query.or(
+        `workspace_id.is.null,workspace_id.eq.${workspaceId}`
+      );
+    }
+    const { data, error } = await query;
+    if (error && isMissingWorkspaceColumn(error)) {
+      const legacy = await supabase
+        .from("tenant_connections")
+        .select(
+          "id, tenant_id, provider, account_email, account_name, scopes, selected_resource, resource_label, connected, last_synced_at, created_at, updated_at"
+        )
+        .eq("tenant_id", tenantId);
+      if (legacy.error) throw new Error(legacy.error.message);
+      return {
+        success: true,
+        googleConfigured: googleOAuthConfigured(),
+        data: (legacy.data ?? []) as never,
+      };
+    }
     if (error) throw new Error(error.message);
     return {
       success: true,
@@ -61,7 +120,8 @@ export async function getConnections(): Promise<
 
 /**
  * Start the Google OAuth round-trip for a provider. Stores an `oauth_states`
- * row (10-min TTL) and returns the Google consent URL to redirect the user to.
+ * row (10-min TTL) carrying the workspace so the callback assigns the
+ * connection to the right workspace, and returns the Google consent URL.
  */
 export async function initiateConnection(
   provider: ConnectionProvider
@@ -75,10 +135,12 @@ export async function initiateConnection(
   }
   try {
     const tenantId = await getTenantId();
+    const workspaceId = await getCurrentWorkspaceId().catch(() => null);
     const supabase = await createServiceClient();
     const state = crypto.randomUUID();
     const { error: insertErr } = await supabase.from("oauth_states").insert({
       tenant_id: tenantId,
+      workspace_id: workspaceId,
       state,
       platform: provider,
       expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
@@ -102,17 +164,12 @@ export async function getResources(
 > {
   try {
     const tenantId = await getTenantId();
+    const workspaceId = await getCurrentWorkspaceId().catch(() => null);
     const supabase = await createServiceClient();
-    const { data: conn, error } = await supabase
-      .from("tenant_connections")
-      .select("*")
-      .eq("tenant_id", tenantId)
-      .eq("provider", provider)
-      .maybeSingle();
-    if (error) throw new Error(error.message);
+    const conn = await resolveConnection(tenantId, workspaceId, provider);
     if (!conn) return { success: false, error: "Not connected." };
 
-    const { accessToken, fresh } = await getAccessToken(conn as ConnectionRecord);
+    const { accessToken, fresh } = await getAccessToken(conn);
     if (fresh) {
       await supabase
         .from("tenant_connections")
@@ -148,7 +205,7 @@ export async function getResources(
   }
 }
 
-/** Save which resource (GA4 property / SC site) this connection tracks. */
+/** Save which resource (GA4 property / SC site) this workspace tracks. */
 export async function selectResource(
   provider: ConnectionProvider,
   resource: string,
@@ -156,12 +213,14 @@ export async function selectResource(
 ): Promise<ActionResponse> {
   try {
     const tenantId = await getTenantId();
+    const workspaceId = await getCurrentWorkspaceId().catch(() => null);
     const supabase = await createServiceClient();
+    const conn = await resolveConnection(tenantId, workspaceId, provider);
+    if (!conn) return { success: false, error: "Not connected." };
     const { error } = await supabase
       .from("tenant_connections")
       .update({ selected_resource: resource, resource_label: label })
-      .eq("tenant_id", tenantId)
-      .eq("provider", provider);
+      .eq("id", conn.id);
     if (error) throw new Error(error.message);
     revalidatePath("/dashboard/connections");
     return { success: true };
@@ -179,12 +238,14 @@ export async function disconnectConnection(
 ): Promise<ActionResponse> {
   try {
     const tenantId = await getTenantId();
+    const workspaceId = await getCurrentWorkspaceId().catch(() => null);
     const supabase = await createServiceClient();
+    const conn = await resolveConnection(tenantId, workspaceId, provider);
+    if (!conn) return { success: false, error: "Not connected." };
     const { error } = await supabase
       .from("tenant_connections")
       .delete()
-      .eq("tenant_id", tenantId)
-      .eq("provider", provider);
+      .eq("id", conn.id);
     if (error) throw new Error(error.message);
     revalidatePath("/dashboard/connections");
     return { success: true };
@@ -192,4 +253,3 @@ export async function disconnectConnection(
     return { success: false, error: (err as Error).message };
   }
 }
-

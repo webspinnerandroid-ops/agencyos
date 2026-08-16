@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantId } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
+import { getCurrentWorkspaceId } from "@/lib/workspace";
 import {
   type ConnectionProvider,
   type ConnectionRecord,
   getAccessToken,
+  isMissingWorkspaceColumn,
 } from "@/lib/connections";
 import { fetchGADailyMetrics, fetchSCDailyMetrics } from "@/lib/site-metrics";
 
@@ -31,15 +33,41 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const { data: conn, error } = await supabase
+    let connQuery = supabase
       .from("tenant_connections")
       .select("*")
       .eq("tenant_id", tenantId)
-      .eq("provider", provider)
-      .maybeSingle();
-    if (error || !conn) {
+      .eq("provider", provider);
+    const workspaceId =
+      (await getCurrentWorkspaceId().catch(() => null)) ?? null;
+    if (workspaceId) {
+      connQuery = connQuery.or(
+        `workspace_id.is.null,workspace_id.eq.${workspaceId}`
+      );
+    }
+    let { data: conns, error } = await connQuery;
+    // Migration 070 not applied yet — fall back to the tenant-wide row.
+    if (error && isMissingWorkspaceColumn(error)) {
+      const legacy = await supabase
+        .from("tenant_connections")
+        .select("*")
+        .eq("tenant_id", tenantId)
+        .eq("provider", provider);
+      conns = legacy.data ?? [];
+      error = legacy.error ?? null;
+    }
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 404 });
+    }
+    // Prefer the workspace-scoped row over the legacy tenant-wide row.
+    const connRows = (conns ?? []) as ConnectionRecord[];
+    const conn =
+      connRows.find((r) => r.workspace_id === workspaceId) ??
+      connRows.find((r) => !r.workspace_id) ??
+      connRows[0];
+    if (!conn) {
       return NextResponse.json(
-        { error: error?.message ?? "Not connected." },
+        { error: "Not connected." },
         { status: 404 }
       );
     }

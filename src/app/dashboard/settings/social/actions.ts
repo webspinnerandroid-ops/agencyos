@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getTenantId } from "@/lib/auth";
 import { encrypt } from "@/lib/encryption";
+import { getCurrentWorkspaceId } from "@/lib/workspace";
 import { SUPPORTED_PLATFORMS, type SupportedPlatform } from "./constants";
 
 // ------------------------------------------------------------------
@@ -86,8 +87,10 @@ export async function initiateMetaOAuth(platform: "facebook" | "instagram"): Pro
     return { success: false, error: "Meta App ID not configured. Set NEXT_PUBLIC_META_APP_ID in .env.local" };
   }
 
-  // Store pending OAuth state in DB
+  // Store pending OAuth state in DB (carrying the workspace so the callback
+  // assigns the account to the right workspace)
   const tenantId = await getTenantId();
+  const workspaceId = await getCurrentWorkspaceId().catch(() => null);
   const supabase = await createServiceClient();
 
   const state = crypto.randomUUID();
@@ -96,6 +99,7 @@ export async function initiateMetaOAuth(platform: "facebook" | "instagram"): Pro
     .from("oauth_states")
     .insert({
       tenant_id: tenantId,
+      workspace_id: workspaceId,
       state,
       platform,
       expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
@@ -128,6 +132,7 @@ export async function initiateTwitterOAuth(): Promise<{ success: boolean; redire
   }
 
   const tenantId = await getTenantId();
+  const workspaceId = await getCurrentWorkspaceId().catch(() => null);
   const supabase = await createServiceClient();
 
   const state = crypto.randomUUID();
@@ -138,6 +143,7 @@ export async function initiateTwitterOAuth(): Promise<{ success: boolean; redire
     .from("oauth_states")
     .insert({
       tenant_id: tenantId,
+      workspace_id: workspaceId,
       state,
       platform: "twitter",
       code_verifier: codeVerifier,
@@ -167,6 +173,7 @@ export async function initiateGoogleOAuth(platform: "youtube"): Promise<{ succes
   }
 
   const tenantId = await getTenantId();
+  const workspaceId = await getCurrentWorkspaceId().catch(() => null);
   const supabase = await createServiceClient();
 
   const state = crypto.randomUUID();
@@ -175,6 +182,7 @@ export async function initiateGoogleOAuth(platform: "youtube"): Promise<{ succes
     .from("oauth_states")
     .insert({
       tenant_id: tenantId,
+      workspace_id: workspaceId,
       state,
       platform,
       expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
@@ -200,6 +208,7 @@ export async function initiateGoogleGbpOAuth(): Promise<{ success: boolean; redi
   }
 
   const tenantId = await getTenantId();
+  const workspaceId = await getCurrentWorkspaceId().catch(() => null);
   const supabase = await createServiceClient();
 
   const state = crypto.randomUUID();
@@ -208,6 +217,7 @@ export async function initiateGoogleGbpOAuth(): Promise<{ success: boolean; redi
     .from("oauth_states")
     .insert({
       tenant_id: tenantId,
+      workspace_id: workspaceId,
       state,
       platform: "google_business",
       expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
@@ -230,13 +240,19 @@ export async function initiateGoogleGbpOAuth(): Promise<{ success: boolean; redi
 export async function getSocialAccounts(): Promise<ActionResponse<SocialAccount[]>> {
   try {
     const tenantId = await getTenantId();
+    const workspaceId = await getCurrentWorkspaceId().catch(() => null);
     const supabase = await createServiceClient();
 
-    const { data, error } = await supabase
+    // Workspace-scoped accounts, plus legacy tenant-wide rows as fallback.
+    let query = supabase
       .from("social_accounts")
       .select("*")
       .eq("tenant_id", tenantId)
       .order("created_at", { ascending: false });
+    if (workspaceId) {
+      query = query.or(`workspace_id.is.null,workspace_id.eq.${workspaceId}`);
+    }
+    const { data, error } = await query;
 
     if (error) throw new Error(error.message);
 
@@ -255,7 +271,8 @@ export async function addSocialAccountFromCallback(
   accountName: string,
   accessToken: string,
   refreshToken?: string,
-  tokenExpiresAt?: string
+  tokenExpiresAt?: string,
+  workspaceId?: string | null
 ): Promise<ActionResponse<SocialAccount>> {
   try {
     const tenantId = await getTenantId();
@@ -268,6 +285,7 @@ export async function addSocialAccountFromCallback(
       .from("social_accounts")
       .insert({
         tenant_id: tenantId,
+        workspace_id: workspaceId ?? null,
         platform,
         account_name: accountName,
         encrypted_token: encryptedHex,

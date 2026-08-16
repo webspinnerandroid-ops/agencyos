@@ -83,7 +83,8 @@ export async function pamGenerateSocial(
   dueDate: string,
   workspaceId: string | null,
   keywords: string[] = [],
-  mediaKind: "image" | "video" = "image"
+  mediaKind: "image" | "video" = "image",
+  generateMedia: boolean = true
 ): Promise<SocialDraft> {
   const platformLabel = PLATFORM_LABELS[platform] ?? platform;
   const systemPrompt = getSocialCaptionPrompt(platform);
@@ -112,7 +113,7 @@ export async function pamGenerateSocial(
   // fallback until video generation ships — the media_kind field carries the
   // user's choice so the video path can take over without data changes.
   let mediaUrl: string | null = null;
-  if (mediaKind === "image") {
+  if (mediaKind === "image" && generateMedia) {
     try {
       // Trial tenants: one image per week — enforced here too so the AI team
       // can't bypass the API-route cap via social posts.

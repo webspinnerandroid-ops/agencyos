@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getTenantId } from "@/lib/auth";
+import { getCurrentWorkspaceId } from "@/lib/workspace";
 import { encrypt } from "@/lib/encryption";
 
 // ------------------------------------------------------------------
@@ -144,13 +145,19 @@ export async function getSupportedBlogPlatforms() {
 export async function getBlogPlatforms(): Promise<ActionResponse<BlogPlatform[]>> {
   try {
     const tenantId = await getTenantId();
+    const workspaceId = await getCurrentWorkspaceId().catch(() => null);
     const supabase = await createServiceClient();
 
-    const { data, error } = await supabase
+    // Workspace-scoped platforms, plus legacy tenant-wide rows as fallback.
+    let query = supabase
       .from("blog_platforms")
       .select("*")
       .eq("tenant_id", tenantId)
       .order("created_at", { ascending: false });
+    if (workspaceId) {
+      query = query.or(`workspace_id.is.null,workspace_id.eq.${workspaceId}`);
+    }
+    const { data, error } = await query;
 
     if (error) throw new Error(error.message);
 
@@ -168,6 +175,7 @@ export async function connectBlogPlatform(
 ): Promise<ActionResponse<BlogPlatform>> {
   try {
     const tenantId = await getTenantId();
+    const workspaceId = await getCurrentWorkspaceId().catch(() => null);
     const supabase = await createServiceClient();
 
     const encryptedCreds = encrypt(JSON.stringify(credentials));
@@ -176,6 +184,7 @@ export async function connectBlogPlatform(
       .from("blog_platforms")
       .insert({
         tenant_id: tenantId,
+        workspace_id: workspaceId ?? null,
         platform_type: platformType,
         site_url: siteUrl,
         site_name: siteName,

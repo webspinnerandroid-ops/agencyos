@@ -16,6 +16,7 @@ export type ConnectionProvider = "google_analytics" | "search_console";
 export interface ConnectionRecord {
   id: string;
   tenant_id: string;
+  workspace_id: string | null;
   provider: ConnectionProvider;
   account_email: string | null;
   account_name: string | null;
@@ -41,6 +42,19 @@ export interface TokenBundle {
   refresh_token?: string | null;
   expires_at?: number; // epoch seconds
   scope?: string;
+}
+
+/**
+ * True when the error is Postgres reporting a missing column — i.e. migration
+ * 070 (per-workspace connections) hasn't been applied yet. Callers fall back
+ * to the legacy tenant-wide query so nothing breaks in the interim.
+ */
+export function isMissingWorkspaceColumn(err: unknown): boolean {
+  // PostgrestError isn't an Error instance — read .message off the object.
+  const msg =
+    (err as { message?: string } | null)?.message ??
+    (err instanceof Error ? err.message : String(err));
+  return /workspace_id.*does not exist|does not exist/.test(msg);
 }
 
 export const PROVIDER_LABELS: Record<ConnectionProvider, string> = {

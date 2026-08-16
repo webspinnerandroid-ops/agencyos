@@ -43,4 +43,20 @@ describe("extractClientFromMessage", () => {
     const r = extractClientFromMessage("client is the new campaign");
     expect(r.name).toBeNull();
   });
+
+  it("extracts the name after 'onboarding <name>' without a company keyword", () => {
+    const r = extractClientFromMessage(
+      "I am onboarding Acme Roasters at acmeroasters.com — a coffee roastery. Let's set up their full campaign."
+    );
+    expect(r.name).toBe("Acme Roasters");
+    expect(r.website).toBe("acmeroasters.com");
+  });
+
+  it("does not emit 'new client' as a name after 'onboarding'", () => {
+    const r = extractClientFromMessage(
+      "onboarding a new client at giantbyte.com, they sell software"
+    );
+    expect(r.name).toBeNull();
+    expect(r.website).toBe("giantbyte.com");
+  });
 });

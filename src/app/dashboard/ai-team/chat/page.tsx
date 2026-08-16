@@ -1043,15 +1043,17 @@ export default function AiTeamChatPage() {
                       <p className="whitespace-pre-wrap break-words mt-0.5">
                         {msg.content}
                       </p>
-                      {meta.action === "content_generated" && !!meta.postUrl && (
-                        <a
-                          href={meta.postUrl as string}
-                          className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-primary/10 transition-colors"
-                        >
-                          <Bot className="size-3.5" />
-                          View draft: {String(meta.postTitle ?? "Blog post")}
-                        </a>
-                      )}
+                      {(meta.action === "content_generated" ||
+                        meta.action === "content_foundation") &&
+                        !!meta.postUrl && (
+                          <a
+                            href={meta.postUrl as string}
+                            className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-primary/30 bg-primary/5 px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-primary/10 transition-colors"
+                          >
+                            <Bot className="size-3.5" />
+                            View draft: {String(meta.postTitle ?? "Blog post")}
+                          </a>
+                        )}
                       {meta.action === "campaign_planned" && !!meta.planUrl && (
                         <a
                           href={meta.planUrl as string}

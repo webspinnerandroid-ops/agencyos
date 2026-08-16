@@ -20,7 +20,7 @@ export async function GET(request: NextRequest) {
   // Validate OAuth state
   const { data: stateRow, error: stateErr } = await supabase
     .from("oauth_states")
-    .select("tenant_id, platform")
+    .select("tenant_id, platform, workspace_id")
     .eq("state", state)
     .single();
 
@@ -60,6 +60,7 @@ export async function GET(request: NextRequest) {
       .from("social_accounts")
       .insert({
         tenant_id: stateRow.tenant_id,
+        workspace_id: stateRow.workspace_id ?? null,
         platform: stateRow.platform,
         account_name: accountName,
         encrypted_token: encrypted,

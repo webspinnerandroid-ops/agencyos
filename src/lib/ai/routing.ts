@@ -14,6 +14,7 @@ export interface DispatchDecision {
     | "campaign"
     | "onboarding"
     | "onboarding_continue"
+    | "onboarding_step3"
     | "chat"
     | "other";
   topic: string;

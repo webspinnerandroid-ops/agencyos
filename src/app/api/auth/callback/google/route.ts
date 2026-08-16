@@ -25,7 +25,7 @@ export async function GET(request: NextRequest) {
 
   const { data: stateRow, error: stateErr } = await supabase
     .from("oauth_states")
-    .select("tenant_id, platform")
+    .select("tenant_id, platform, workspace_id")
     .eq("state", state)
     .single();
 
@@ -71,6 +71,7 @@ export async function GET(request: NextRequest) {
       await supabase.from("tenant_connections").upsert(
         {
           tenant_id: stateRow.tenant_id,
+          workspace_id: stateRow.workspace_id ?? null,
           provider: stateRow.platform,
           account_email: meData.email ?? null,
           account_name: accountName,
@@ -79,7 +80,7 @@ export async function GET(request: NextRequest) {
           available_resources: availableResources,
           connected: true,
         },
-        { onConflict: "tenant_id,provider" }
+        { onConflict: "tenant_id,workspace_id,provider" }
       );
     } else if (stateRow.platform === "google_business") {
       // Reconnect replaces the tenant's existing profile rows so repeated
@@ -88,9 +89,11 @@ export async function GET(request: NextRequest) {
       await supabase
         .from("google_business_profiles")
         .delete()
-        .eq("tenant_id", stateRow.tenant_id);
+        .eq("tenant_id", stateRow.tenant_id)
+        .eq("workspace_id", stateRow.workspace_id ?? null);
       await supabase.from("google_business_profiles").insert({
         tenant_id: stateRow.tenant_id,
+        workspace_id: stateRow.workspace_id ?? null,
         account_name: accountName,
         account_email: meData.email ?? null,
         encrypted_token: encrypted,
@@ -111,6 +114,7 @@ export async function GET(request: NextRequest) {
       // Store in social_accounts (YouTube)
       await supabase.from("social_accounts").insert({
         tenant_id: stateRow.tenant_id,
+        workspace_id: stateRow.workspace_id ?? null,
         platform: "youtube",
         account_name: accountName,
         encrypted_token: encrypted,

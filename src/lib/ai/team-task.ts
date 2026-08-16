@@ -1037,16 +1037,34 @@ async function buildSetupChecklist(
         .limit(1)
         .maybeSingle()
     ),
-    exists(
-      supabase
-        .from("tenant_connections")
-        .select("id")
-        .eq("tenant_id", tenantId)
-        .eq("connected", true)
-        .in("provider", ["google_analytics", "search_console"])
-        .limit(1)
-        .maybeSingle()
-    ),
+    // Google connection check: workspace-scoped after migration 070, with a
+    // fallback to the legacy tenant-wide rows when the column isn't applied
+    // yet (the exists() helper swallows errors, so check it explicitly).
+    (async () => {
+      try {
+        const { data: wsRow } = await supabase
+          .from("tenant_connections")
+          .select("id")
+          .eq("tenant_id", tenantId)
+          .eq("connected", true)
+          .in("provider", ["google_analytics", "search_console"])
+          .or(`workspace_id.is.null,workspace_id.eq.${ws}`)
+          .limit(1)
+          .maybeSingle();
+        if (wsRow) return true;
+        const { data: tenantRow } = await supabase
+          .from("tenant_connections")
+          .select("id")
+          .eq("tenant_id", tenantId)
+          .eq("connected", true)
+          .in("provider", ["google_analytics", "search_console"])
+          .limit(1)
+          .maybeSingle();
+        return !!tenantRow;
+      } catch {
+        return false;
+      }
+    })(),
     exists(
       supabase
         .from("blog_platforms")
@@ -1312,7 +1330,14 @@ async function maloryPlanCampaign(
 const ONBOARDING_CONTINUE_RE =
   /\b(connections? (are )?ready|ready with (the )?connections?|all (the )?connections? (are )?(in|ready)|everything(s)? (is|are) ?(synced|connected|ready)|next step|let.s (start|move) (step )?2)\b/i;
 
-async function chatStartedOnboarding(chatId: string): Promise<boolean> {
+/**
+ * Which onboarding step this chat has reached, from the employee replies
+ * already posted: 0 = not started, 1 = Step 1 (Woodhouse checklist) done,
+ * 2 = Step 2 (Cheryl content foundation) done, 3 = Step 3 (Pam social setup)
+ * done. Each employee reply carries its step's action in metadata, so the
+ * next "next step" advances to the following employee instead of repeating.
+ */
+async function chatOnboardingStep(chatId: string): Promise<0 | 1 | 2 | 3> {
   const sb = await createServiceClient();
   const { data } = await sb
     .from("team_messages")
@@ -1320,11 +1345,14 @@ async function chatStartedOnboarding(chatId: string): Promise<boolean> {
     .eq("chat_id", chatId)
     .eq("role", "employee")
     .order("created_at", { ascending: false })
-    .limit(20);
-  return (data ?? []).some((m) => {
-    const action = (m.metadata as Record<string, unknown>)?.action;
-    return action === "onboarding_started" || action === "connections_checklist";
-  });
+    .limit(30);
+  const actions = new Set(
+    (data ?? []).map((m) => (m.metadata as Record<string, unknown>)?.action)
+  );
+  if (actions.has("social_setup")) return 3;
+  if (actions.has("content_foundation")) return 2;
+  if (actions.has("onboarding_started") || actions.has("connections_checklist")) return 1;
+  return 0;
 }
 
 /**
@@ -1487,6 +1515,128 @@ async function cherylBuildFoundation(params: {
   };
 }
 
+/**
+ * Step 3 of onboarding — Pam sets up the social launch plan: pick the
+ * platforms, draft the first launch posts around the content foundation, and
+ * queue them on the calendar as pending-approval posts. Media generation is
+ * skipped during the plan so the step completes fast — images attach per
+ * post when the owner approves the drafts.
+ */
+async function pamSetupSocial(params: {
+  tenantId: string;
+  workspaceContext: string;
+  workspaceId: string | null;
+  chatContext: string;
+}): Promise<{ replyContent: string; replyMeta: Record<string, unknown> }> {
+  const { tenantId, workspaceContext, workspaceId, chatContext } = params;
+
+  const setup = await buildSetupChecklist(tenantId, workspaceId);
+  const socialsConnected =
+    setup.find((i) => i.label.startsWith("Social accounts"))?.done ?? false;
+
+  const plan = await generateStructuredOutput<{
+    posts: {
+      platform?: string;
+      topic?: string;
+      angle?: string;
+      cta?: string;
+    }[];
+  }>(
+    "team_chat",
+    buildEmployeeSystemPrompt("sonny", { workspaceContext, chatContext }) +
+      "\n\nYou are Pam, the Social Media Manager, laying out the social launch plan for a brand-new client whose content foundation (blog pillars) is done. Propose 3 launch posts — one per funnel stage (awareness, consideration, decision) — picking the strongest platforms for this client from: instagram, facebook, linkedin, x, tiktok, threads. Each post needs a concrete topic drawn from the foundation, a short angle, and a call to action. Do not invent facts about the client; ground everything in the workspace context.",
+    "Propose 3 launch social posts with platform, topic, angle and call to action.",
+    tenantId,
+    {
+      type: "object",
+      properties: {
+        posts: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              platform: {
+                type: "string",
+                description: "instagram | facebook | linkedin | x | tiktok | threads",
+              },
+              topic: {
+                type: "string",
+                description: "Post topic drawn from the client's content foundation",
+              },
+              angle: { type: "string", description: "One-line angle for the post" },
+              cta: { type: "string", description: "Call to action" },
+            },
+            required: ["platform", "topic", "angle", "cta"],
+          },
+        },
+      },
+      required: ["posts"],
+    },
+    { functionName: "social_launch_plan", maxTokens: 2048, temperature: 0.6 }
+  );
+
+  const rawPosts = Array.isArray(plan.posts) ? plan.posts : [];
+  const posts = rawPosts
+    .filter((p) => p && p.platform && p.topic)
+    .slice(0, 3);
+
+  // Queue each as a pending-approval social post on the calendar (fast path
+  // — no image generation during the plan; media attaches on approval).
+  const saved: { platform: string; topic: string; caption: string }[] = [];
+  const dayMs = 24 * 60 * 60 * 1000;
+  for (let i = 0; i < posts.length; i++) {
+    const p = posts[i];
+    try {
+      const draft = await pamGenerateSocial(
+        tenantId,
+        p.topic!,
+        p.platform!,
+        new Date(Date.now() + (i + 1) * dayMs).toISOString().slice(0, 10),
+        workspaceId,
+        [],
+        "image",
+        false
+      );
+      saved.push({
+        platform: p.platform!,
+        topic: p.topic!,
+        caption: draft.caption,
+      });
+    } catch (err) {
+      console.warn(
+        `[team-task] Pam social post failed (${p.topic}):`,
+        err instanceof Error ? err.message : err
+      );
+    }
+  }
+
+  const lines = saved.map(
+    (s, i) =>
+      `${i + 1}. **${s.platform}** — ${s.topic}: ${s.caption.slice(0, 140)}${
+        s.caption.length > 140 ? "…" : ""
+      }`
+  );
+
+  const replyContent =
+    `Social launch plan is set — **${saved.length} posts** queued on the calendar for your approval:` +
+    `\n\n${lines.join("\n")}` +
+    (saved.length === 0
+      ? "\n\nThe posts couldn't be saved right now — check the AI settings and ask me again."
+      : `\n\nEach is a draft waiting on your sign-off (nothing publishes without you). Open the calendar to review — say **\"next step\"** when you're ready and Malory maps the full campaign plan (Step 4).`) +
+    (socialsConnected
+      ? ""
+      : "\n\nHeads up: no social accounts are connected to this workspace yet, so the posts are drafted but can't be scheduled to a real profile. Connect one in Settings → Social Accounts and the posts will attach to it.");
+
+  return {
+    replyContent,
+    replyMeta: {
+      action: "social_setup",
+      count: saved.length,
+      calendarUrl: "/dashboard/calendar",
+    },
+  };
+}
+
 class TaskCancelledError extends Error {
   constructor() {
     super("Task cancelled by user");
@@ -1509,7 +1659,8 @@ function actionPriority(
   if (
     action === "content_generated" ||
     action === "content_foundation" ||
-    action === "campaign_planned"
+    action === "campaign_planned" ||
+    action === "social_setup"
   ) {
     return "important";
   }
@@ -1737,20 +1888,39 @@ export async function processTeamTask(payload: TeamTaskPayload): Promise<void> {
           : null;
 
     // Onboarding continuation: "connections ready" / "next step" in a chat
-    // that already started onboarding advances to Step 2 (Cheryl builds the
-    // content foundation) instead of being re-dispatched as a new request.
+    // that already started onboarding advances step by step, employee by
+    // employee — Step 2 (Cheryl content foundation) → Step 3 (Pam social
+    // setup) → Step 4 (Malory maps the campaign plan) — instead of being
+    // re-dispatched as a new request.
     let decision: DispatchDecision;
+    const onboardingStep = await chatOnboardingStep(chatId);
     if (
       (room.kind !== "employee" || room.employee_key === "nina") &&
       ONBOARDING_CONTINUE_RE.test(userMessage) &&
-      (await chatStartedOnboarding(chatId))
+      onboardingStep >= 1
     ) {
-      decision = {
-        employeeKey: "penny",
-        action: "onboarding_continue",
-        topic: "",
-        note: "Step 2 — Cheryl builds the content foundation (blog pillars, keywords, first drafts).",
-      };
+      if (onboardingStep >= 3) {
+        decision = {
+          employeeKey: "nina",
+          action: "campaign",
+          topic: "the new client's full launch campaign",
+          note: "Step 4 — Malory maps the client's campaign plan on the calendar.",
+        };
+      } else if (onboardingStep >= 2) {
+        decision = {
+          employeeKey: "sonny",
+          action: "onboarding_step3",
+          topic: "",
+          note: "Step 3 — Pam sets up the client's social launch plan.",
+        };
+      } else {
+        decision = {
+          employeeKey: "penny",
+          action: "onboarding_continue",
+          topic: "",
+          note: "Step 2 — Cheryl builds the content foundation (blog pillars, keywords, first drafts).",
+        };
+      }
     } else {
       decision = await dispatchRequest(
         tenantId,
@@ -1811,17 +1981,21 @@ export async function processTeamTask(payload: TeamTaskPayload): Promise<void> {
     const isCampaignPipeline = decision.action === "campaign";
     const isOnboardingPipeline =
       decision.action === "onboarding" ||
-      decision.action === "onboarding_continue";
+      decision.action === "onboarding_continue" ||
+      decision.action === "onboarding_step3";
     const isFoundationPipeline = decision.action === "onboarding_continue";
+    const isSocialSetupPipeline = decision.action === "onboarding_step3";
     const statusText = isContentPipeline
       ? `${employeeDisplayName} is writing the post and generating the images — this takes a couple of minutes. I'll post the draft here when it's ready.`
       : isCampaignPipeline
         ? `Malory is mapping out the campaign plan — this takes a minute or two. I'll post the calendar link when it's ready.`
-        : isFoundationPipeline
-          ? `Cheryl is building the content foundation — blog pillars, keywords, and the first draft. This takes a couple of minutes…`
-          : isOnboardingPipeline
-            ? `Malory is kicking off the onboarding — introducing the client to the team and getting the connection checklist together…`
-            : `${employeeDisplayName} is putting together a reply…`;
+        : isSocialSetupPipeline
+          ? `Pam is setting up the social launch plan — picking platforms, drafting the first posts, and queuing them for approval. This takes a minute or two…`
+          : isFoundationPipeline
+            ? `Cheryl is building the content foundation — blog pillars, keywords, and the first draft. This takes a couple of minutes…`
+            : isOnboardingPipeline
+              ? `Malory is kicking off the onboarding — introducing the client to the team and getting the connection checklist together…`
+              : `${employeeDisplayName} is putting together a reply…`;
     await supabase.from("team_messages").insert({
       chat_id: chatId,
       role: "system",
@@ -1911,6 +2085,27 @@ export async function processTeamTask(payload: TeamTaskPayload): Promise<void> {
         }. Ask me again or check the AI settings — the models need a configured API key.`;
         replyMeta = {
           action: "content_failed",
+          error: err instanceof Error ? err.message : "unknown",
+        };
+      }
+    } else if (decision.action === "onboarding_step3") {
+      // Step 3 of onboarding — Pam sets up the social launch plan: pick the
+      // platforms, draft the first posts, and queue them for approval.
+      try {
+        const socialSetup = await pamSetupSocial({
+          tenantId,
+          workspaceContext,
+          workspaceId,
+          chatContext,
+        });
+        replyContent = socialSetup.replyContent;
+        replyMeta = socialSetup.replyMeta;
+      } catch (err) {
+        replyContent = `I hit a snag setting up the social launch plan: ${
+          err instanceof Error ? err.message : "unknown error"
+        }. Ask me again or check the AI settings — the models need a configured API key.`;
+        replyMeta = {
+          action: "social_failed",
           error: err instanceof Error ? err.message : "unknown",
         };
       }

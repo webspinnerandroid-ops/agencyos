@@ -1088,19 +1088,63 @@ async function callDalleImageAPI(
  * etc.). Same submit → poll → fetch flow as callFalAPI for video, but reads
  * the `images` array from the completed result (url or base64 content).
  */
+/** Map a WxH pixel size to a Recraft V3 `image_size` token. */
+function falImageSize(size?: string): string | undefined {
+  if (!size || !size.includes("x")) return undefined;
+  const [w, h] = size.split("x").map(Number);
+  if (!w || !h) return undefined;
+  const ratio = w / h;
+  if (ratio > 1.6) return "landscape_16_9";
+  if (ratio < 0.62) return "portrait_16_9";
+  if (ratio > 1.2) return "landscape_4_3";
+  if (ratio < 0.82) return "portrait_4_3";
+  return "square_hd";
+}
+
+/** Pull image URLs out of any of the result shapes fal models return. */
+function parseFalImages(result: unknown): GeneratedImage[] {
+  const r = (result ?? {}) as Record<string, unknown>;
+  const output = (r.output ?? {}) as Record<string, unknown>;
+  const raw = r.images ?? r.image ?? output.images ?? output.image ?? r.data ?? [];
+  const list = Array.isArray(raw) ? raw : [raw];
+  const out: GeneratedImage[] = [];
+  for (const img of list) {
+    if (!img) continue;
+    if (typeof img === "string") {
+      out.push({ url: img });
+    } else {
+      const i = img as Record<string, unknown>;
+      if (typeof i.url === "string") out.push({ url: i.url });
+      else if (typeof i.content === "string") {
+        out.push({
+          url: `data:${(i.content_type as string) ?? "image/png"};base64,${i.content}`,
+        });
+      }
+    }
+  }
+  return out;
+}
+
 async function callFalImageAPI(
   resolution: ModelResolution,
   prompt: string,
-  options?: { size?: string; n?: number; referenceImage?: string }
+  options?: { size?: string; n?: number; referenceImage?: string; task?: AITask }
 ): Promise<GeneratedImage[]> {
   const endpoint = `${resolution.providerBaseUrl}/${resolution.model}`;
   const body: Record<string, unknown> = { prompt };
 
-  // Only send the well-supported knobs. The "WxH" sizes differ per model
-  // (image_size / aspect_ratio / size), so we omit size entirely and let each
-  // model use its default — a wrong size token can 400 a model that doesn't
-  // accept it.
-  if (options?.n && options.n > 1) body.num_images = Math.min(options.n, 4);
+  // Recraft V3 is a single-image model with its own knobs. Its `vector_illustration`
+  // style is what brand/vector design work wants (2x cost). Other fal models take
+  // no extra tokens — a wrong size token 400s them.
+  const isRecraft = resolution.model.includes("recraft");
+  if (isRecraft) {
+    const imageSize = falImageSize(options?.size);
+    if (imageSize) body.image_size = imageSize;
+    if (options?.task === "brand_design") body.style = "vector_illustration";
+  }
+  if (options?.n && options.n > 1 && !isRecraft) {
+    body.num_images = Math.min(options.n, 4);
+  }
   if (options?.referenceImage) body.image_url = options.referenceImage;
 
   const submitRes = await fetch(endpoint, {
@@ -1114,49 +1158,79 @@ async function callFalImageAPI(
   });
   if (!submitRes.ok) {
     const errorText = await submitRes.text();
-    const error: any = new Error(`fal.ai image error (${submitRes.status}): ${errorText}`);
+    const error: any = new Error(
+      `fal.ai image error (${submitRes.status}) for ${resolution.model}: ${errorText.slice(0, 500)}`
+    );
     error.status = submitRes.status;
     throw error;
   }
   const submitData = await submitRes.json();
   const statusUrl = submitData.status_url as string | undefined;
   if (!statusUrl) {
-    throw new Error(`fal.ai returned no status_url: ${JSON.stringify(submitData)}`);
+    throw new Error(`fal.ai returned no status_url: ${JSON.stringify(submitData).slice(0, 300)}`);
   }
 
-  const deadline = Date.now() + 180_000;
+  // Poll with failure visibility: a non-ok poll is no longer swallowed — after
+  // a few consecutive failures we surface the real HTTP error instead of
+  // spinning to the deadline and reporting a generic "timed out".
+  let lastStatus = "IN_QUEUE";
+  let lastPollError = "";
+  let consecutivePollFailures = 0;
+  const deadline = Date.now() + 300_000;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 3000));
-    const pollRes = await fetch(statusUrl, {
-      headers: { Authorization: `Key ${resolution.apiKey}` },
-      signal: AbortSignal.timeout(POLL_FETCH_TIMEOUT_MS),
-    });
-    if (!pollRes.ok) continue;
+    let pollRes: Response;
+    try {
+      pollRes = await fetch(statusUrl, {
+        headers: { Authorization: `Key ${resolution.apiKey}` },
+        signal: AbortSignal.timeout(POLL_FETCH_TIMEOUT_MS),
+      });
+    } catch (err) {
+      consecutivePollFailures++;
+      lastPollError = err instanceof Error ? err.message : "network error";
+      if (consecutivePollFailures >= 5) {
+        throw new Error(`fal.ai status poll failing: ${lastPollError}`);
+      }
+      continue;
+    }
+    if (!pollRes.ok) {
+      consecutivePollFailures++;
+      lastPollError = `HTTP ${pollRes.status}`;
+      if (consecutivePollFailures >= 5) {
+        const text = await pollRes.text().catch(() => "");
+        throw new Error(`fal.ai status poll failed (${pollRes.status}): ${text.slice(0, 300)}`);
+      }
+      continue;
+    }
+    consecutivePollFailures = 0;
     const pollData = await pollRes.json();
+    lastStatus = pollData.status ?? lastStatus;
+
     if (pollData.status === "COMPLETED") {
       const resultRes = await fetch(pollData.response_url as string, {
         headers: { Authorization: `Key ${resolution.apiKey}` },
         signal: AbortSignal.timeout(POLL_FETCH_TIMEOUT_MS),
       });
-      if (resultRes.ok) {
-        const result = await resultRes.json();
-        const images = result.images ?? result.output?.images ?? [];
-        const out: GeneratedImage[] = [];
-        for (const img of images) {
-          if (img?.url) out.push({ url: img.url });
-          else if (img?.content) {
-            out.push({ url: `data:${img.content_type ?? "image/png"};base64,${img.content}` });
-          }
-        }
-        if (out.length) return out;
+      if (!resultRes.ok) {
+        const text = await resultRes.text().catch(() => "");
+        throw new Error(`fal.ai result fetch failed (${resultRes.status}): ${text.slice(0, 300)}`);
       }
+      const result = await resultRes.json();
+      const out = parseFalImages(result);
+      if (out.length) return out;
+      // Completed but no image found — surface the payload, never spin to timeout.
+      throw new Error(
+        `fal.ai completed but returned no image: ${JSON.stringify(result).slice(0, 400)}`
+      );
     } else if (pollData.status === "FAILED" || pollData.status === "CANCELLED") {
       const msg = pollData.error ?? pollData.detail ?? "Unknown failure";
-      const error: any = new Error(`fal.ai generation failed: ${JSON.stringify(msg)}`);
-      throw error;
+      throw new Error(`fal.ai generation failed: ${JSON.stringify(msg).slice(0, 400)}`);
     }
+    // IN_QUEUE / IN_PROGRESS → keep polling
   }
-  throw new Error("fal.ai image generation timed out.");
+  throw new Error(
+    `fal.ai image generation timed out after 5m (model ${resolution.model}, last status ${lastStatus}${lastPollError ? `, ${lastPollError}` : ""}).`
+  );
 }
 
 async function callStabilityImageAPI(

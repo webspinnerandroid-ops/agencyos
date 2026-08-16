@@ -35,7 +35,7 @@ DELETE FROM ai_models WHERE model_identifier IN (
   'fal-ai/flux/v2/pro',
   'fal-ai/gemini-pro/nano-banana-pro',
   'fal-ai/gemini-pro/nano-banana',
-  'fal-ai/recraft-v3',
+  'fal-ai/recraft/v3/text-to-image',
   'fal-ai/gpt-image/2',
   'fal-ai/gpt-image/1'
 );
@@ -62,7 +62,7 @@ ON CONFLICT (id) DO UPDATE SET
 INSERT INTO ai_models (id, provider_id, model_identifier, supported_tasks) VALUES
   ('29000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000207', 'fal-ai/flux-pro/v1.1',               ARRAY['image_generation']),
   ('29000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000207', 'fal-ai/flux-pro/v1.1-ultra',         ARRAY['image_generation']),
-  ('29000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000207', 'fal-ai/recraft/v3/text-to-image',    ARRAY['image_generation']),
+  ('29000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000207', 'fal-ai/recraft-v3',                  ARRAY['image_generation']),
   ('29000000-0000-0000-0000-000000000004', '00000000-0000-0000-0000-000000000207', 'fal-ai/nano-banana-pro',             ARRAY['image_generation']),
   ('29000000-0000-0000-0000-000000000005', '00000000-0000-0000-0000-000000000207', 'openai/gpt-image-2',                 ARRAY['image_generation']),
   ('29000000-0000-0000-0000-000000000006', '00000000-0000-0000-0000-000000000207', 'fal-ai/flux-2-max',                  ARRAY['image_generation'])

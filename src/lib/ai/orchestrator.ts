@@ -1023,6 +1023,10 @@ export async function generateImage(
     return callStabilityImageAPI(resolution, fullPrompt, options);
   }
 
+  if (resolution.providerName === "fal.ai" || resolution.providerBaseUrl.includes("fal.run")) {
+    return callFalImageAPI(resolution, fullPrompt, options);
+  }
+
   // Default: OpenAI-compatible image endpoint
   return callDalleImageAPI(resolution, fullPrompt, options);
 }
@@ -1064,6 +1068,85 @@ async function callDalleImageAPI(
     url: item.url,
     revisedPrompt: item.revised_prompt,
   }));
+}
+
+/**
+ * fal.ai queue API for image models (FLUX, Nano Banana, Recraft, GPT Image,
+ * etc.). Same submit → poll → fetch flow as callFalAPI for video, but reads
+ * the `images` array from the completed result (url or base64 content).
+ */
+async function callFalImageAPI(
+  resolution: ModelResolution,
+  prompt: string,
+  options?: { size?: string; n?: number; referenceImage?: string }
+): Promise<GeneratedImage[]> {
+  const endpoint = `${resolution.providerBaseUrl}/${resolution.model}`;
+  const body: Record<string, unknown> = { prompt };
+
+  // Best-effort size hint: map the app's "WxH" sizes to fal's aspect tokens.
+  // Unknown models ignore it, so it can never break generation.
+  const size = options?.size ?? "1024x1024";
+  if (/1792x1024/i.test(size)) body.image_size = "landscape_16_9";
+  else if (/1024x1792/i.test(size)) body.image_size = "portrait_9_16";
+  else if (/1024x1024|512x512|256x256/i.test(size)) body.image_size = "square";
+
+  if (options?.n && options.n > 1) body.num_images = Math.min(options.n, 4);
+  if (options?.referenceImage) body.image_url = options.referenceImage;
+
+  const submitRes = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Key ${resolution.apiKey}`,
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(SHORT_FETCH_TIMEOUT_MS),
+  });
+  if (!submitRes.ok) {
+    const errorText = await submitRes.text();
+    const error: any = new Error(`fal.ai image error (${submitRes.status}): ${errorText}`);
+    error.status = submitRes.status;
+    throw error;
+  }
+  const submitData = await submitRes.json();
+  const statusUrl = submitData.status_url as string | undefined;
+  if (!statusUrl) {
+    throw new Error(`fal.ai returned no status_url: ${JSON.stringify(submitData)}`);
+  }
+
+  const deadline = Date.now() + 180_000;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 3000));
+    const pollRes = await fetch(statusUrl, {
+      headers: { Authorization: `Key ${resolution.apiKey}` },
+      signal: AbortSignal.timeout(POLL_FETCH_TIMEOUT_MS),
+    });
+    if (!pollRes.ok) continue;
+    const pollData = await pollRes.json();
+    if (pollData.status === "COMPLETED") {
+      const resultRes = await fetch(pollData.response_url as string, {
+        headers: { Authorization: `Key ${resolution.apiKey}` },
+        signal: AbortSignal.timeout(POLL_FETCH_TIMEOUT_MS),
+      });
+      if (resultRes.ok) {
+        const result = await resultRes.json();
+        const images = result.images ?? result.output?.images ?? [];
+        const out: GeneratedImage[] = [];
+        for (const img of images) {
+          if (img?.url) out.push({ url: img.url });
+          else if (img?.content) {
+            out.push({ url: `data:${img.content_type ?? "image/png"};base64,${img.content}` });
+          }
+        }
+        if (out.length) return out;
+      }
+    } else if (pollData.status === "FAILED" || pollData.status === "CANCELLED") {
+      const msg = pollData.error ?? pollData.detail ?? "Unknown failure";
+      const error: any = new Error(`fal.ai generation failed: ${JSON.stringify(msg)}`);
+      throw error;
+    }
+  }
+  throw new Error("fal.ai image generation timed out.");
 }
 
 async function callStabilityImageAPI(

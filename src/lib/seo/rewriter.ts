@@ -29,8 +29,18 @@ export interface RewriteRequest {
   text: string;
   /** Optional title — the rewrite keeps/improves it; derived otherwise. */
   title?: string;
-  /** Optional focus keyword to write toward. */
+  /** Optional focus keyword to write toward; auto-detected from the content otherwise. */
   keyword?: string;
+  /**
+   * Free-text edit instructions from the user ("make it punchier", "add a
+   * pricing table"). Applied on top of the failing-check feedback.
+   */
+  instructions?: string;
+  /**
+   * Targeted mode: keep the current body essentially as-is and fix ONLY the
+   * remaining failing checks (plus `instructions`), instead of a full rewrite.
+   */
+  targeted?: boolean;
 }
 
 export interface RewriteAttempt {
@@ -66,6 +76,21 @@ function extractMetaDescription(body: string): string {
   return "";
 }
 
+/** Derive a real title from the pasted content when the user gave none. */
+function deriveTitleFromText(text: string, keyword: string): string {
+  const h1 = text.match(/^#\s+(.+)$/m);
+  if (h1 && h1[1].trim()) return h1[1].trim().slice(0, 120);
+  const firstLine = (text ?? "")
+    .split(/\n/)
+    .map((l) => l.trim())
+    .find((l) => l.length > 20 && !/^[#!\[>*_`\-]/.test(l));
+  if (firstLine) return firstLine.replace(/^#+\s*/, "").slice(0, 120);
+  if (keyword) {
+    return keyword.replace(/\b[a-z]/g, (c) => c.toUpperCase()).slice(0, 120);
+  }
+  return "Content";
+}
+
 /** Score text-mode content through the analyzer's shared path. */
 async function scoreText(
   text: string,
@@ -94,12 +119,15 @@ export async function rewriteToPassGate(
   const text = (input.text ?? "").trim();
   if (!text) throw new Error("Provide a piece of text to rewrite.");
 
-  const title = (input.title ?? "").trim() || "Rewritten content";
-  // Derive a real working keyword from the pasted content — never a
-  // placeholder — so the rewrite targets the actual subject and the gate is
-  // reachable (a keyword like "the topic" can never score 80+).
-  const keyword =
-    (input.keyword ?? "").trim() || deriveKeyword(title, text);
+  // Focus keyword comes from the content itself unless the user gave one —
+  // never from a placeholder title ("Rewritten content" used to become the
+  // keyword, which is exactly why rewrites drifted off-subject).
+  const userTitle = (input.title ?? "").trim();
+  const keyword = (input.keyword ?? "").trim() || deriveKeyword(userTitle, text);
+  // A real title is required for scoring (title checks fail otherwise). If
+  // none was provided, lift one from the content: a leading H1, the first
+  // substantive line, or a title-cased keyword.
+  const title = userTitle || deriveTitleFromText(text, keyword);
 
   const original = await scoreText(text, title, keyword);
   const originalPassed =
@@ -143,23 +171,34 @@ export async function rewriteToPassGate(
     );
     attempts[attempts.length - 1].feedback = feedback;
 
+    const targetedLine = input.targeted
+      ? `\nTARGETED EDIT MODE: Keep the current content essentially as written. Fix ONLY the failing checks listed above (plus any user edit instructions below) — do not rewrite the rest, do not change the topic, structure, or wording of the parts that already pass.`
+      : "";
+
     const systemPrompt = `You are an expert SEO / AEO / GEO content editor. Rewrite the provided content so it passes a strict quality gate: SEO score >= ${gate}/100 AND AEO/GEO score >= ${gate}/100.
+
+TOPIC LOCK (most important rule): The subject is FIXED by the ORIGINAL CONTENT. Stay strictly on that topic — the same product, service, question, or story the original is about. Never introduce a new subject, drift to a different angle, or turn the piece into something else. If the original is about "${keyword}", every sentence of the rewrite must be about "${keyword}".
 
 Rules for every rewrite:
 - Keep the same topic, primary keyword "${keyword}", and overall meaning — do not change facts or tone.
-- WRITE AT LEAST 2,000 WORDS — a thin rewrite cannot pass the length check, so expand with thorough sections, examples, and actionable detail.
+- WRITE AT LEAST 2,000 WORDS — a thin rewrite cannot pass the length check, so expand with thorough sections, examples, and actionable detail, all on the same topic.
 - Begin with a single line exactly like: Meta description: <a 120-160 character description that contains the primary keyword>.
 - Improve the structure: a clear opening definition, H2/H3 subheadings, short paragraphs (under 120 words).
 - Include the primary keyword naturally in the title, first paragraph, a heading, and the meta description.
-- Add a FAQ section with 3-5 direct question/answer pairs.
-- Add concrete data points / statistics / years.
+- Add a FAQ section with 3-5 direct question/answer pairs about the topic.
+- Add concrete data points / statistics / years relevant to the topic.
 - Include at least one numbered how-to/step list.
 - Include 1-2 images as markdown, e.g. ![alt text containing the primary keyword](https://example.com/image.jpg) — the image alt MUST contain the keyword.
 - Include at least one outbound reference link.
 - Preserve the author's original voice and any existing internal links.
 - Return the REWRITTEN CONTENT in valid markdown, no extra commentary.`;
 
-    const userPrompt = `ORIGINAL TITLE: ${currentTitle}\nPRIMARY KEYWORD: ${keyword}\n\n${feedback}\n\n## CURRENT CONTENT TO REWRITE\n${currentBody.slice(0, 24000)}`;
+    const userInstructions = (input.instructions ?? "").trim();
+    const instructionBlock = userInstructions
+      ? `\n\n## USER EDIT INSTRUCTIONS (follow these exactly, on top of the checks above)\n${userInstructions}`
+      : "";
+
+    const userPrompt = `ORIGINAL TITLE: ${currentTitle}\nPRIMARY KEYWORD: ${keyword}\n\n${feedback}${instructionBlock}${targetedLine}\n\n## CURRENT CONTENT TO REWRITE\n${currentBody.slice(0, 24000)}`;
 
     try {
       const rewritten = await generateText("content_rewrite", userPrompt, opts?.tenantId ?? "", {

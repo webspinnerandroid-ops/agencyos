@@ -79,30 +79,51 @@ const STOPWORDS = new Set([
   "from", "have", "has", "not", "but", "our", "their", "they", "will",
   "can", "all", "when", "what", "why", "how", "about", "into", "than",
   "then", "these", "those", "its", "per", "each", "such", "more", "most",
+  // Placeholder-ish words that commonly appear in auto-generated titles
+  // ("Pasted content", "Rewritten content", …). These must NEVER become the
+  // focus keyword — they are exactly how rewrites drifted off the original
+  // subject in the past.
+  "content", "pasted", "rewritten", "untitled", "title", "text", "article",
+  "post", "blog", "page", "example", "topic", "just", "also", "out", "any",
+  "get", "make", "use", "used", "using", "like", "here",
 ]);
 
+/** Split text into significant (non-stopword, alphabetical) words. */
+function significantWords(text: string): string[] {
+  return (text ?? "")
+    .split(/\s+/)
+    .map((w) => w.replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, ""))
+    .filter(
+      (w) =>
+        w.length > 3 &&
+        !STOPWORDS.has(w.toLowerCase()) &&
+        /^[a-zA-Z]/.test(w)
+    );
+}
+
 /**
- * Derive a sensible scoring keyword for pasted text — never a placeholder
- * like "example". Prefers the title's significant words, then the most
- * frequent content word in the body.
+ * Derive a sensible focus keyword for pasted text — never a placeholder like
+ * "example" or "the topic". Prefers the title's significant words (title is
+ * the strongest topic signal), then the most frequent body word, then the
+ * body's leading significant words.
  */
 export function deriveKeyword(title: string, text: string): string {
-  const t = (title ?? "").trim();
-  if (t) {
-    const words = t
-      .split(/\s+/)
-      .filter((w) => w.length > 3 && !STOPWORDS.has(w.toLowerCase()));
-    if (words.length > 0) return words.slice(0, 3).join(" ");
-  }
+  const titleWords = significantWords(title);
+  if (titleWords.length > 0) return titleWords.slice(0, 3).join(" ");
+
   const counts = new Map<string, number>();
-  for (const w of (text ?? "").toLowerCase().split(/\s+/)) {
+  for (const raw of (text ?? "").toLowerCase().split(/\s+/)) {
+    const w = raw.replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, "");
     if (w.length > 3 && !STOPWORDS.has(w) && /^[a-z]+$/.test(w)) {
       counts.set(w, (counts.get(w) ?? 0) + 1);
     }
   }
   const top = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
-  if (top && top[1] >= 3) return top[0];
-  return "the topic";
+  if (top && top[1] >= 2) return top[0];
+
+  const bodyWords = significantWords(text);
+  if (bodyWords.length > 0) return bodyWords.slice(0, 3).join(" ");
+  return "";
 }
 
 /** Parse fetched HTML into the shape the scoring engines need. */

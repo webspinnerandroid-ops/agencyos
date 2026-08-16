@@ -19,10 +19,16 @@ import {
   MousePointerClick,
   Eye,
   Gauge,
+  Copy,
+  PenLine,
+  Sparkles,
 } from "lucide-react";
 import {
   LineChart,
   Line,
+  BarChart,
+  Bar,
+  Legend,
   XAxis,
   YAxis,
   Tooltip,
@@ -30,6 +36,22 @@ import {
   CartesianGrid,
 } from "recharts";
 import { ScoreBreakdown } from "@/components/seo/score-breakdown";
+
+interface AuditMeta {
+  kind?: string;
+  original_score_seo?: number | null;
+  original_score_aeo_geo?: number | null;
+  original_score_aeo?: number | null;
+  original_score_geo?: number | null;
+  final_score_aeo?: number | null;
+  final_score_geo?: number | null;
+  attempts?: number | null;
+  passed?: boolean | null;
+  keyword?: string | null;
+  originalTitle?: string | null;
+  originalBody?: string | null;
+  rewrittenBody?: string | null;
+}
 
 interface AuditRun {
   id: string;
@@ -46,6 +68,7 @@ interface AuditRun {
   fetched: boolean | null;
   fetch_error: string | null;
   created_at: string;
+  meta: AuditMeta | null;
 }
 
 interface EngineCheck {
@@ -339,6 +362,17 @@ export default function SeoSitesPage() {
     [history]
   );
 
+  // Before/after comparison for rewritten (saved) content.
+  const rewriteCompare = useMemo(() => {
+    const meta = latest?.meta;
+    if (!meta || (meta.kind !== "rewrite" && !meta.rewrittenBody)) return null;
+    return [
+      { metric: "SEO", before: meta.original_score_seo ?? null, after: latest?.seo_score ?? null },
+      { metric: "AEO", before: meta.original_score_aeo ?? null, after: latest?.aeo_score ?? null },
+      { metric: "GEO", before: meta.original_score_geo ?? null, after: latest?.geo_score ?? null },
+    ];
+  }, [latest]);
+
   if (activeUrl) {
     const label = latest?.url
       ? latest.url.replace(/^https?:\/\//, "").replace(/\/$/, "")
@@ -427,6 +461,60 @@ export default function SeoSitesPage() {
                 <div className="text-[11px] text-muted-foreground mt-1">failed checks</div>
               </Card>
             </div>
+
+            {/* Rewrite before/after comparison + saved content */}
+            {rewriteCompare && (
+              <Card className="p-6 border-primary/30">
+                <div className="flex items-center gap-2 mb-4">
+                  <Sparkles className="size-4 text-primary" />
+                  <h2 className="text-lg font-semibold">Rewrite comparison</h2>
+                  <span className="text-xs text-muted-foreground">
+                    original vs rewritten (SEO / AEO / GEO)
+                  </span>
+                </div>
+                <ResponsiveContainer width="100%" height={240}>
+                  <BarChart data={rewriteCompare} margin={{ top: 5, right: 10, left: -15, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                    <XAxis dataKey="metric" tick={{ fontSize: 12 }} />
+                    <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
+                    <Tooltip />
+                    <Legend />
+                    <Bar dataKey="before" name="Before" fill="#94a3b8" radius={[4, 4, 0, 0]} />
+                    <Bar dataKey="after" name="After" fill="#6366f1" radius={[4, 4, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+                {latest?.meta?.rewrittenBody && (
+                  <div className="mt-5 pt-4 border-t">
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                      <h3 className="text-sm font-semibold">Saved rewritten content</h3>
+                      <div className="flex items-center gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => navigator.clipboard.writeText(latest.meta?.rewrittenBody ?? "")}
+                        >
+                          <Copy className="size-3.5 mr-1.5" /> Copy
+                        </Button>
+                        <a
+                          href={`/dashboard/seo/rewriter?text=${encodeURIComponent(
+                            latest.meta?.rewrittenBody ?? ""
+                          )}&title=${encodeURIComponent(latest.title ?? "")}&keyword=${encodeURIComponent(
+                            latest.meta?.keyword ?? latest.keyword ?? ""
+                          )}`}
+                        >
+                          <Button variant="outline" size="sm">
+                            <PenLine className="size-3.5 mr-1.5" /> Edit & re-compare
+                          </Button>
+                        </a>
+                      </div>
+                    </div>
+                    <pre className="whitespace-pre-wrap text-sm font-mono bg-muted/50 rounded-md p-4 max-h-80 overflow-y-auto">
+                      {latest.meta.rewrittenBody}
+                    </pre>
+                  </div>
+                )}
+              </Card>
+            )}
 
             {/* Score history chart */}
             {chartData.length >= 2 && (
@@ -907,19 +995,21 @@ export default function SeoSitesPage() {
                           <a href={`/dashboard/seo/sites?url=${encodeURIComponent(site.key)}`}>
                             <Button variant="outline" size="sm">Open</Button>
                           </a>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            disabled={reauditing === site.key}
-                            onClick={() => reAudit(site)}
-                            title="Re-run the audit now to see fresh results after edits"
-                          >
-                            {reauditing === site.key ? (
-                              <Loader2 className="size-3.5 animate-spin" />
-                            ) : (
-                              <RefreshCw className="size-3.5" />
-                            )}
-                          </Button>
+                          {site.mode === "url" && site.url && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={reauditing === site.key}
+                              onClick={() => reAudit(site)}
+                              title="Re-run the audit now to see fresh results after edits"
+                            >
+                              {reauditing === site.key ? (
+                                <Loader2 className="size-3.5 animate-spin" />
+                              ) : (
+                                <RefreshCw className="size-3.5" />
+                              )}
+                            </Button>
+                          )}
                         </div>
                       </td>
                     </tr>

@@ -20,7 +20,13 @@ export async function POST(request: NextRequest) {
     const workspaceId = await getCurrentWorkspaceId();
     const supabase = await createServiceClient();
 
-    let body: { text?: string; title?: string; keyword?: string };
+    let body: {
+      text?: string;
+      title?: string;
+      keyword?: string;
+      instructions?: string;
+      targeted?: boolean;
+    };
     try {
       body = await request.json();
     } catch {
@@ -36,7 +42,13 @@ export async function POST(request: NextRequest) {
     }
 
     const result = await rewriteToPassGate(
-      { text, title: body.title, keyword: body.keyword },
+      {
+        text,
+        title: body.title,
+        keyword: body.keyword,
+        instructions: body.instructions,
+        targeted: body.targeted,
+      },
       { tenantId }
     );
 
@@ -82,8 +94,16 @@ export async function POST(request: NextRequest) {
           kind: "rewrite",
           original_score_seo: result.originalScores.seo,
           original_score_aeo_geo: result.originalScores.aeoGeo,
+          original_score_aeo: result.original.aeoGeo?.aeoScore ?? null,
+          original_score_geo: result.original.aeoGeo?.geoSscore ?? null,
+          final_score_aeo: result.final.aeoGeo?.aeoScore ?? null,
+          final_score_geo: result.final.aeoGeo?.geoSscore ?? null,
           attempts: result.attempts.length,
           passed: result.passed,
+          keyword: result.keyword,
+          originalTitle: (result.original.title || "").slice(0, 300),
+          originalBody: result.originalBody.slice(0, 60000),
+          rewrittenBody: result.finalBody.slice(0, 60000),
           seoMeta: seoMeta.meta,
           schemaPreview: schemaPreview({
             title: finalTitle,
@@ -102,13 +122,15 @@ export async function POST(request: NextRequest) {
       savedAudit = data;
     }
 
+    // Point the saved link at the specific saved rewrite so the user can
+    // revisit, copy, edit, and re-compare it later.
+    const detailUrl = `/dashboard/seo/sites?url=${encodeURIComponent(`text:${finalTitle}`)}`;
+
     return NextResponse.json({
       success: true,
       saved: !!savedAudit,
       savedAudit,
-      // Text audits appear in the Monitored Sites list (detail view matches
-      // URL rows only), so the saved link points at the list where it shows.
-      dashboardUrl: savedAudit ? "/dashboard/seo/sites" : "/dashboard/seo/sites",
+      dashboardUrl: detailUrl,
       ...result,
       // The rewritten body is the deliverable.
       rewrittenBody: result.finalBody,

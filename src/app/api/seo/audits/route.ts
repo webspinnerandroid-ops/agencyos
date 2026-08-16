@@ -30,7 +30,7 @@ export async function GET(request: NextRequest) {
 
     let query = supabase
       .from("site_audits")
-      .select("id, mode, url, title, keyword, seo_score, aeo_score, geo_score, word_count, issues, checks_json, fetched, fetch_error, created_at, workspace_id")
+      .select("id, mode, url, title, keyword, seo_score, aeo_score, geo_score, word_count, issues, checks_json, fetched, fetch_error, created_at, workspace_id, meta")
       .eq("tenant_id", tenantId);
 
     if (workspaceId) {
@@ -41,6 +41,20 @@ export async function GET(request: NextRequest) {
 
     // Single-site history mode.
     if (url) {
+      // Text audits are keyed by `text:<title>` in the dashboard (their
+      // `url` column is NULL). Resolve that key back to the title column so
+      // rewritten/saved content opens its own detail view instead of showing
+      // "No audits found for this site".
+      if (url.startsWith("text:")) {
+        const textTitle = url.slice("text:".length);
+        const { data, error } = await query
+          .is("url", null)
+          .eq("title", textTitle)
+          .order("created_at", { ascending: false });
+        if (error) throw error;
+        return NextResponse.json({ audits: data ?? [], traffic: { googleAnalytics: [], searchConsole: [] }, keywords: [] });
+      }
+
       const { data, error } = await query
         .eq("url", url)
         .order("created_at", { ascending: false });

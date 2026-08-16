@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -14,8 +15,19 @@ import {
   XCircle,
   ExternalLink,
   Save,
+  Wand2,
 } from "lucide-react";
 import { ScoreBreakdown } from "@/components/seo/score-breakdown";
+import {
+  BarChart,
+  Bar,
+  Legend,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+} from "recharts";
 
 interface Check {
   id: string;
@@ -48,6 +60,7 @@ interface RewriteResponse {
   keyword: string;
   title: string;
   rewriteError?: string;
+  finalBody?: string;
   original: { seo: { total: number; checks: Check[] } | null; aeoGeo: { total: number; aeoScore: number; geoSscore: number; checks: Check[] } | null };
   final: { seo: { total: number; checks: Check[] } | null; aeoGeo: { total: number; aeoScore: number; geoSscore: number; checks: Check[] } | null };
 }
@@ -58,15 +71,35 @@ function scoreTone(v: number | null | undefined): string {
 }
 
 export default function SeoRewriterPage() {
+  const searchParams = useSearchParams();
   const [text, setText] = useState("");
   const [title, setTitle] = useState("");
   const [keyword, setKeyword] = useState("");
+  const [editInstructions, setEditInstructions] = useState("");
   const [loading, setLoading] = useState(false);
+  const [refining, setRefining] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<RewriteResponse | null>(null);
 
-  const run = async () => {
-    if (!text.trim()) {
+  // Prefill from "Edit & re-compare" links on the Monitored Sites dashboard.
+  useEffect(() => {
+    const t = searchParams.get("text");
+    const ti = searchParams.get("title");
+    const k = searchParams.get("keyword");
+    if (t) setText(t);
+    if (ti) setTitle(ti);
+    if (k) setKeyword(k);
+  }, [searchParams]);
+
+  const run = async (overrides?: {
+    text?: string;
+    title?: string;
+    keyword?: string;
+    instructions?: string;
+    targeted?: boolean;
+  }) => {
+    const body = overrides?.text ?? text;
+    if (!body.trim()) {
       setError("Paste a piece of text content to rewrite.");
       return;
     }
@@ -78,7 +111,13 @@ export default function SeoRewriterPage() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, title: title || undefined, keyword: keyword || undefined }),
+        body: JSON.stringify({
+          text: body,
+          title: overrides?.title ?? (title || undefined),
+          keyword: overrides?.keyword ?? (keyword || undefined),
+          instructions: overrides?.instructions || undefined,
+          targeted: overrides?.targeted,
+        }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -86,11 +125,30 @@ export default function SeoRewriterPage() {
         return;
       }
       setResult(data);
+      // Keep the form in sync with the version just produced.
+      setText(data.rewrittenBody ?? data.finalBody ?? body);
+      if (data.title) setTitle(data.title);
+      if (data.keyword) setKeyword(data.keyword);
     } catch {
       setError("Network error while rewriting.");
     } finally {
       setLoading(false);
     }
+  };
+
+  // One-click targeted fix: keep the winning rewrite, fix only remaining fails.
+  const refine = async () => {
+    if (!result?.rewrittenBody) return;
+    setRefining(true);
+    await run({
+      text: result.rewrittenBody,
+      title: result.title,
+      keyword: result.keyword,
+      instructions: editInstructions,
+      targeted: true,
+    });
+    setRefining(false);
+    setEditInstructions("");
   };
 
   return (
@@ -141,7 +199,7 @@ export default function SeoRewriterPage() {
           />
         </div>
         <div className="mt-4 flex items-center gap-3">
-          <Button onClick={run} disabled={loading || !text.trim()}>
+          <Button onClick={() => run()} disabled={loading || !text.trim()}>
             {loading ? (
               <>
                 <Loader2 className="size-4 animate-spin" /> Rewriting…
@@ -195,6 +253,38 @@ export default function SeoRewriterPage() {
                 </div>
               ))}
             </div>
+            {/* Comparison chart */}
+            <div className="mt-4 h-56">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={[
+                    { metric: "SEO", Before: result.originalScores.seo, After: result.finalScores.seo },
+                    {
+                      metric: "AEO",
+                      Before: result.original?.aeoGeo?.aeoScore ?? result.originalScores.aeoGeo,
+                      After: result.final?.aeoGeo?.aeoScore ?? result.finalScores.aeoGeo,
+                    },
+                    {
+                      metric: "GEO",
+                      Before: result.original?.aeoGeo?.geoSscore ?? result.originalScores.aeoGeo,
+                      After: result.final?.aeoGeo?.geoSscore ?? result.finalScores.aeoGeo,
+                    },
+                  ]}
+                  margin={{ top: 5, right: 10, left: -15, bottom: 0 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                  <XAxis dataKey="metric" tick={{ fontSize: 12 }} />
+                  <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} />
+                  <Tooltip />
+                  <Legend />
+                  <Bar dataKey="Before" fill="#94a3b8" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="After" fill="#6366f1" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+            <p className="text-xs text-muted-foreground mt-2">
+              Detected keyword: <span className="font-medium">“{result.keyword || "—"}”</span>
+            </p>
             {result.rewritten && (
               <p className="text-xs text-green-600 dark:text-green-400 mt-3">
                 ✦ The content was rewritten and now passes the gate (SEO{" "}
@@ -252,6 +342,36 @@ export default function SeoRewriterPage() {
             <pre className="whitespace-pre-wrap text-sm font-mono bg-muted/50 rounded-md p-4 max-h-96 overflow-y-auto">
               {result.rewrittenBody}
             </pre>
+          </Card>
+
+          {/* Targeted re-edit: keep the winner, fix only remaining fails */}
+          <Card className="p-5">
+            <div className="flex items-center gap-2 mb-2">
+              <Wand2 className="size-4 text-primary" />
+              <h2 className="text-lg font-semibold">Rewrite with these edits</h2>
+            </div>
+            <p className="text-sm text-muted-foreground mb-3">
+              Keeps the winning rewrite and applies targeted fixes for just the
+              remaining failing checks, plus whatever edits you describe.
+            </p>
+            <textarea
+              value={editInstructions}
+              onChange={(e) => setEditInstructions(e.target.value)}
+              rows={2}
+              placeholder="e.g. Make the intro shorter, add a pricing section, use a friendlier tone…"
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm mb-3"
+            />
+            <Button onClick={refine} disabled={refining || loading}>
+              {refining ? (
+                <>
+                  <Loader2 className="size-4 animate-spin mr-2" /> Refining…
+                </>
+              ) : (
+                <>
+                  <Wand2 className="size-4 mr-2" /> Rewrite with these edits
+                </>
+              )}
+            </Button>
           </Card>
 
           {/* Per-check breakdown of the final version */}

@@ -23,8 +23,26 @@ describe("deriveKeyword", () => {
     expect(kw.toLowerCase()).toBe("espresso");
   });
 
-  it("returns a last-resort phrase when nothing usable exists", () => {
+  it("returns empty when nothing usable exists", () => {
     const kw = deriveKeyword("", "a");
-    expect(kw).toBe("the topic");
+    expect(kw).toBe("");
+  });
+
+  it("ignores placeholder titles so rewrites stay on-topic", () => {
+    // "Rewritten content" used to become the keyword — the root cause of
+    // off-topic rewrites. It must never leak into the detected keyword.
+    const kw = deriveKeyword(
+      "Rewritten content",
+      "Software development services help businesses build custom applications that scale with demand."
+    );
+    expect(kw.toLowerCase()).not.toContain("rewritten");
+    expect(kw.toLowerCase()).not.toContain("content");
+    expect(kw.toLowerCase()).toContain("software");
+  });
+
+  it("ignores the pasted-content placeholder too", () => {
+    const kw = deriveKeyword("Pasted content", "Marketing automation platforms save teams hours every week.");
+    expect(kw.toLowerCase()).not.toContain("pasted");
+    expect(kw.toLowerCase()).not.toContain("content");
   });
 });

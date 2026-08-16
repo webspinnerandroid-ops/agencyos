@@ -284,6 +284,7 @@ const VALID_TASKS = [
   "social_caption",
   "image_generation",
   "video_generation",
+  "brand_design",
 ] as const;
 export type ValidTask = (typeof VALID_TASKS)[number];
 

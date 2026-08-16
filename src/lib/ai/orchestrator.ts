@@ -64,7 +64,8 @@ export type AITask =
   | "seo_audit"
   | "seo_campaign_generation"
   | "team_chat"
-  | "content_rewrite";
+  | "content_rewrite"
+  | "brand_design";
 
 // Map tasks to their primary provider type for fallback matching
 const TASK_PROVIDER_TYPE_MAP: Record<AITask, ProviderType> = {
@@ -80,6 +81,7 @@ const TASK_PROVIDER_TYPE_MAP: Record<AITask, ProviderType> = {
   seo_campaign_generation: "text",
   team_chat: "text",
   content_rewrite: "text",
+  brand_design: "image",
 };
 
 // Map legacy AIProvider enum values to DB provider names for backward compat
@@ -1005,9 +1007,12 @@ export async function generateImage(
     // Google Imagen/Gemini supports native image editing; other providers
     // ignore it and fall back to text-only generation.
     referenceImage?: string;
+    // Which task model to resolve. Defaults to image_generation; callers can
+    // pass brand_design to route vector/typography work to a dedicated model.
+    task?: AITask;
   }
 ): Promise<GeneratedImage[]> {
-  const resolution = await getModelForTask(tenantId, "image_generation", options?.clientId);
+  const resolution = await getModelForTask(tenantId, options?.task ?? "image_generation", options?.clientId);
   const fullPrompt = `${prompt}${IMAGE_DEMOGRAPHIC_GUIDANCE}`;
 
   // Route to the appropriate image API based on provider

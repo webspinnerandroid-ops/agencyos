@@ -73,6 +73,7 @@ const TASK_LABELS: Record<ValidTask, string> = {
   social_caption: "Social Caption",
   image_generation: "Image Generation",
   video_generation: "Video Generation",
+  brand_design: "Brand & Vector Design",
 };
 
 const ALL_TASKS: ValidTask[] = [
@@ -80,6 +81,7 @@ const ALL_TASKS: ValidTask[] = [
   "social_caption",
   "image_generation",
   "video_generation",
+  "brand_design",
 ];
 
 // ------------------------------------------------------------------

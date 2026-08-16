@@ -50,7 +50,8 @@ INSERT INTO ai_models (id, provider_id, model_identifier, supported_tasks) VALUE
   ('28000000-0000-0000-0000-000000000004', '00000000-0000-0000-0000-000000000207', 'minimax/h3/image-to-video',           ARRAY['video_generation']),
   ('28000000-0000-0000-0000-000000000005', '00000000-0000-0000-0000-000000000207', 'minimax/h3/reference-to-video',       ARRAY['video_generation']),
   ('28000000-0000-0000-0000-000000000006', '00000000-0000-0000-0000-000000000207', 'fal-ai/seedance-2-5/text-to-video',   ARRAY['video_generation']),
-  ('28000000-0000-0000-0000-000000000007', '00000000-0000-0000-0000-000000000207', 'fal-ai/veo3.1/image-to-video',        ARRAY['video_generation'])
+  ('28000000-0000-0000-0000-000000000007', '00000000-0000-0000-0000-000000000207', 'fal-ai/veo3.1/image-to-video',        ARRAY['video_generation']),
+  ('28000000-0000-0000-0000-000000000008', '00000000-0000-0000-0000-000000000207', 'fal-ai/veo3.1',                       ARRAY['video_generation'])
 ON CONFLICT (id) DO UPDATE SET
   model_identifier = EXCLUDED.model_identifier,
   supported_tasks = EXCLUDED.supported_tasks;
@@ -63,7 +64,8 @@ INSERT INTO ai_models (id, provider_id, model_identifier, supported_tasks) VALUE
   ('29000000-0000-0000-0000-000000000002', '00000000-0000-0000-0000-000000000207', 'fal-ai/flux-pro/v1.1-ultra',         ARRAY['image_generation']),
   ('29000000-0000-0000-0000-000000000003', '00000000-0000-0000-0000-000000000207', 'fal-ai/recraft/v3/text-to-image',    ARRAY['image_generation']),
   ('29000000-0000-0000-0000-000000000004', '00000000-0000-0000-0000-000000000207', 'fal-ai/nano-banana-pro',             ARRAY['image_generation']),
-  ('29000000-0000-0000-0000-000000000005', '00000000-0000-0000-0000-000000000207', 'openai/gpt-image-2',                 ARRAY['image_generation'])
+  ('29000000-0000-0000-0000-000000000005', '00000000-0000-0000-0000-000000000207', 'openai/gpt-image-2',                 ARRAY['image_generation']),
+  ('29000000-0000-0000-0000-000000000006', '00000000-0000-0000-0000-000000000207', 'fal-ai/flux-2-max',                  ARRAY['image_generation'])
 ON CONFLICT (id) DO UPDATE SET
   model_identifier = EXCLUDED.model_identifier,
   supported_tasks = EXCLUDED.supported_tasks;

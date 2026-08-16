@@ -38,14 +38,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: plan.reason ?? "Monthly image limit reached" }, { status: 429 });
     }
 
-    let body: { prompt: string; size?: string; n?: number; clientId?: string; referenceImage?: string };
+    let body: { prompt: string; size?: string; n?: number; clientId?: string; referenceImage?: string; task?: string };
     try {
       body = await request.json();
     } catch {
       return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
     }
 
-    const { prompt, size, n, clientId, referenceImage } = body;
+    const { prompt, size, n, clientId, referenceImage, task } = body;
 
     if (!prompt || typeof prompt !== "string" || prompt.trim().length === 0) {
       return NextResponse.json({ error: "Prompt is required" }, { status: 400 });
@@ -66,6 +66,7 @@ export async function POST(request: NextRequest) {
       n: n ?? 1,
       clientId: clientId ?? undefined,
       referenceImage: referenceImage ?? undefined,
+      task: task === "brand_design" ? "brand_design" : "image_generation",
     });
 
     // Persist to Supabase Storage. Providers like Google Imagen return base64

@@ -66,7 +66,7 @@ export default function GenerateImagesPage() {
   const [prompt, setPrompt] = useState("");
   const [size, setSize] = useState("1024x1024");
   // Ad-creative mode: structured fields compose the prompt + preset ratio.
-  const [mode, setMode] = useState<"image" | "ad">("image");
+  const [mode, setMode] = useState<"image" | "ad" | "brand">("image");
   const [adPlatform, setAdPlatform] = useState("meta-feed");
   const [adBusiness, setAdBusiness] = useState("");
   const [adHeadline, setAdHeadline] = useState("");
@@ -225,6 +225,8 @@ export default function GenerateImagesPage() {
     const effectivePrompt =
       mode === "ad"
         ? buildAdPrompt(adPlatform, adBusiness, adHeadline, adCta)
+        : mode === "brand"
+        ? `${prompt.trim()}\n\nThis is a brand-design asset: clean scalable vector-style art with strong typography, a cohesive brand color palette, clear visual hierarchy, and precise text rendered exactly as spelled.`
         : prompt.trim();
     if (!effectivePrompt.trim()) return;
 
@@ -239,7 +241,7 @@ export default function GenerateImagesPage() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: effectivePrompt.trim(), size: effectiveSize, n, referenceImage: referenceImage ?? undefined }),
+        body: JSON.stringify({ prompt: effectivePrompt.trim(), size: effectiveSize, n, referenceImage: referenceImage ?? undefined, task: mode === "brand" ? "brand_design" : "image_generation" }),
       });
 
       const data = await res.json();
@@ -396,6 +398,12 @@ export default function GenerateImagesPage() {
                   className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${mode === "ad" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
                 >
                   Ad Creative
+                </button>
+                <button
+                  onClick={() => setMode("brand")}
+                  className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${mode === "brand" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                >
+                  Brand Design
                 </button>
               </div>
 
@@ -554,7 +562,7 @@ export default function GenerateImagesPage() {
                   disabled={loading || (mode === "ad" ? !adBusiness.trim() && !adHeadline.trim() : !prompt.trim())}
                   className="w-full sm:w-auto"
                 >
-                  {loading ? <><Loader2 className="size-4 animate-spin mr-2" />Generating...</> : <><Sparkles className="size-4 mr-2" />{mode === "ad" ? "Generate Ad" : "Generate"}</>}
+                  {loading ? <><Loader2 className="size-4 animate-spin mr-2" />Generating...</> : <><Sparkles className="size-4 mr-2" />{mode === "ad" ? "Generate Ad" : mode === "brand" ? "Generate Brand Asset" : "Generate"}</>}
                 </Button>
                 <Button
                   variant="secondary"

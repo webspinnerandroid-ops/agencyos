@@ -200,6 +200,11 @@ const IGNORE = new Set([
   // tenant's owner. Global admin tool, same trust class as the other
   // admin/* routes. Reviewed and verified.
   "src/app/api/admin/login-as/route.ts",
+  // workspace-team.ts: inviteTeamMember performs an admin-wide cross-tenant
+  // user_roles lookup by primary key (user_id) to refuse moving a user who
+  // already belongs to another team. SUPER_ADMIN / AGENCY_ADMIN only — same
+  // trust class as admin/actions.ts. Verified.
+  "src/lib/workspace-team.ts",
 ]);
 
 const CHAIN_WINDOW = 900; // chars after .from(...) — enough for chained filters

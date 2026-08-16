@@ -6,9 +6,30 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Plus, Trash2, Building2, ArrowRight } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Loader2, Plus, Trash2, Building2, ArrowRight, Users, UserPlus } from "lucide-react";
 import Link from "next/link";
-import { getWorkspaces, createWorkspace, deleteWorkspace, type Workspace } from "@/lib/workspace";
+import { getWorkspaces, createWorkspace, deleteWorkspace, getWorkspaceTeamAccess, setWorkspaceMemberAccess, type Workspace, type TeamMemberAccess } from "@/lib/workspace";
+import { inviteTeamMember } from "@/lib/workspace-team";
+
+function roleLabel(role: string) {
+  if (role === "super_admin") return "Super Admin";
+  if (role === "agency_admin") return "Admin";
+  if (role === "agency_editor") return "Editor";
+  if (role === "client") return "User / Client";
+  return role;
+}
+
+function lastSeen(lastSignInAt: string | null) {
+  if (!lastSignInAt) return "never signed in";
+  const d = new Date(lastSignInAt);
+  const mins = Math.round((Date.now() - d.getTime()) / 60000);
+  if (mins < 1) return "online now";
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return d.toLocaleDateString();
+}
 
 export default function WorkspacesPage() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
@@ -18,6 +39,16 @@ export default function WorkspacesPage() {
   const [showForm, setShowForm] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
+  const [teamPanel, setTeamPanel] = useState<string | null>(null);
+  const [teamCanManage, setTeamCanManage] = useState(false);
+  const [teamMembers, setTeamMembers] = useState<Record<string, TeamMemberAccess[]>>({});
+  const [teamLoading, setTeamLoading] = useState<string | null>(null);
+
+  // Add-team-member form
+  const [showInvite, setShowInvite] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState("agency_editor");
+  const [inviteWorkspaceIds, setInviteWorkspaceIds] = useState<string[]>([]);
 
   const load = useCallback(() => {
     startLoading(async () => {
@@ -53,6 +84,57 @@ export default function WorkspacesPage() {
     });
   };
 
+  const toggleTeamPanel = async (workspaceId: string) => {
+    if (teamPanel === workspaceId) { setTeamPanel(null); return; }
+    setTeamPanel(workspaceId);
+    setTeamLoading(workspaceId);
+    const res = await getWorkspaceTeamAccess(workspaceId);
+    setTeamLoading(null);
+    if (res.success && res.data) {
+      setTeamCanManage(res.data.canManage);
+      setTeamMembers((prev) => ({ ...prev, [workspaceId]: res.data!.members }));
+    }
+  };
+
+  const handleToggleMember = async (workspaceId: string, userId: string, granted: boolean) => {
+    setTeamLoading(workspaceId);
+    const res = await setWorkspaceMemberAccess(workspaceId, userId, granted);
+    if (res.success) {
+      setTeamMembers((prev) => ({
+        ...prev,
+        [workspaceId]: (prev[workspaceId] ?? []).map((m) => m.userId === userId ? { ...m, granted } : m),
+      }));
+      setFeedback({ type: "success", message: granted ? "Member granted access." : "Member access removed." });
+    } else {
+      setFeedback({ type: "error", message: res.error ?? "Failed to update access." });
+    }
+    setTeamLoading(null);
+  };
+
+  const toggleInviteWorkspace = (id: string) => {
+    setInviteWorkspaceIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+  };
+
+  const handleInvite = () => {
+    if (!inviteEmail.trim()) return;
+    startTransition(async () => {
+      const res = await inviteTeamMember(inviteEmail, inviteRole, inviteWorkspaceIds);
+      if (res.success && res.data) {
+        const msg = res.data.existing
+          ? `"${inviteEmail}" added to the team.`
+          : `"${inviteEmail}" invited. Share this temporary password: ${res.data.tempPassword}`;
+        setFeedback({ type: "success", message: msg });
+        setInviteEmail("");
+        setInviteRole("agency_editor");
+        setInviteWorkspaceIds([]);
+        setShowInvite(false);
+        load();
+      } else {
+        setFeedback({ type: "error", message: res.error ?? "Failed to invite member." });
+      }
+    });
+  };
+
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between">
@@ -60,15 +142,70 @@ export default function WorkspacesPage() {
           <h1 className="text-3xl font-bold tracking-tight">Workspaces</h1>
           <p className="text-muted-foreground mt-1">Manage your workspaces. Each workspace has its own knowledgebase, brand profiles, and client data.</p>
         </div>
-        <Button onClick={() => setShowForm(!showForm)} disabled={isPending}>
-          {showForm ? "Cancel" : <><Plus className="size-4 mr-2" /> New Workspace</>}
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setShowInvite(!showInvite)} disabled={isPending}>
+            {showInvite ? "Cancel" : <><UserPlus className="size-4 mr-2" /> Add member</>}
+          </Button>
+          <Button onClick={() => setShowForm(!showForm)} disabled={isPending}>
+            {showForm ? "Cancel" : <><Plus className="size-4 mr-2" /> New Workspace</>}
+          </Button>
+        </div>
       </div>
 
       {feedback && (
         <div className={`p-3 rounded-md text-sm ${feedback.type === "success" ? "bg-green-50 text-green-700 border-green-200" : "bg-red-50 text-red-700 border-red-200"} border`} role="alert">
           {feedback.message}<button className="ml-3 underline text-xs" onClick={() => setFeedback(null)}>Dismiss</button>
         </div>
+      )}
+
+      {showInvite && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2"><UserPlus className="size-5 text-primary" /> Add team member</CardTitle>
+            <CardDescription>Creates the account if needed and adds them to this team with access to the selected workspaces.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label>Email</Label>
+              <Input type="email" placeholder="teammate@example.com" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} disabled={isPending} />
+            </div>
+            <div className="space-y-2">
+              <Label>Role</Label>
+              <select
+                value={inviteRole}
+                onChange={(e) => setInviteRole(e.target.value)}
+                disabled={isPending}
+                className="w-full h-9 rounded-md border border-input bg-transparent px-3 py-1 text-sm"
+              >
+                <option value="agency_admin">Admin</option>
+                <option value="agency_editor">Editor</option>
+                <option value="client">User / Client</option>
+              </select>
+            </div>
+            <div className="space-y-2">
+              <Label>Workspace access</Label>
+              <div className="space-y-1">
+                {workspaces.map((w) => (
+                  <label key={w.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={inviteWorkspaceIds.includes(w.id)}
+                      onChange={() => toggleInviteWorkspace(w.id)}
+                      disabled={isPending}
+                    />
+                    {w.name}
+                  </label>
+                ))}
+                {workspaces.length === 0 && <p className="text-xs text-muted-foreground">No workspaces yet — create one first, or invite without access and grant it later.</p>}
+              </div>
+            </div>
+          </CardContent>
+          <CardFooter>
+            <Button onClick={handleInvite} disabled={isPending || !inviteEmail.trim()}>
+              {isPending ? <><Loader2 className="size-4 animate-spin mr-2" /> Adding...</> : "Add member"}
+            </Button>
+          </CardFooter>
+        </Card>
       )}
 
       {showForm && (
@@ -100,6 +237,44 @@ export default function WorkspacesPage() {
               <Link href={`/dashboard/workspaces/${w.id}/brand-profile`}><Button variant="outline" size="sm">Brand Profile <ArrowRight className="size-3 ml-1" /></Button></Link>
               <Button variant="ghost" size="icon" className="ml-auto text-muted-foreground hover:text-destructive" onClick={() => handleDelete(w.id, w.name)} disabled={isPending}><Trash2 className="size-4" /></Button>
             </CardFooter>
+            <div className="px-4 pb-4 -mt-2">
+              <Button variant="ghost" size="sm" className="text-xs" onClick={() => toggleTeamPanel(w.id)}>
+                <Users className="size-3.5 mr-1.5" /> Team access
+              </Button>
+              {teamPanel === w.id && (
+                <div className="mt-2 rounded-md border bg-muted/30 p-3 space-y-2">
+                  {teamLoading === w.id ? (
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground"><Loader2 className="size-3 animate-spin" /> Loading team…</div>
+                  ) : !teamCanManage ? (
+                    <p className="text-xs text-muted-foreground">Only admins can manage team access.</p>
+                  ) : (teamMembers[w.id] ?? []).length === 0 ? (
+                    <p className="text-xs text-muted-foreground">No team members yet. Use “Add member” above.</p>
+                  ) : (
+                    <ul className="space-y-2">
+                      {(teamMembers[w.id] ?? []).map((m) => (
+                        <li key={m.userId} className="flex items-center justify-between gap-3 text-xs">
+                          <div className="min-w-0">
+                            <div className="truncate font-medium">{m.email}</div>
+                            <div className="text-muted-foreground">
+                              {roleLabel(m.role)} · {lastSeen(m.lastSignInAt)}
+                            </div>
+                          </div>
+                          {m.isOwner ? (
+                            <Badge variant="secondary" className="shrink-0">Owner</Badge>
+                          ) : (
+                            <Switch
+                              checked={m.granted}
+                              onCheckedChange={(v) => handleToggleMember(w.id, m.userId, v)}
+                              disabled={teamLoading === w.id}
+                            />
+                          )}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
           </Card>
         ))}
         {workspaces.length === 0 && !isLoading && (

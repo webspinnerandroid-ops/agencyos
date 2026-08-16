@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { extractClientFromMessage } from "./team-task";
+import { extractClientFromMessage } from "./client-extract";
 
 describe("extractClientFromMessage", () => {
   it("extracts the client name and website from an onboarding message", () => {

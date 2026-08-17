@@ -4,12 +4,6 @@ import { useState } from "react";
 import Link from "next/link";
 import { Brain, Trash2, CheckCircle2, Loader2, AlertTriangle } from "lucide-react";
 
-export const metadata = {
-  title: "Data Deletion Request",
-  description:
-    "Request deletion of your Agency OS account and personal data in accordance with data protection regulations.",
-};
-
 export default function DataDeletionPage() {
   const [email, setEmail] = useState("");
   const [reason, setReason] = useState("");

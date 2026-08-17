@@ -82,6 +82,22 @@ export async function createNotification(
     // Fire the realtime broadcast after a successful insert so open bell
     // dropdowns update instantly (fire-and-forget — never block the caller).
     void broadcastNotification(input.tenantId);
+    // Mirror the notification to the user's bound Telegram chat(s) when a bot
+    // is configured. Fire-and-forget — a Telegram hiccup must never take
+    // down the worker that produced the notification.
+    try {
+      const { telegramNotify } = await import("@/lib/telegram");
+      void telegramNotify({
+        tenantId: input.tenantId,
+        userId: input.userId,
+        kind: input.kind ?? "info",
+        title: input.title,
+        body: input.body,
+        link: input.link,
+      });
+    } catch (err) {
+      console.warn("[in-app-notifications] telegram mirror failed:", err);
+    }
   } catch (err) {
     console.warn("[in-app-notifications] create failed:", err);
   }

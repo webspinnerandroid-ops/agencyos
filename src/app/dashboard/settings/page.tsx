@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
-import { Key, Palette, Users, Link2, Clapperboard, ShieldCheck, Handshake } from "lucide-react";
+import { Key, Palette, Users, Link2, Clapperboard, ShieldCheck, Handshake, Send } from "lucide-react";
 
 const links = [
   { href: "/dashboard/settings/ai", icon: Key, title: "AI Settings", description: "Manage API keys and task-model mappings." },
@@ -10,6 +10,7 @@ const links = [
   { href: "/dashboard/settings/blog", icon: Link2, title: "Blog Platforms", description: "Connect WordPress, Joomla, and more." },
   { href: "/dashboard/settings/site", icon: Clapperboard, title: "Website / Landing Page", description: "Switch the sales page product tour between slideshow and video." },
   { href: "/dashboard/settings/security", icon: ShieldCheck, title: "Security (2FA)", description: "Two-factor authentication with an authenticator app." },
+  { href: "/dashboard/settings/telegram", icon: Send, title: "Telegram", description: "Get notifications on your phone and message your AI team from anywhere." },
 ];
 
 export default function SettingsIndexPage() {

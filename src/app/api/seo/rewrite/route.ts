@@ -126,14 +126,69 @@ export async function POST(request: NextRequest) {
       savedAudit = data;
     }
 
+    // ALSO save the rewrite as a draft blog post so it shows up in Recent
+    // Content and gets the exact same publish flow as generated content
+    // (PublishButton → WordPress / CMS / schedule).
+    let savedPostId: string | null = null;
+    const { data: postRow, error: postError } = await supabase
+      .from("posts")
+      .insert({
+        tenant_id: tenantId,
+        client_id: null,
+        content: {
+          type: "blog",
+          title: finalTitle,
+          metaDescription: description,
+          body: result.finalBody,
+          keyword: result.keyword,
+          seo: {
+            total: result.final.seo?.total ?? null,
+            checks: result.final.seo?.checks ?? [],
+          },
+          aeoGeo: {
+            total: result.final.aeoGeo?.total ?? null,
+            aeoScore: result.final.aeoGeo?.aeoScore ?? null,
+            geoSscore: result.final.aeoGeo?.geoSscore ?? null,
+            checks: result.final.aeoGeo?.checks ?? [],
+          },
+          rewrite: {
+            kind: "rewrite",
+            original_seo: result.originalScores.seo,
+            original_aeo_geo: result.originalScores.aeoGeo,
+            original_aeo: result.original.aeoGeo?.aeoScore ?? null,
+            original_geo: result.original.aeoGeo?.geoSscore ?? null,
+            passed: result.passed,
+            gate: result.gate,
+            originalBody: result.originalBody.slice(0, 60000),
+            attempts: result.attempts.length,
+          },
+        },
+        type: "blog",
+        title: finalTitle,
+        status: "draft",
+        ai_generated: true,
+        seo_score: result.final.seo?.total ?? null,
+        aeo_geo_score: result.final.aeoGeo?.total ?? null,
+      })
+      .select("id")
+      .single();
+    if (postError) {
+      console.warn("[seo/rewrite] post save failed:", postError.message);
+    } else if (postRow) {
+      savedPostId = postRow.id;
+    }
+
     // Point the saved link at the specific saved rewrite so the user can
     // revisit, copy, edit, and re-compare it later.
     const detailUrl = `/dashboard/seo/sites?url=${encodeURIComponent(`text:${finalTitle}`)}`;
+    const postsUrl = savedPostId ? `/dashboard/posts?open=${savedPostId}` : "/dashboard/posts";
 
     return NextResponse.json({
       success: true,
       saved: !!savedAudit,
       savedAudit,
+      savedPostId,
+      postsUrl,
       dashboardUrl: detailUrl,
       ...result,
       // The rewritten body is the deliverable.

@@ -20,11 +20,11 @@ export async function PATCH(
     const { id } = await params;
 
     const body = await request.json();
-    const { workspaceId } = body;
+    const { workspaceId, folderId } = body;
 
-    if (!workspaceId || typeof workspaceId !== "string") {
+    if (!workspaceId && !folderId) {
       return NextResponse.json(
-        { error: "workspaceId is required" },
+        { error: "Provide a workspaceId and/or folderId to update" },
         { status: 400 }
       );
     }
@@ -44,27 +44,51 @@ export async function PATCH(
       );
     }
 
-    // Verify the target workspace belongs to this tenant
-    const { data: ws, error: wsError } = await supabase
-      .from("workspaces")
-      .select("id")
-      .eq("id", workspaceId)
-      .eq("tenant_id", tenantId)
-      .maybeSingle();
+    // Verify the target workspace belongs to this tenant (when moving).
+    if (workspaceId) {
+      const { data: ws, error: wsError } = await supabase
+        .from("workspaces")
+        .select("id")
+        .eq("id", workspaceId)
+        .eq("tenant_id", tenantId)
+        .maybeSingle();
 
-    if (wsError || !ws) {
-      return NextResponse.json(
-        { error: "Target workspace not found or access denied" },
-        { status: 404 }
-      );
+      if (wsError || !ws) {
+        return NextResponse.json(
+          { error: "Target workspace not found or access denied" },
+          { status: 404 }
+        );
+      }
     }
+
+    // Verify the target folder belongs to this tenant (when filing).
+    if (folderId) {
+      const { data: folder, error: folderError } = await supabase
+        .from("asset_folders")
+        .select("id")
+        .eq("id", folderId)
+        .eq("tenant_id", tenantId)
+        .maybeSingle();
+
+      if (folderError || !folder) {
+        return NextResponse.json(
+          { error: "Target folder not found or access denied" },
+          { status: 404 }
+        );
+      }
+    }
+
+    const updates: Record<string, unknown> = {};
+    if (workspaceId) updates.workspace_id = workspaceId;
+    // Explicit null clears the folder ("unfiled"); a non-empty value files it.
+    if (folderId !== undefined) updates.folder_id = folderId === "" ? null : folderId;
 
     const { data: updated, error: updateError } = await supabase
       .from("media_assets")
-      .update({ workspace_id: workspaceId })
+      .update(updates)
       .eq("id", id)
       .eq("tenant_id", tenantId)
-      .select("id, url, prompt, workspace_id, created_at")
+      .select("id, url, prompt, workspace_id, folder_id, created_at")
       .single();
 
     if (updateError) {

@@ -111,6 +111,10 @@ export async function POST(request: NextRequest) {
             metadata: {
               size: size ?? "1024x1024",
               revisedPrompt: img.revisedPrompt ?? null,
+              // "brand_design" vs "image_generation" — lets the asset
+              // library split Brand & Vector Design results out of plain
+              // image history.
+              task: task === "brand_design" ? "brand_design" : "image_generation",
             },
             status: "completed",
           })

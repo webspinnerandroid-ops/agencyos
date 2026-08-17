@@ -18,6 +18,7 @@ export function buildNavSections(isSuperAdmin: boolean): NavSection[] {
         { href: "/dashboard/generate-images", label: "Images" },
         { href: "/dashboard/brand-design", label: "Brand Design" },
         { href: "/dashboard/generate-videos", label: "Videos" },
+        { href: "/dashboard/assets", label: "Asset Library" },
         { href: "/dashboard/posts", label: "Posts" },
         { href: "/dashboard/calendar", label: "Calendar" },
         { href: "/dashboard/analytics", label: "Analytics" },
@@ -53,6 +54,7 @@ export function buildNavSections(isSuperAdmin: boolean): NavSection[] {
             label: "Admin",
             items: [
               { href: "/dashboard/admin", label: "Super Admin" },
+              { href: "/dashboard/admin/data-deletion", label: "Data Deletion Queue" },
               { href: "/dashboard/admin/page-builder", label: "Page Builder" },
               { href: "/dashboard/admin/nav-builder", label: "Menu Builder" },
               { href: "/dashboard/admin/apis", label: "APIs & Models" },

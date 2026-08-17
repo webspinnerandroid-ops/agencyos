@@ -81,6 +81,12 @@ const IGNORE = new Set([
   // admin/actions.ts). It never returns tenant data to the caller; the
   // response is a fixed confirmation string.
   "src/app/api/data-deletion/route.ts",
+  // export-data route: public GDPR intake (no session). It looks up the
+  // account by the submitted email, then reads ONLY that user's own roles
+  // (by user_id) and the tenants they belong to (by id) to build their JSON
+  // archive. The archive is emailed to that same address — nothing is
+  // returned to the caller. Same trust class as the data-deletion route.
+  "src/app/api/export-data/route.ts",
   // apis/route.ts: the APIs & Balances panel is a super-admin-wide view by
   // design — it lists tenant_api_keys counts and balance state across ALL
   // tenants (the same trust model as admin/actions.ts). The admin gate

@@ -19,6 +19,7 @@ const AVATAR_FILENAMES: Record<string, string> = {
   nina: "malory",
   juno: "lana",
   linda: "cyril",
+  bilbo: "bilbo",
 };
 
 const AVATAR_EXTS = [".png", ".jpg", ".jpeg", ".webp"] as const;

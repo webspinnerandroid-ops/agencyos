@@ -56,7 +56,9 @@ export default function PrivacyPage() {
         <p className="mt-2 text-muted-foreground leading-relaxed">
           You may request deletion of your account and personal data at any time. To do so, visit our{" "}
           <Link href="/data-deletion" className="text-primary hover:underline">Data Deletion Request</Link>{" "}
-          page or contact us at the address below.
+          page or contact us at the address below. You may also{" "}
+          <Link href="/export-data" className="text-primary hover:underline">export a copy of your data</Link>{" "}
+          at any time.
         </p>
 
         <h2 className="text-xl font-semibold mt-8">7. Contact</h2>

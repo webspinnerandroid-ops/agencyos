@@ -404,6 +404,175 @@ export async function revokeLicense(licenseId: string): Promise<ActionResponse> 
   }
 }
 
+// ------------------------------------------------------------------
+// Data-deletion request queue
+// ------------------------------------------------------------------
+
+export interface DataDeletionRequest {
+  id: string;
+  actor_email: string | null;
+  action: string;
+  target_label: string | null;
+  details: Record<string, unknown> | null;
+  created_at: string;
+  processed?: boolean;
+}
+
+/**
+ * Pending data-deletion requests (from the public /api/data-deletion intake),
+ * oldest first, with a processed flag derived from details. Super admin only.
+ */
+export async function getDataDeletionRequests(): Promise<
+  ActionResponse<DataDeletionRequest[]>
+> {
+  try {
+    await requireSuperAdmin();
+    const supabase = await createServiceClient();
+    const { data, error } = await supabase
+      .from("admin_audit_log")
+      .select("id, actor_email, action, target_label, details, created_at")
+      .eq("action", "data_deletion_requested")
+      .order("created_at", { ascending: true })
+      .limit(200);
+    if (error) {
+      if (isMissingAuditTable(error)) return { success: true, data: [] };
+      throw new Error(error.message);
+    }
+    const mapped = (data ?? []).map((r: any) => ({
+      ...r,
+      processed: (r.details as any)?.processed === true,
+    }));
+    return { success: true, data: mapped as DataDeletionRequest[] };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+/** Find a user id + tenant by email via the admin auth API. */
+async function findUserByEmail(
+  supabase: Awaited<ReturnType<typeof createServiceClient>>,
+  email: string
+): Promise<{ userId: string; tenantId: string } | null> {
+  try {
+    let userId: string | null = null;
+    try {
+      const { data } = await (supabase.auth.admin as any).getUserByEmail(email);
+      userId = data?.user?.id ?? null;
+    } catch {
+      const { data: page } = await supabase.auth.admin.listUsers({ page: 1, perPage: 1000 });
+      userId =
+        (page?.users ?? []).find((u) => (u.email ?? "").toLowerCase() === email.toLowerCase())?.id ?? null;
+    }
+    if (!userId) return null;
+    const { data: role } = await supabase
+      .from("user_roles")
+      .select("tenant_id")
+      .eq("user_id", userId)
+      .maybeSingle();
+    return { userId, tenantId: role?.tenant_id ?? "" };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Process a data-deletion request from the queue.
+ *
+ * mode: "user"   → delete the account (deleteUser)
+ *       "tenant" → delete the tenant + everything under it (deleteTenant)
+ *       "none"    → mark processed without deleting (e.g. account not found)
+ *
+ * Records the outcome in the audit trail and emails a summary to the acting
+ * admin (and ADMIN_EMAIL when configured).
+ */
+export async function processDataDeletion(
+  entryId: string,
+  mode: "user" | "tenant" | "none"
+): Promise<ActionResponse<{ deleted: boolean }>> {
+  try {
+    await requireSuperAdmin();
+    const supabase = await createServiceClient();
+    const actorEmail = await getUserEmail();
+
+    const { data: entry } = await supabase
+      .from("admin_audit_log")
+      .select("id, actor_email, details")
+      .eq("id", entryId)
+      .maybeSingle();
+    if (!entry) throw new Error("Request not found.");
+    if ((entry.details as any)?.processed === true) {
+      throw new Error("This request has already been processed.");
+    }
+
+    const email = (entry.actor_email ?? "").toString();
+    let deleted = false;
+    let outcome = "marked processed (no deletion)";
+
+    if (mode !== "none" && email) {
+      const found = await findUserByEmail(supabase, email);
+      if (!found) {
+        outcome = "account not found — no deletion performed";
+      } else if (mode === "user") {
+        const res = await deleteUser(found.userId);
+        if (!res.success) throw new Error(res.error ?? "deleteUser failed");
+        deleted = true;
+        outcome = `deleted user ${found.userId}`;
+      } else {
+        if (!found.tenantId) throw new Error("No tenant found for this account.");
+        const res = await deleteTenant(found.tenantId);
+        if (!res.success) throw new Error(res.error ?? "deleteTenant failed");
+        deleted = true;
+        outcome = `deleted tenant ${found.tenantId}`;
+      }
+    }
+
+    // Mark the request processed.
+    const details = {
+      ...((entry.details as Record<string, unknown>) ?? {}),
+      processed: true,
+      processedAt: new Date().toISOString(),
+      processedBy: actorEmail,
+      mode,
+      outcome,
+    };
+    await supabase
+      .from("admin_audit_log")
+      .update({ details })
+      .eq("id", entryId);
+
+    // Summary email to the acting admin (+ ADMIN_EMAIL when configured).
+    try {
+      const { emailDeletionProcessed } = await import("@/lib/data-emails");
+      const recipients = [actorEmail, process.env.ADMIN_EMAIL]
+        .filter((e): e is string => !!e)
+        .filter((e, i, arr) => arr.indexOf(e) === i);
+      const html = `<p>A data deletion request for <strong>${escapeHtml(email || "unknown")}</strong> was processed.</p>
+        <p>Action: <strong>${mode}</strong> — ${outcome}</p>
+        <p>Processed by: ${escapeHtml(actorEmail ?? "unknown")} at ${new Date().toISOString()}</p>`;
+      for (const to of recipients) {
+        await emailDeletionProcessed({
+          toEmail: to,
+          subject: "Data deletion request processed",
+          html,
+        });
+      }
+    } catch (err) {
+      console.warn("[admin] processed-summary email failed:", err);
+    }
+
+    return { success: true, data: { deleted } };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
 /**
  * Change an EXISTING license's plan — the super admin's "toggle off trial"
  * path. Updates the plan in place (no new license needed) and clears the

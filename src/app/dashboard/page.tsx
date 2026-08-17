@@ -1,8 +1,8 @@
 import { createClient } from "@supabase/supabase-js";
 import { getTenantId } from "@/lib/auth";
 import { getCurrentWorkspaceId } from "@/lib/workspace";
-import { RecentContentList } from "./recent-content";
 import { UsageBanner } from "./usage-banner";
+import { DashboardRecents } from "./dashboard-recents";
 
 export const dynamic = "force-dynamic";
 
@@ -230,51 +230,7 @@ export default async function DashboardPage({ searchParams }: { searchParams?: P
         </a>
       </div>
 
-      <div className="grid gap-8 lg:grid-cols-2 items-start">
-        <div>
-          <RecentContentList posts={(posts ?? []) as any} />
-        </div>
-
-        <div>
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-semibold tracking-tight">Recent SEO Audits</h2>
-            <a href="/dashboard/seo/campaigns" className="text-sm text-primary underline hover:underline">View all →</a>
-          </div>
-          {audits && audits.length > 0 ? (
-            <div className="rounded-lg border divide-y">
-              {(audits as any[]).map((a) => (
-                <a
-                  key={a.id}
-                  href={`/dashboard/seo/campaigns?open=${a.id}`}
-                  className="flex items-center justify-between p-3 hover:bg-muted/30 transition-colors group"
-                  title="Open this audit to start the campaign from it"
-                >
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium truncate group-hover:text-primary transition-colors">
-                      {String(a.url || "").replace(/^https?:\/\//, "").replace(/^www\./, "")}
-                    </p>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <span className="text-xs text-muted-foreground">{a.tier_name}</span>
-                      <span className={"text-[10px] px-1.5 py-0.5 rounded-full capitalize " + (a.status === "proposed" ? "bg-blue-100 text-blue-700" : "bg-green-100 text-green-700")}>
-                        {a.status}
-                      </span>
-                    </div>
-                  </div>
-                  <span className="text-xs text-muted-foreground shrink-0">
-                    {a.tier_price == null || a.tier_price === 0 || String(a.tier_name ?? "").toLowerCase().includes("custom")
-                      ? "Custom Consult"
-                      : "$" + a.tier_price.toLocaleString() + "/mo"}
-                  </span>
-                </a>
-              ))}
-            </div>
-          ) : (
-            <div className="rounded-lg border bg-card p-8 text-center text-muted-foreground">
-              <p className="text-sm">No audits yet.</p>
-            </div>
-          )}
-        </div>
-      </div>
+      <DashboardRecents posts={(posts ?? []) as any} audits={(audits ?? []) as any} />
     </div>
   );
 }

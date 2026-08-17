@@ -87,9 +87,13 @@ async function bunnyUpload(path: string, body: Buffer, contentType: string): Pro
 /**
  * Persists an image to Bunny storage.
  *
- * - http(s) URLs (hosted provider URLs) pass through untouched.
  * - data: URLs (e.g. Google Imagen's base64 output) are uploaded to
  *   {tenantId}/{uuid}.{ext} and the CDN public URL is returned.
+ * - http(s) URLs (hosted provider URLs — fal.ai, etc.) are SHORT-LIVED
+ *   signed links that expire within hours. Left as-is, a saved image shows
+ *   a broken card and a dead download link (exactly what happened on the
+ *   Brand Design page). We download the bytes and re-upload them to the
+ *   tenant's Bunny zone, returning the permanent CDN URL.
  *
  * On upload failure the original URL is returned rather than losing the
  * image — the DB stays consistent either way.
@@ -98,18 +102,41 @@ export async function persistImageToStorage(
   tenantId: string,
   url: string
 ): Promise<string> {
-  if (!isDataUrl(url)) return url;
+  if (!url || typeof url !== "string") return url;
+  // Already on our own CDN — nothing to do.
+  if (url.startsWith(`https://${BUNNY_PULL_HOST}/`)) return url;
 
-  const match = url.match(/^data:([^;,]+)?(;base64)?,([\s\S]*)$/);
-  if (!match) return url;
+  if (isDataUrl(url)) {
+    const match = url.match(/^data:([^;,]+)?(;base64)?,([\s\S]*)$/);
+    if (!match) return url;
 
-  const mime = match[1] || "image/png";
-  const base64 = match[2] ? match[3] : decodeURIComponent(match[3]);
-  const ext = extFromMime(mime);
-  const path = `${tenantId}/${crypto.randomUUID()}${ext}`;
+    const mime = match[1] || "image/png";
+    const base64 = match[2] ? match[3] : decodeURIComponent(match[3]);
+    const ext = extFromMime(mime);
+    const path = `${tenantId}/${crypto.randomUUID()}${ext}`;
 
-  const ok = await bunnyUpload(path, Buffer.from(base64, "base64"), mime);
-  return ok ? storagePublicUrl(path) : url;
+    const ok = await bunnyUpload(path, Buffer.from(base64, "base64"), mime);
+    return ok ? storagePublicUrl(path) : url;
+  }
+
+  // Hosted provider URL (fal.ai etc.) — download + re-upload so the link
+  // never expires. Mirrors persistVideoToStorage.
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(60_000) });
+    if (!res.ok) {
+      console.warn("[storage] Image download failed:", res.status, url.slice(0, 120));
+      return url;
+    }
+    const body = Buffer.from(await res.arrayBuffer());
+    const mime = res.headers.get("content-type")?.split(";")[0]?.trim() || "image/png";
+    const ext = extFromMime(mime);
+    const path = `${tenantId}/${crypto.randomUUID()}${ext}`;
+    const ok = await bunnyUpload(path, body, mime);
+    return ok ? storagePublicUrl(path) : url;
+  } catch (err) {
+    console.warn("[storage] Image persist error:", err);
+    return url;
+  }
 }
 
 /**

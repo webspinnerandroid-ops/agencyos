@@ -19,6 +19,84 @@ import {
 } from "lucide-react";
 import { ScoreBreakdown } from "@/components/seo/score-breakdown";
 import { RewriteComparisonTable } from "@/components/seo/rewrite-comparison";
+import PublishButton from "@/components/PublishButton";
+
+/**
+ * Minimal, dependency-free markdown → HTML for the formatted view. Escapes
+ * HTML first, then applies the subset the rewriter emits (headings, bold,
+ * italics, lists, images, links, blockquotes, paragraphs).
+ */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function inlineMd(s: string): string {
+  return s
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/__([^_]+)__/g, "<strong>$1</strong>")
+    .replace(/\*([^*\n]+)\*/g, "<em>$1</em>")
+    .replace(/`([^`\n]+)`/g, "<code>$1</code>")
+    .replace(/!\[([^\]]*)\]\(([^)\s]+)(\s+"[^"]*")?\)/g, '<img src="$2" alt="$1" loading="lazy" />')
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+}
+
+function renderMarkdown(md: string): string {
+  const escaped = escapeHtml(md);
+  const lines = escaped.split(/\r?\n/);
+  const out: string[] = [];
+  let list: { tag: string; items: string[] } | null = null;
+
+  const closeList = () => {
+    if (list) {
+      out.push(`<${list.tag}>${list.items.map((i) => `<li>${i}</li>`).join("")}</${list.tag}>`);
+      list = null;
+    }
+  };
+
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) {
+      closeList();
+      const level = h[1].length;
+      out.push(`<h${level}>${inlineMd(h[2])}</h${level}>`);
+      continue;
+    }
+    if (/^\s*[-*+]\s+/.test(line) || /^\s*\d+\.\s+/.test(line)) {
+      const ordered = /^\s*\d+\.\s+/.test(line);
+      const tag = ordered ? "ol" : "ul";
+      const item = line.replace(/^\s*(?:[-*+]|\d+\.)\s+/, "");
+      if (!list || list.tag !== tag) {
+        closeList();
+        list = { tag, items: [] };
+      }
+      list.items.push(inlineMd(item));
+      continue;
+    }
+    if (/^\s*>\s?/.test(line)) {
+      closeList();
+      out.push(`<blockquote>${inlineMd(line.replace(/^\s*>\s?/, ""))}</blockquote>`);
+      continue;
+    }
+    if (/^\s*---\s*$/.test(line) || /^\s*\*\*\*\s*$/.test(line)) {
+      closeList();
+      out.push("<hr />");
+      continue;
+    }
+    if (/^\s*$/.test(line)) {
+      closeList();
+      continue;
+    }
+    closeList();
+    out.push(`<p>${inlineMd(line)}</p>`);
+  }
+  closeList();
+  return out.join("\n");
+}
 
 interface Check {
   id: string;
@@ -34,6 +112,8 @@ interface Check {
 interface RewriteResponse {
   success: boolean;
   saved: boolean;
+  savedPostId?: string | null;
+  postsUrl?: string;
   dashboardUrl: string;
   rewrittenBody: string;
   originalScores: { seo: number | null; aeoGeo: number | null; passed: boolean };
@@ -71,6 +151,8 @@ export default function SeoRewriterPage() {
   const [refining, setRefining] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<RewriteResponse | null>(null);
+  const [viewMode, setViewMode] = useState<"markdown" | "formatted">("formatted");
+  const [copied, setCopied] = useState(false);
 
   // Prefill from "Edit & re-compare" links on the Monitored Sites dashboard.
   useEffect(() => {
@@ -305,21 +387,61 @@ export default function SeoRewriterPage() {
 
           {/* Rewritten body */}
           <Card className="p-5">
-            <div className="flex items-center justify-between gap-2 mb-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
               <h2 className="text-lg font-semibold flex items-center gap-2">
                 <Sparkles className="size-4 text-primary" /> Rewritten content
               </h2>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => navigator.clipboard.writeText(result.rewrittenBody)}
-              >
-                Copy
-              </Button>
+              <div className="flex items-center gap-2 flex-wrap">
+                <div className="flex items-center gap-1 rounded-lg border border-border p-0.5">
+                  <button
+                    onClick={() => setViewMode("formatted")}
+                    className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${viewMode === "formatted" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                  >
+                    Formatted
+                  </button>
+                  <button
+                    onClick={() => setViewMode("markdown")}
+                    className={`px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${viewMode === "markdown" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                  >
+                    Markdown
+                  </button>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={async () => {
+                    const payload =
+                      viewMode === "formatted"
+                        ? renderMarkdown(result.rewrittenBody)
+                        : result.rewrittenBody;
+                    await navigator.clipboard.writeText(payload);
+                    setCopied(true);
+                    setTimeout(() => setCopied(false), 1500);
+                  }}
+                >
+                  {copied ? "Copied!" : viewMode === "formatted" ? "Copy formatted (HTML)" : "Copy markdown"}
+                </Button>
+                {result.savedPostId && (
+                  <PublishButton postId={result.savedPostId} postType="blog" />
+                )}
+              </div>
             </div>
-            <pre className="whitespace-pre-wrap text-sm font-mono bg-muted/50 rounded-md p-4 max-h-96 overflow-y-auto">
-              {result.rewrittenBody}
-            </pre>
+            {viewMode === "formatted" ? (
+              <div
+                className="prose prose-sm dark:prose-invert max-w-none bg-muted/50 rounded-md p-4 max-h-96 overflow-y-auto [&_img]:max-w-full [&_img]:rounded-md [&_h1]:text-xl [&_h2]:text-lg [&_h3]:text-base [&_li]:my-0.5"
+                dangerouslySetInnerHTML={{ __html: renderMarkdown(result.rewrittenBody) }}
+              />
+            ) : (
+              <pre className="whitespace-pre-wrap text-sm font-mono bg-muted/50 rounded-md p-4 max-h-96 overflow-y-auto">
+                {result.rewrittenBody}
+              </pre>
+            )}
+            {result.savedPostId && (
+              <p className="text-xs text-green-600 dark:text-green-400 mt-3">
+                ✦ Saved to Recent Content as a draft — publish it from here or{" "}
+                <a href={result.postsUrl} className="underline">open it in Posts</a>.
+              </p>
+            )}
           </Card>
 
           {/* Targeted re-edit: keep the winner, fix only remaining fails */}

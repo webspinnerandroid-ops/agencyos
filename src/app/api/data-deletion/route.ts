@@ -77,6 +77,15 @@ export async function POST(request: NextRequest) {
       console.warn("[data-deletion] audit insert failed:", err);
     }
 
+    // Email the requester a confirmation (best-effort — the request is
+    // recorded regardless of whether email delivery succeeds).
+    try {
+      const { emailDeletionConfirmation } = await import("@/lib/data-emails");
+      await emailDeletionConfirmation({ toEmail: email, reason: reason || undefined });
+    } catch (err) {
+      console.warn("[data-deletion] confirmation email failed:", err);
+    }
+
     // Alert every super admin so the request gets processed.
     if (auditOk) {
       try {

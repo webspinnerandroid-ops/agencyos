@@ -91,6 +91,9 @@ export default function BrandDesignPage() {
   const [error, setError] = useState<string | null>(null);
   const [buyMoreTokens, setBuyMoreTokens] = useState<string | null>(null);
   const [images, setImages] = useState<GeneratedImage[]>([]);
+  // Previous brand assets saved to the workspace (see /dashboard/assets).
+  const [history, setHistory] = useState<{ id: string; url: string; prompt: string; created_at: string }[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   const set = (key: keyof BrandAnswers, value: unknown) =>
     setAnswers((prev) => ({ ...prev, [key]: value }));
@@ -146,6 +149,29 @@ export default function BrandDesignPage() {
     loadModels();
   }, [loadModels]);
 
+  // Load previously generated brand assets so results are never lost after
+  // leaving the page — they live in the workspace asset library.
+  const loadHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    try {
+      const res = await fetch("/api/assets?type=image&task=brand_design&limit=12", {
+        credentials: "include",
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setHistory(data.assets ?? []);
+      }
+    } catch {
+      // history optional
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadHistory();
+  }, [loadHistory]);
+
   const handleReferenceFile = (file: File | undefined | null) => {
     setReferenceError(null);
     if (!file) return;
@@ -193,6 +219,7 @@ export default function BrandDesignPage() {
         return;
       }
       if (data.images) setImages(data.images);
+      loadHistory();
     } catch (err: any) {
       setError(err.message ?? "An unexpected error occurred");
     } finally {
@@ -487,6 +514,49 @@ export default function BrandDesignPage() {
             )}
           </CardContent>
         </Card>
+      </div>
+
+      {/* -------- Previous brand assets -------- */}
+      <div>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold">Previous brand assets</h2>
+          <a href="/dashboard/assets?kind=brand" className="text-sm text-primary underline hover:underline">
+            Open Asset Library →
+          </a>
+        </div>
+        {historyLoading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="size-5 animate-spin text-muted-foreground" />
+          </div>
+        ) : history.length === 0 ? (
+          <div className="rounded-lg border bg-card p-8 text-center text-muted-foreground">
+            <p className="text-sm">No saved brand assets yet.</p>
+            <p className="text-xs mt-1">
+              Every asset you generate is saved to your workspace — find it here or in the Asset Library.
+            </p>
+          </div>
+        ) : (
+          <div className="grid gap-4 grid-cols-2 sm:grid-cols-3 lg:grid-cols-4">
+            {history.map((h) => (
+              <Card key={h.id} className="overflow-hidden">
+                <div className="aspect-square bg-muted relative">
+                  <img
+                    src={h.url}
+                    alt={h.prompt}
+                    className="w-full h-full object-cover"
+                    onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                  />
+                </div>
+                <div className="p-2.5">
+                  <p className="text-xs text-muted-foreground line-clamp-2" title={h.prompt}>{h.prompt}</p>
+                  <p className="text-[10px] text-muted-foreground mt-1">
+                    {new Date(h.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+                  </p>
+                </div>
+              </Card>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* -------- Results -------- */}

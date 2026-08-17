@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
+import { BuyMoreTokens } from "@/components/dashboard/buy-more-tokens";
 import { Card } from "@/components/ui/card";
 import { Loader2, Download, ImagePlus, Sparkles, Trash2, History, Pencil, Wand2, ImageUp, X, Copy, FolderInput } from "lucide-react";
 import { getWorkspaces, type Workspace } from "@/lib/workspace";
@@ -75,6 +76,7 @@ export default function GenerateImagesPage() {
   const [loading, setLoading] = useState(false);
   const [images, setImages] = useState<GeneratedImage[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [buyMoreTokens, setBuyMoreTokens] = useState<string | null>(null);
   const [recentImages, setRecentImages] = useState<MediaAsset[]>([]);
   const [loadingRecent, setLoadingRecent] = useState(true);
   const [recentError, setRecentError] = useState<string | null>(null);
@@ -247,7 +249,8 @@ export default function GenerateImagesPage() {
       const data = await res.json();
 
       if (!res.ok) {
-        setError(data.error ?? "Failed to generate images");
+        if (data.buyMoreTokens) setBuyMoreTokens(data.error ?? null);
+        else setError(data.error ?? "Failed to generate images");
         return;
       }
 
@@ -551,6 +554,8 @@ export default function GenerateImagesPage() {
               {error && (
                 <div className="p-3 rounded-md bg-destructive/10 text-destructive text-sm">{error}</div>
               )}
+
+              {buyMoreTokens && <BuyMoreTokens message={buyMoreTokens} />}
 
               {enhanceError && (
                 <div className="p-3 rounded-md bg-destructive/10 text-destructive text-sm">{enhanceError}</div>

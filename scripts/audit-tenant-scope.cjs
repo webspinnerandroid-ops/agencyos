@@ -91,6 +91,7 @@ const IGNORE = new Set([
   "src/lib/tenant.ts",
   // Callers verify tenant via session before the by-id lookup
   "src/app/api/billing/route.ts",
+  "src/app/api/billing/topup/route.ts",
   "src/app/dashboard/settings/white-label/actions.ts",
   "src/app/dashboard/settings/ai/actions.ts",
   // Client-scoped by design (client boundary, not tenant)

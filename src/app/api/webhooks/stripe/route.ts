@@ -35,6 +35,18 @@ async function handleCheckoutSessionCompleted(session: Stripe.Checkout.Session) 
   }
 
   // ------------------------------------------------------------------
+  // Token add-on top-up: credit the tenant's prepaid balance.
+  // ------------------------------------------------------------------
+  if (session.metadata?.kind === "token_topup") {
+    const amount = Number(session.metadata.addon_amount_usd ?? 0);
+    if (amount > 0) {
+      const { creditAddonPurchase } = await import("@/lib/token-billing");
+      await creditAddonPurchase(tenantId, amount, session.metadata.addon_label ?? "Token add-on");
+    }
+    return;
+  }
+
+  // ------------------------------------------------------------------
   // Hub purchase (hub-and-spoke): add the hub to the tenant's settings so
   // usage limits expand immediately. bundle_3 grants the any-3 bundle.
   // ------------------------------------------------------------------

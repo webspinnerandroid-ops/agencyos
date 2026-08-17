@@ -5,6 +5,7 @@ import { incrementUsage } from "@/lib/usage";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getCurrentWorkspaceId } from "@/lib/workspace";
 import { checkUsageLimit } from "@/lib/plan-limits";
+import { checkTokenBalance } from "@/lib/token-billing";
 import { rateLimitRequest } from "@/lib/rate-limit";
 import { persistImageToStorage } from "@/lib/media/storage";
 import { checkTrialContentLimit } from "@/lib/trial-limits";
@@ -36,6 +37,15 @@ export async function POST(request: NextRequest) {
     const plan = await checkUsageLimit(tenantId, "image_generations");
     if (!plan.allowed) {
       return NextResponse.json({ error: plan.reason ?? "Monthly image limit reached" }, { status: 429 });
+    }
+
+    // Token-billing balance gate (402 + buyMoreTokens when exhausted).
+    const bal = await checkTokenBalance(tenantId);
+    if (!bal.allowed) {
+      return NextResponse.json(
+        { error: bal.reason, buyMoreTokens: true, balance: bal.balance },
+        { status: 402 }
+      );
     }
 
     let body: { prompt: string; size?: string; n?: number; clientId?: string; referenceImage?: string; task?: string; modelId?: string };

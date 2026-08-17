@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
+import { BuyMoreTokens } from "@/components/dashboard/buy-more-tokens";
 import { Card } from "@/components/ui/card";
 import {
   Loader2,
@@ -98,6 +99,7 @@ export default function GenerateVideosPage() {
   const [enhanceError, setEnhanceError] = useState<string | null>(null);
   const [videos, setVideos] = useState<VideoAsset[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [buyMoreTokens, setBuyMoreTokens] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"generate" | "library">("generate");
   const [libraryLoading, setLibraryLoading] = useState(true);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -270,7 +272,8 @@ export default function GenerateVideosPage() {
       });
       const data = await res.json();
       if (!res.ok) {
-        setError(data.error ?? "Failed to generate video");
+        if (data.buyMoreTokens) setBuyMoreTokens(data.error ?? null);
+        else setError(data.error ?? "Failed to generate video");
         return;
       }
       setActiveTab("library");
@@ -726,6 +729,8 @@ export default function GenerateVideosPage() {
               {error && (
                 <div className="p-3 rounded-md bg-destructive/10 text-destructive text-sm">{error}</div>
               )}
+
+              {buyMoreTokens && <BuyMoreTokens message={buyMoreTokens} />}
 
               <Button onClick={handleGenerate} disabled={loading || !prompt.trim()} className="w-full sm:w-auto">
                 {loading ? (

@@ -140,7 +140,29 @@ export async function GET(_request: NextRequest) {
       active: hubs.includes(h.id),
     })),
     hubBundlePrice: HUB_BUNDLE_3_PRICE,
+    // Token add-on packs + current balance for the buy-more-tokens flow.
+    tokenAddons: await getTokenAddons(),
+    tokenBalance: await getTokenBalanceForTenant(tenantId),
   });
+}
+
+async function getTokenAddons(): Promise<Array<{ id: string; label: string; price_usd: number }>> {
+  try {
+    const supabase = await createServiceClient();
+    const { data } = await supabase
+      .from("token_addons")
+      .select("id, label, price_usd")
+      .eq("active", true)
+      .order("sort_order", { ascending: true });
+    return (data ?? []) as Array<{ id: string; label: string; price_usd: number }>;
+  } catch {
+    return [];
+  }
+}
+
+async function getTokenBalanceForTenant(tenantId: string) {
+  const { getTokenBalance } = await import("@/lib/token-billing");
+  return getTokenBalance(tenantId);
 }
 
 // ------------------------------------------------------------------

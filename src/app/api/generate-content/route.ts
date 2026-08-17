@@ -22,6 +22,7 @@ import {
 import { rateLimitRequest } from "@/lib/rate-limit";
 import { checkTrialContentLimit } from "@/lib/trial-limits";
 import { checkUsageLimit } from "@/lib/plan-limits";
+import { checkTokenBalance } from "@/lib/token-billing";
 import { persistImageToStorage } from "@/lib/media/storage";
 import {
   MAX_BLOG_IMAGES,
@@ -325,6 +326,23 @@ export async function POST(request: NextRequest) {
     // ------------------------------------------------------------------
     const tenantId = await getTenantId();
     await requireRole("agency_editor");
+
+    // ------------------------------------------------------------------
+    // 1.5 Token-billing balance gate — when the monthly allowance + add-on
+    // balance are exhausted, return a structured "buy more tokens" response
+    // instead of silently failing mid-generation.
+    // ------------------------------------------------------------------
+    const bal = await checkTokenBalance(tenantId);
+    if (!bal.allowed) {
+      return NextResponse.json(
+        {
+          error: bal.reason,
+          buyMoreTokens: true,
+          balance: bal.balance,
+        },
+        { status: 402 }
+      );
+    }
 
     // ------------------------------------------------------------------
     // 2. Parse & validate body

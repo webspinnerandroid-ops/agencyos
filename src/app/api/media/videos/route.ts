@@ -3,6 +3,7 @@ import { createVideoAsset, listMediaAssets } from "@/lib/media/flux";
 import { getTenantId } from "@/lib/auth";
 import { checkTrialContentLimit } from "@/lib/trial-limits";
 import { checkUsageLimit } from "@/lib/plan-limits";
+import { checkTokenBalance } from "@/lib/token-billing";
 import { buildWorkspacePromptContext, augmentPromptWithContext } from "@/lib/ai/workspace-context";
 
 export async function GET(request: NextRequest) {
@@ -36,6 +37,15 @@ export async function POST(request: NextRequest) {
     const plan = await checkUsageLimit(tenantId, "video_generations");
     if (!plan.allowed) {
       return NextResponse.json({ error: plan.reason ?? "Monthly video limit reached" }, { status: 429 });
+    }
+
+    // Token-billing balance gate (402 + buyMoreTokens when exhausted).
+    const bal = await checkTokenBalance(tenantId);
+    if (!bal.allowed) {
+      return NextResponse.json(
+        { error: bal.reason, buyMoreTokens: true, balance: bal.balance },
+        { status: 402 }
+      );
     }
 
     const body = await request.json();

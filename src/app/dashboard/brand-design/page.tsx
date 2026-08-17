@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { BuyMoreTokens } from "@/components/dashboard/buy-more-tokens";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Palette, Sparkles, Download, ImageUp, X, BookOpen } from "lucide-react";
@@ -88,6 +89,7 @@ export default function BrandDesignPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [buyMoreTokens, setBuyMoreTokens] = useState<string | null>(null);
   const [images, setImages] = useState<GeneratedImage[]>([]);
 
   const set = (key: keyof BrandAnswers, value: unknown) =>
@@ -186,7 +188,8 @@ export default function BrandDesignPage() {
       });
       const data = await res.json();
       if (!res.ok) {
-        setError(data.error ?? "Failed to generate brand assets.");
+        if (data.buyMoreTokens) setBuyMoreTokens(data.error ?? null);
+        else setError(data.error ?? "Failed to generate brand assets.");
         return;
       }
       if (data.images) setImages(data.images);
@@ -463,6 +466,8 @@ export default function BrandDesignPage() {
             {error && (
               <div className="p-3 rounded-md bg-destructive/10 text-destructive text-sm">{error}</div>
             )}
+
+            {buyMoreTokens && <BuyMoreTokens message={buyMoreTokens} />}
 
             <Button
               onClick={handleGenerate}

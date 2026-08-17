@@ -5,6 +5,7 @@ import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { generateContentSchema, type GenerateContentInput } from "@/lib/validations";
 import { Button } from "@/components/ui/button";
+import { BuyMoreTokens } from "@/components/dashboard/buy-more-tokens";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -130,6 +131,7 @@ export default function GeneratePage() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<GenerateResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [buyMoreTokens, setBuyMoreTokens] = useState<string | null>(null);
   const [keywordsText, setKeywordsText] = useState("");
   const [imageCount, setImageCount] = useState(1);
   const [imageSource, setImageSource] = useState<"generate" | "upload">("generate");
@@ -255,7 +257,8 @@ export default function GeneratePage() {
       const json = await res.json();
 
       if (!res.ok) {
-        setError(json.error ?? "Generation failed");
+        if (json.buyMoreTokens) setBuyMoreTokens(json.error ?? null);
+        else setError(json.error ?? "Generation failed");
         return;
       }
 
@@ -598,6 +601,11 @@ export default function GeneratePage() {
             </Button>
             {error && (
               <p className="text-sm text-destructive w-full">{error}</p>
+            )}
+            {buyMoreTokens && (
+              <div className="w-full">
+                <BuyMoreTokens message={buyMoreTokens} />
+              </div>
             )}
           </CardFooter>
         </form>

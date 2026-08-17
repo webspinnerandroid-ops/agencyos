@@ -48,12 +48,28 @@ interface HubInfo {
   active: boolean;
 }
 
+interface TokenAddon {
+  id: string;
+  label: string;
+  price_usd: number;
+}
+
+interface TokenBalanceInfo {
+  enforced: boolean;
+  monthlyAllowanceUsd: number;
+  usedThisCycleUsd: number;
+  addonBalanceUsd: number;
+  remainingUsd: number;
+}
+
 interface BillingData {
   subscription: SubscriptionInfo | null;
   usage: UsageMetric[];
   invoices: Invoice[];
   hubs: HubInfo[];
   hubBundlePrice: number;
+  tokenAddons: TokenAddon[];
+  tokenBalance: TokenBalanceInfo | null;
 }
 
 const PLANS = [
@@ -233,6 +249,31 @@ export default function BillingPage() {
       window.location.href = url;
     } catch (err) {
       setStatusMessage(err instanceof Error ? err.message : "Failed to start hub checkout");
+    } finally {
+      setCheckoutLoading(null);
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Token top-up checkout (one-off Stripe payment for prepaid balance)
+  // ------------------------------------------------------------------
+  async function handleTopupCheckout(addonId: string) {
+    try {
+      setCheckoutLoading("topup_" + addonId);
+      const res = await fetch("/api/billing/topup", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ addonId }),
+      });
+      if (!res.ok) {
+        const msg = await res.json().then((j) => j.error).catch(() => "Failed to start top-up checkout");
+        throw new Error(msg);
+      }
+      const { url } = (await res.json()) as { url: string };
+      window.location.href = url;
+    } catch (err) {
+      setStatusMessage(err instanceof Error ? err.message : "Failed to start top-up checkout");
     } finally {
       setCheckoutLoading(null);
     }
@@ -631,6 +672,57 @@ export default function BillingPage() {
                 {checkoutLoading === "bundle" ? "Loading…" : `Get 3 hubs for $${data!.hubBundlePrice}/mo`}
               </button>
             </div>
+          </div>
+        )}
+      </section>
+
+      {/* Token Top-Up — prepaid AI balance (min $20 USD) */}
+      <section>
+        <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+          <div>
+            <h2 className="text-lg font-semibold">AI Token Balance</h2>
+            <p className="text-sm text-muted-foreground mt-0.5">
+              Usage is billed per token per model. Your monthly allowance is
+              used first; when it runs out, generation pauses until you add
+              prepaid tokens (min $20 USD).
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-4">
+          <div className="rounded-lg border bg-card p-4">
+            <p className="text-sm font-medium text-muted-foreground">Monthly allowance</p>
+            <p className="text-2xl font-bold tracking-tight">${(data!.tokenBalance?.monthlyAllowanceUsd ?? 0).toFixed(2)}</p>
+          </div>
+          <div className="rounded-lg border bg-card p-4">
+            <p className="text-sm font-medium text-muted-foreground">Used this cycle</p>
+            <p className="text-2xl font-bold tracking-tight">${(data!.tokenBalance?.usedThisCycleUsd ?? 0).toFixed(2)}</p>
+          </div>
+          <div className="rounded-lg border bg-card p-4">
+            <p className="text-sm font-medium text-muted-foreground">Prepaid balance</p>
+            <p className="text-2xl font-bold tracking-tight">${(data!.tokenBalance?.addonBalanceUsd ?? 0).toFixed(2)}</p>
+          </div>
+        </div>
+
+        {data!.tokenAddons.length > 0 ? (
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+            {data!.tokenAddons.map((addon) => (
+              <div key={addon.id} className="rounded-lg border bg-card p-4 flex flex-col items-center text-center gap-2">
+                <span className="text-2xl font-bold">${addon.price_usd.toFixed(2)}</span>
+                <span className="text-xs text-muted-foreground">{addon.label}</span>
+                <button
+                  onClick={() => handleTopupCheckout(addon.id)}
+                  disabled={checkoutLoading === "topup_" + addon.id}
+                  className="mt-1 inline-flex items-center justify-center rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-40 transition-colors"
+                >
+                  {checkoutLoading === "topup_" + addon.id ? "Loading…" : "Add tokens"}
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+            No add-on packs configured yet — the super admin can set them on the Admin page.
           </div>
         )}
       </section>

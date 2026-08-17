@@ -98,6 +98,18 @@ export async function createNotification(
     } catch (err) {
       console.warn("[in-app-notifications] telegram mirror failed:", err);
     }
+    try {
+      const { discordNotify } = await import("@/lib/discord");
+      void discordNotify({
+        tenantId: input.tenantId,
+        kind: input.kind ?? "info",
+        title: input.title,
+        body: input.body,
+        link: input.link,
+      });
+    } catch (err) {
+      console.warn("[in-app-notifications] discord mirror failed:", err);
+    }
   } catch (err) {
     console.warn("[in-app-notifications] create failed:", err);
   }

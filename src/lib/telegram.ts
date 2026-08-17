@@ -48,6 +48,53 @@ export function getTelegramWebhookSecret(): string {
   return token ? `wb_${token.slice(-24)}` : "wb_unset";
 }
 
+/** Resolve a Telegram file_id → direct download URL (for photo uploads). */
+export async function getTelegramFileUrl(fileId: string): Promise<string | null> {
+  const token = getTelegramBotToken();
+  if (!token) return null;
+  try {
+    const res = await fetch(`${API}/bot${token}/getFile`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ file_id: fileId }),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as { ok?: boolean; result?: { file_path?: string } };
+    const path = json.result?.file_path;
+    if (json.ok !== true || !path) return null;
+    return `${API}/file/bot${token}/${path}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Send a plain conversational message to every Telegram chat bound to this
+ * user (or the whole tenant when no user is targeted). Unlike telegramNotify,
+ * this ignores alert-only mode — a direct chat reply is a conversation, not a
+ * notification burst. Never throws.
+ */
+export async function telegramSendToUser(
+  tenantId: string,
+  userId: string | null,
+  text: string
+): Promise<void> {
+  if (!getTelegramBotToken()) return;
+  try {
+    const supabase = await createServiceClient();
+    let query = supabase.from("telegram_links").select("chat_id").eq("tenant_id", tenantId);
+    if (userId) query = query.eq("user_id", userId);
+    const { data, error } = await query;
+    if (error || !data || data.length === 0) return;
+    for (const row of data as { chat_id: string }[]) {
+      void sendTelegramMessage(row.chat_id, text);
+    }
+  } catch (err) {
+    console.warn("[telegram] sendToUser failed:", err);
+  }
+}
+
 /** getMe — the bot's username, needed for the t.me/<bot>?start=CODE link. */
 export async function getTelegramBotInfo(): Promise<{
   username: string | null;

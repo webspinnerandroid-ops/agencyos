@@ -69,6 +69,7 @@ import { checkUsageLimit } from "@/lib/plan-limits";
 import { extractClientFromMessage } from "@/lib/ai/client-extract";
 import { createCampaignPlan } from "@/lib/campaign-plans";
 import { createNotification } from "@/lib/in-app-notifications";
+import { telegramSendToUser } from "@/lib/telegram";
 
 // ----------------------------------------------------------------------------
 // Payload + result types
@@ -2298,6 +2299,15 @@ export async function processTeamTask(payload: TeamTaskPayload): Promise<void> {
       replyContent,
       replyMeta,
     });
+
+    // Mirror the reply to every Telegram chat bound to this tenant so the
+    // conversation continues from the phone. Chats are tenant-scoped (not
+    // per-user), so send to all bound chats. Fire-and-forget.
+    void telegramSendToUser(
+      tenantId,
+      null,
+      `💬 ${employeeDisplayName}:\n${replyContent.length > 1800 ? replyContent.slice(0, 1800) + "…" : replyContent}`
+    );
 
     // Any conversation held with an employee in a room/team chat is also
     // mirrored into their DM chat so it can be found under Direct Messages.

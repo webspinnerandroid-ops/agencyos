@@ -3,10 +3,12 @@ import { createServiceClient } from "@/lib/supabase/server";
 import {
   bindTelegramChatByCode,
   getTelegramBotToken,
+  getTelegramFileUrl,
   sendTelegramMessage,
   unlinkTelegram,
 } from "@/lib/telegram";
 import { enqueueOrRun } from "@/lib/ai/team-task";
+import { persistImageToStorage } from "@/lib/media/storage";
 
 /**
  * POST /api/telegram/webhook
@@ -45,6 +47,8 @@ export async function POST(request: NextRequest) {
     message?: {
       chat?: { id?: number };
       text?: string;
+      caption?: string;
+      photo?: { file_id: string; width: number; height: number }[];
       from?: { id?: number; username?: string; first_name?: string };
     };
   };
@@ -61,6 +65,28 @@ export async function POST(request: NextRequest) {
   }
   const text = (msg.text ?? "").trim();
   const chatIdStr = String(chatId);
+
+  // ---- Photo / image upload ------------------------------------------
+  // The largest photo in the array is the original. Download it, persist to
+  // the workspace's Bunny zone, and store it as an image asset (filed under
+  // the user's first workspace). A caption becomes the asset prompt.
+  if (Array.isArray(msg.photo) && msg.photo.length > 0) {
+    const link = await findLinkByChatId(chatIdStr);
+    if (!link) {
+      await sendTelegramMessage(
+        chatIdStr,
+        "You're not connected yet. Open the app → Settings → Telegram and tap Connect first."
+      );
+      return NextResponse.json({ ok: true });
+    }
+    void saveTelegramPhoto({
+      chatIdStr,
+      tenantId: link.tenant_id,
+      fileId: msg.photo[msg.photo.length - 1].file_id,
+      caption: msg.caption,
+    });
+    return NextResponse.json({ ok: true });
+  }
 
   // ---- /start <code> — the connect flow --------------------------------
   const startMatch = text.match(/^\/start\s+([A-Za-z0-9]+)/);
@@ -131,6 +157,54 @@ export async function POST(request: NextRequest) {
   });
 
   return NextResponse.json({ ok: true });
+}
+
+/** Download a Telegram photo, persist it, and store it as an image asset. */
+async function saveTelegramPhoto(input: {
+  chatIdStr: string;
+  tenantId: string;
+  fileId: string;
+  caption?: string;
+}): Promise<void> {
+  try {
+    const fileUrl = await getTelegramFileUrl(input.fileId);
+    if (!fileUrl) {
+      await sendTelegramMessage(input.chatIdStr, "Couldn't fetch that image — please try again.");
+      return;
+    }
+    const supabase = await createServiceClient();
+    const { data: workspace } = await supabase
+      .from("workspaces")
+      .select("id")
+      .eq("tenant_id", input.tenantId)
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    const url = await persistImageToStorage(input.tenantId, fileUrl);
+    const prompt = (input.caption ?? "Telegram upload").trim().slice(0, 500) || "Telegram upload";
+    const { error } = await supabase.from("media_assets").insert({
+      tenant_id: input.tenantId,
+      client_id: null,
+      workspace_id: workspace?.id ?? null,
+      type: "image",
+      prompt,
+      url,
+      metadata: { source: "telegram", width: null, height: null },
+      status: "completed",
+    });
+    if (error) {
+      console.warn("[telegram] savePhoto asset insert failed:", error.message);
+      await sendTelegramMessage(input.chatIdStr, "Image saved, but I couldn't file it in the library.");
+      return;
+    }
+    await sendTelegramMessage(
+      input.chatIdStr,
+      "📎 Image saved to your Asset Library (Images tab)."
+    );
+  } catch (err) {
+    console.error("[telegram] savePhoto failed:", err);
+    await sendTelegramMessage(input.chatIdStr, "Couldn't save that image — please try again.");
+  }
 }
 
 async function findLinkByChatId(chatId: string) {

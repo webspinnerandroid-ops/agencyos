@@ -1248,13 +1248,27 @@ function parseFalImages(result: unknown): GeneratedImage[] {
   return out;
 }
 
+// fal image models (Recraft V3, FLUX, GPT Image, etc.) cap the `prompt` field
+// at 1000 characters and return HTTP 422 when it's exceeded. The generate-image
+// route appends workspace brand profile + knowledgebase context and the caller
+// appends demographic guidance, so a long brand-design brief easily blows past
+// the limit. Fit the prompt under the cap, keeping the head (the user's brief)
+// and trimming the appended context/guidance that follows it.
+const FAL_IMAGE_PROMPT_LIMIT = 1000;
+
+function fitFalImagePrompt(prompt: string): string {
+  if (prompt.length <= FAL_IMAGE_PROMPT_LIMIT) return prompt;
+  return prompt.slice(0, FAL_IMAGE_PROMPT_LIMIT).trimEnd();
+}
+export { fitFalImagePrompt };
+
 async function callFalImageAPI(
   resolution: ModelResolution,
   prompt: string,
   options?: { size?: string; n?: number; referenceImage?: string; task?: AITask }
 ): Promise<GeneratedImage[]> {
   const endpoint = `${resolution.providerBaseUrl}/${resolution.model}`;
-  const body: Record<string, unknown> = { prompt };
+  const body: Record<string, unknown> = { prompt: fitFalImagePrompt(prompt) };
 
   // Recraft V3 is a single-image model with its own knobs. Its `vector_illustration`
   // style is what brand/vector design work wants (2x cost). Other fal models take

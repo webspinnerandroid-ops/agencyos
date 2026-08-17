@@ -5,6 +5,7 @@ import {
   getTelegramBotToken,
   getTelegramFileUrl,
   sendTelegramMessage,
+  setTelegramActiveWorkspace,
   unlinkTelegram,
 } from "@/lib/telegram";
 import { enqueueOrRun } from "@/lib/ai/team-task";
@@ -82,6 +83,7 @@ export async function POST(request: NextRequest) {
     void saveTelegramPhoto({
       chatIdStr,
       tenantId: link.tenant_id,
+      workspaceId: link.active_workspace_id ?? null,
       fileId: msg.photo[msg.photo.length - 1].file_id,
       caption: msg.caption,
     });
@@ -115,10 +117,22 @@ export async function POST(request: NextRequest) {
       chatIdStr,
       "👋 This is your Agency OS bot.\n\n" +
         "/status — your latest unread notifications\n" +
+        "/workspaces — list and switch workspaces\n" +
         "/unbind — disconnect this chat\n" +
         "Any other message is forwarded to your AI team (Malory & co).",
       { parseMode: "Markdown" }
     );
+    return NextResponse.json({ ok: true });
+  }
+
+  if (text === "/workspaces") {
+    await listWorkspaces(chatIdStr);
+    return NextResponse.json({ ok: true });
+  }
+
+  const workspaceMatch = text.match(/^\/workspace\s+(.+)$/);
+  if (workspaceMatch) {
+    await selectWorkspace(chatIdStr, workspaceMatch[1].trim());
     return NextResponse.json({ ok: true });
   }
 
@@ -152,7 +166,7 @@ export async function POST(request: NextRequest) {
   void forwardToTeamRoom({
     chatIdStr,
     tenantId: link.tenant_id,
-    userId: link.user_id,
+    workspaceId: link.active_workspace_id ?? null,
     text,
   });
 
@@ -163,6 +177,7 @@ export async function POST(request: NextRequest) {
 async function saveTelegramPhoto(input: {
   chatIdStr: string;
   tenantId: string;
+  workspaceId: string | null;
   fileId: string;
   caption?: string;
 }): Promise<void> {
@@ -173,19 +188,13 @@ async function saveTelegramPhoto(input: {
       return;
     }
     const supabase = await createServiceClient();
-    const { data: workspace } = await supabase
-      .from("workspaces")
-      .select("id")
-      .eq("tenant_id", input.tenantId)
-      .order("created_at", { ascending: true })
-      .limit(1)
-      .maybeSingle();
+    const workspaceId = (await resolveWorkspaceId(input.tenantId, input.workspaceId)) ?? null;
     const url = await persistImageToStorage(input.tenantId, fileUrl);
     const prompt = (input.caption ?? "Telegram upload").trim().slice(0, 500) || "Telegram upload";
     const { error } = await supabase.from("media_assets").insert({
       tenant_id: input.tenantId,
       client_id: null,
-      workspace_id: workspace?.id ?? null,
+      workspace_id: workspaceId,
       type: "image",
       prompt,
       url,
@@ -215,7 +224,113 @@ async function findLinkByChatId(chatId: string) {
     .eq("chat_id", chatId)
     .maybeSingle();
   if (error || !data) return null;
-  return data as { user_id: string; tenant_id: string };
+  return data as {
+    user_id: string;
+    tenant_id: string;
+    active_workspace_id?: string | null;
+  };
+}
+
+/** The active workspace id, or the tenant's first workspace as a fallback. */
+async function resolveWorkspaceId(
+  tenantId: string,
+  preferredId: string | null
+): Promise<string | null> {
+  const supabase = await createServiceClient();
+  if (preferredId) {
+    const { data } = await supabase
+      .from("workspaces")
+      .select("id")
+      .eq("id", preferredId)
+      .eq("tenant_id", tenantId)
+      .maybeSingle();
+    if (data) return data.id;
+  }
+  const { data: first } = await supabase
+    .from("workspaces")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .order("created_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  return first?.id ?? null;
+}
+
+/** /workspaces — list the tenant's workspaces with numbers to switch to. */
+async function listWorkspaces(chatId: string) {
+  const supabase = await createServiceClient();
+  const link = await findLinkByChatId(chatId);
+  if (!link) {
+    await sendTelegramMessage(chatId, "You aren't connected to an app account yet.");
+    return;
+  }
+  const { data, error } = await supabase
+    .from("workspaces")
+    .select("id, name")
+    .eq("tenant_id", link.tenant_id)
+    .order("created_at", { ascending: true });
+  if (error || !data || data.length === 0) {
+    await sendTelegramMessage(chatId, "No workspaces found for your account.");
+    return;
+  }
+  const current = link.active_workspace_id;
+  const lines = data.map((w, i) => {
+    const mark = w.id === current ? " ✅ (current)" : "";
+    return `${i + 1}. ${w.name ?? "Workspace"}${mark}`;
+  });
+  await sendTelegramMessage(
+    chatId,
+    `*Your workspaces:*\n${lines.join("\n")}\n\nReply /workspace <number> to switch.`,
+    { parseMode: "Markdown" }
+  );
+}
+
+/** /workspace <n|name> — set the active workspace for this chat. */
+async function selectWorkspace(chatId: string, arg: string) {
+  const supabase = await createServiceClient();
+  const link = await findLinkByChatId(chatId);
+  if (!link) {
+    await sendTelegramMessage(chatId, "You aren't connected to an app account yet.");
+    return;
+  }
+  const { data, error } = await supabase
+    .from("workspaces")
+    .select("id, name")
+    .eq("tenant_id", link.tenant_id)
+    .order("created_at", { ascending: true });
+  if (error || !data || data.length === 0) {
+    await sendTelegramMessage(chatId, "No workspaces found for your account.");
+    return;
+  }
+
+  let target = data[0];
+  const n = Number.parseInt(arg, 10);
+  if (!Number.isNaN(n) && n >= 1 && n <= data.length) {
+    target = data[n - 1];
+  } else {
+    const byName = data.find(
+      (w) => (w.name ?? "").toLowerCase() === arg.toLowerCase()
+    );
+    if (byName) target = byName;
+    else {
+      await sendTelegramMessage(
+        chatId,
+        `Couldn't find "${arg}". Use /workspaces to see the list.`
+      );
+      return;
+    }
+  }
+
+  const res = await setTelegramActiveWorkspace(chatId, target.id);
+  if (!res.ok) {
+    await sendTelegramMessage(chatId, `❌ ${res.error ?? "Couldn't switch workspace."}`);
+    return;
+  }
+  await sendTelegramMessage(
+    chatId,
+    `✅ Active workspace is now *${target.name ?? "Workspace"}*. New messages go to that workspace's Team Room.`,
+    { parseMode: "Markdown" }
+  );
 }
 
 /** /status — the user's 5 most recent unread notifications. */
@@ -259,22 +374,15 @@ async function replyWithStatus(chatId: string) {
 async function forwardToTeamRoom(input: {
   chatIdStr: string;
   tenantId: string;
-  userId: string;
+  workspaceId: string | null;
   text: string;
 }): Promise<void> {
   try {
     const supabase = await createServiceClient();
 
-    // The tenant's first workspace (or null when none exist — the pipeline
-    // tolerates that).
-    const { data: workspace } = await supabase
-      .from("workspaces")
-      .select("id")
-      .eq("tenant_id", input.tenantId)
-      .order("created_at", { ascending: true })
-      .limit(1)
-      .maybeSingle();
-    const workspaceId = workspace?.id ?? null;
+    // The chat's active workspace (set via /workspace), else the tenant's
+    // first workspace — or null when none exist (the pipeline tolerates that).
+    const workspaceId = await resolveWorkspaceId(input.tenantId, input.workspaceId);
 
     // Find-or-create the Team Room for that workspace.
     let { data: room } = await supabase

@@ -281,6 +281,30 @@ export async function bindTelegramChatByCode(
   }
 }
 
+/** Set the active workspace for a bound Telegram chat. */
+export async function setTelegramActiveWorkspace(
+  chatId: string,
+  workspaceId: string | null
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const supabase = await createServiceClient();
+    const { error } = await supabase
+      .from("telegram_links")
+      .update({ active_workspace_id: workspaceId })
+      .eq("chat_id", chatId);
+    if (error) {
+      // Column not applied yet (migration 080 pending) — fail with a clear message.
+      if (/active_workspace_id/.test(error.message)) {
+        return { ok: false, error: "Workspace selection isn't enabled yet — apply migration 080." };
+      }
+      return { ok: false, error: error.message };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+}
+
 /** Remove the user's Telegram binding (disconnect). */
 export async function unlinkTelegram(
   userId: string,

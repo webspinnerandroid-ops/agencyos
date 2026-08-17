@@ -83,6 +83,20 @@ export function emailDeletionConfirmation(params: {
   });
 }
 
+/** Confirmation that the account was actually deleted (sent after the fact). */
+export function emailDeletionComplete(params: {
+  toEmail: string;
+}): Promise<EmailSendResult> {
+  return sendResend({
+    to: params.toEmail,
+    subject: "Your account and data have been deleted",
+    html: `<p>Hi,</p>
+      <p>As requested, your account and associated data have now been <strong>permanently deleted</strong> from our systems.</p>
+      <p>You will no longer be able to sign in, and any remaining data tied to the account has been removed.</p>
+      <p style="color:#666;font-size:13px;">If this wasn't you, contact support immediately.</p>`,
+  });
+}
+
 /** Summary to super admins when a deletion request has been processed. */
 export function emailDeletionProcessed(params: {
   toEmail: string;

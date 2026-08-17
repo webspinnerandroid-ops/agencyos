@@ -3,6 +3,7 @@
 import { createServiceClient } from "@/lib/supabase/server";
 import { getTenantId, getRole, getUserEmail } from "@/lib/auth";
 import { createNotification } from "@/lib/in-app-notifications";
+import { emailDeletionComplete } from "@/lib/data-emails";
 
 /** Append an entry to the license audit log (best-effort, never fails the op). */
 async function auditLicense(
@@ -861,6 +862,12 @@ export async function deleteUser(userId: string): Promise<ActionResponse> {
       targetLabel: targetEmail ?? userId,
       details: { rolesRemoved: (theirRoles ?? []).map((r) => r.role) },
     });
+
+    // Tell the person whose account was deleted (not just the admin summary) —
+    // best-effort, never blocks or fails the deletion.
+    if (targetEmail) {
+      void emailDeletionComplete({ toEmail: targetEmail }).catch(() => {});
+    }
     return { success: true };
   } catch (err) {
     return { success: false, error: (err as Error).message };
@@ -944,8 +951,13 @@ export async function deleteTenant(
         .eq("user_id", userId)
         .limit(1);
       if (!remaining || remaining.length === 0) {
+        const email = await getUserEmailById(supabase, userId);
         const { error: authError } = await supabase.auth.admin.deleteUser(userId);
-        if (!authError) deletedAccounts++;
+        if (!authError) {
+          deletedAccounts++;
+          // Confirm the deletion to the account owner, not just the admins.
+          if (email) void emailDeletionComplete({ toEmail: email }).catch(() => {});
+        }
       }
     }
 

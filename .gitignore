@@ -80,6 +80,7 @@ scripts/*.cjs
 !scripts/manual-traffic-sync.cjs
 !scripts/sanitize-seo-campaigns.cjs
 !scripts/sync-site-domains.cjs
+!scripts/backfill-assets.cjs
 # Committed bundle for the nightly price-drift check (built from .ts via
 # esbuild; kept tracked so the CI job runs it without a build step).
 !scripts/check-price-drift.cjs

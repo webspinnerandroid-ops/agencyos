@@ -19,6 +19,7 @@ import {
   FolderInput,
   X,
   Check,
+  Wand2,
 } from "lucide-react";
 
 interface Asset {
@@ -189,6 +190,80 @@ export default function AssetsPage() {
     }
   };
 
+  // Pick the folder whose name best matches this asset's prompt (or a known
+  // deliverable keyword) so one click files the asset instead of a manual
+  // select+apply dance. Returns null when nothing matches.
+  const suggestFolder = (prompt: string, list: Folder[]): Folder | null => {
+    const p = (prompt || "").toLowerCase();
+    const words = new Set(p.split(/[^a-z0-9]+/).filter((w) => w.length > 2));
+    const KEYWORD_MAP: Record<string, string> = {
+      logo: "logo",
+      icon: "icon",
+      "brand mark": "logo",
+      mockup: "mockup",
+      website: "mockup",
+      ui: "mockup",
+      social: "social",
+      instagram: "social",
+      packaging: "packaging",
+      label: "packaging",
+      guideline: "guidelines",
+      "brand book": "guidelines",
+      banner: "social",
+      ad: "social",
+      flyer: "print",
+      poster: "print",
+      brochure: "print",
+      business: "print",
+      card: "print",
+      video: "video",
+      thumbnail: "video",
+    };
+    let best: Folder | null = null;
+    let bestScore = 0;
+    for (const f of list) {
+      const name = f.name.toLowerCase();
+      let score = 0;
+      if (name && p.includes(name)) {
+        score = 100 + name.length;
+      } else {
+        for (const w of name.split(/[^a-z0-9]+/)) {
+          if (w.length > 2 && words.has(w)) score += 10 + w.length;
+        }
+      }
+      const keyword = Object.entries(KEYWORD_MAP).find(([k]) => p.includes(k));
+      if (keyword && name.includes(keyword[1])) score += 20;
+      if (score > bestScore) {
+        bestScore = score;
+        best = f;
+      }
+    }
+    return bestScore > 0 ? best : null;
+  };
+
+  const autoFile = async (asset: Asset) => {
+    const target = suggestFolder(asset.prompt, foldersForKind);
+    if (!target) {
+      setError("No matching folder yet — create one (or a folder named after the deliverable) first.");
+      return;
+    }
+    await moveAsset(asset, target.id);
+  };
+
+  const onDragStart = (e: React.DragEvent, assetId: string) => {
+    e.dataTransfer.setData("text/plain", assetId);
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  const onDropOnFolder = async (e: React.DragEvent, folderId: string) => {
+    e.preventDefault();
+    const id = e.dataTransfer.getData("text/plain");
+    if (!id) return;
+    const asset = assets.find((a) => a.id === id);
+    if (!asset) return;
+    await moveAsset(asset, folderId);
+  };
+
   const deleteAsset = async (asset: Asset) => {
     if (!confirm("Delete this asset? This cannot be undone.")) return;
     const res = await fetch(`/api/media-assets/${asset.id}`, {
@@ -208,7 +283,20 @@ export default function AssetsPage() {
       const blobUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = blobUrl;
-      a.download = `${name}.${blob.type.includes("video") ? "mp4" : blob.type.includes("audio") ? "mp3" : "png"}`;
+      const ext = blob.type.includes("video")
+        ? "mp4"
+        : blob.type.includes("audio")
+        ? "mp3"
+        : blob.type.includes("svg")
+        ? "svg"
+        : blob.type.includes("jpeg")
+        ? "jpg"
+        : blob.type.includes("webp")
+        ? "webp"
+        : blob.type.includes("gif")
+        ? "gif"
+        : "png";
+      a.download = `${name}.${ext}`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -280,9 +368,12 @@ export default function AssetsPage() {
             </button>
             <button
               onClick={() => { setSelectedFolder(null); setUnfiled(true); }}
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => onDropOnFolder(e, "")}
               className={`w-full text-left text-xs px-2 py-1.5 rounded-md transition-colors ${
                 unfiled ? "bg-primary/10 text-primary font-medium" : "text-muted-foreground hover:bg-muted"
               }`}
+              title="Drop an asset here to unfile it"
             >
               Unfiled
             </button>
@@ -293,6 +384,9 @@ export default function AssetsPage() {
                   selectedFolder === f.id ? "bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted"
                 }`}
                 onClick={() => { setSelectedFolder(f.id); setUnfiled(false); }}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => onDropOnFolder(e, f.id)}
+                title={`Drop an asset here to file it in ${f.name}`}
               >
                 {renamingId === f.id ? (
                   <>
@@ -380,7 +474,12 @@ export default function AssetsPage() {
               {assets.map((asset) => {
                 const src = asset.thumbnail_url || asset.url;
                 return (
-                  <Card key={asset.id} className="overflow-hidden group/card">
+                  <Card
+                    key={asset.id}
+                    draggable
+                    onDragStart={(e) => onDragStart(e, asset.id)}
+                    className="overflow-hidden group/card cursor-grab active:cursor-grabbing"
+                  >
                     <div className="aspect-square bg-muted relative">
                       {kind === "video" && src ? (
                         <video src={src} className="w-full h-full object-cover" muted playsInline preload="metadata" />
@@ -433,6 +532,17 @@ export default function AssetsPage() {
                       </div>
                       {foldersForKind.length > 0 && (
                         <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => autoFile(asset)}
+                            className="p-1 rounded hover:bg-purple-100 dark:hover:bg-purple-900 text-purple-600 shrink-0"
+                            title={
+                              suggestFolder(asset.prompt, foldersForKind)
+                                ? `File into "${suggestFolder(asset.prompt, foldersForKind)!.name}"`
+                                : "No matching folder — create one first"
+                            }
+                          >
+                            <Wand2 className="size-3" />
+                          </button>
                           <select
                             value={moveTarget[asset.id] ?? ""}
                             onChange={(e) => setMoveTarget((prev) => ({ ...prev, [asset.id]: e.target.value }))}

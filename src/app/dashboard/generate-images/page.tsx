@@ -302,10 +302,19 @@ export default function GenerateImagesPage() {
     try {
       const res = await fetch(url);
       const blob = await res.blob();
+      const ext = blob.type.includes("svg")
+        ? "svg"
+        : blob.type.includes("jpeg")
+        ? "jpg"
+        : blob.type.includes("webp")
+        ? "webp"
+        : blob.type.includes("gif")
+        ? "gif"
+        : "png";
       const blobUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = blobUrl;
-      a.download = `generated-image-${index + 1}.png`;
+      a.download = `generated-image-${index + 1}.${ext}`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);

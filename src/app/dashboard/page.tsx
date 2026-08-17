@@ -50,6 +50,13 @@ export default async function DashboardPage({ searchParams }: { searchParams?: P
     .order("created_at", { ascending: false })
     .limit(6);
 
+  // Recents must stay inside the selected workspace — a tenant with multiple
+  // workspaces shouldn't see another client's content/audits on the dashboard.
+  if (workspaceId) {
+    postsQuery = postsQuery.eq("workspace_id", workspaceId);
+    auditsQuery = auditsQuery.eq("workspace_id", workspaceId);
+  }
+
   if (clientId) {
     postsQuery = postsQuery.eq("client_id", clientId);
     auditsQuery = auditsQuery.eq("client_id", clientId);

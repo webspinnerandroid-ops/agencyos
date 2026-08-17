@@ -44,18 +44,62 @@ export function isDataUrl(url: string): boolean {
 }
 
 function extFromMime(mime: string): string {
-  switch (mime) {
+  switch ((mime || "").toLowerCase()) {
     case "image/jpeg":
+    case "image/jpg":
       return ".jpg";
     case "image/webp":
       return ".webp";
     case "image/gif":
       return ".gif";
+    case "image/svg+xml":
+      return ".svg";
+    case "image/avif":
+      return ".avif";
     case "image/png":
     default:
       return ".png";
   }
 }
+
+/**
+ * Detect the real image format from the first bytes of the payload. The
+ * content-type header can lie (or be missing), and Recraft V3's
+ * vector_illustration style returns SVG — which was previously uploaded
+ * under a `.png` path, producing an unrenderable card and a corrupt
+ * "PNG" download. Sniffing the magic bytes keeps the extension honest.
+ */
+function sniffImageExt(buf: Buffer): string | null {
+  if (!buf || buf.length < 4) return null;
+  // PNG
+  if (
+    buf.length >= 8 &&
+    buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+  )
+    return ".png";
+  // JPEG
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return ".jpg";
+  // GIF
+  if (buf.subarray(0, 4).toString("latin1") === "GIF8") return ".gif";
+  // WEBP (RIFF....WEBP)
+  if (
+    buf.length >= 12 &&
+    buf.subarray(0, 4).toString("latin1") === "RIFF" &&
+    buf.subarray(8, 12).toString("latin1") === "WEBP"
+  )
+    return ".webp";
+  // AVIF (ftyp box)
+  if (buf.subarray(4, 8).toString("latin1") === "ftyp") {
+    const brand = buf.subarray(8, 12).toString("latin1");
+    if (brand.includes("avif") || brand.includes("avis")) return ".avif";
+  }
+  // SVG — text that starts with <svg / <?xml (after optional whitespace)
+  const head = buf.subarray(0, 512).toString("latin1").trimStart().toLowerCase();
+  if (head.startsWith("<svg") || head.startsWith("<?xml")) return ".svg";
+  return null;
+}
+
+export { sniffImageExt };
 
 async function bunnyUpload(path: string, body: Buffer, contentType: string): Promise<boolean> {
   try {
@@ -128,8 +172,14 @@ export async function persistImageToStorage(
       return url;
     }
     const body = Buffer.from(await res.arrayBuffer());
-    const mime = res.headers.get("content-type")?.split(";")[0]?.trim() || "image/png";
-    const ext = extFromMime(mime);
+    // Trust the bytes over the header: Recraft's vector output is SVG and
+    // other providers may label PNG as octet-stream or vice-versa.
+    const sniffed = sniffImageExt(body);
+    const mime =
+      sniffed === ".svg"
+        ? "image/svg+xml"
+        : res.headers.get("content-type")?.split(";")[0]?.trim() || "image/png";
+    const ext = sniffed ?? extFromMime(mime);
     const path = `${tenantId}/${crypto.randomUUID()}${ext}`;
     const ok = await bunnyUpload(path, body, mime);
     return ok ? storagePublicUrl(path) : url;

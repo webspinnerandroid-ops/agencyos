@@ -109,7 +109,14 @@ const VERIFY = process.argv.includes("--verify");
       // that silently corrupts asset formats shows up here as a MISMATCH.
       if (VERIFY) {
         const url = row.url || "";
-        if (!url) { skipped++; continue; }
+        if (!url) {
+          // An empty URL is a fully broken row (nothing to display or
+          // download) — count it as a failure so the deploy pre-flight and
+          // CI both catch it, not just the dead-URL audit.
+          console.log(`  [verify] ${row.id.slice(0, 8)} EMPTY URL`);
+          failed++;
+          continue;
+        }
         let body = null;
         if (url.startsWith("data:")) {
           const m = url.match(/^data:([^;,]+)?(;base64)?,([\s\S]*)$/);

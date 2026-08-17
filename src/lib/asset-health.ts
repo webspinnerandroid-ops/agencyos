@@ -1,0 +1,145 @@
+import path from "node:path";
+
+/**
+ * Shared per-workspace asset health smoke test.
+ *
+ * Used by the super-admin dashboard action (getAssetHealth) and the weekly
+ * Inngest email (assetHealthWeeklyEmail) so the two can never drift apart.
+ * For every media_assets row the URL is classified (empty / non-CDN / CDN)
+ * and CDN assets are byte-checked against their stored extension, mirroring
+ * the CI asset-integrity job (scripts/backfill-assets.cjs --verify).
+ */
+
+export interface WorkspaceAssetHealth {
+  workspaceId: string | null;
+  workspaceName: string;
+  tenantId: string | null;
+  tenantName: string;
+  total: number;
+  ok: number;
+  broken: number;
+  emptyUrl: number;
+  nonCdn: number;
+  checkedAt: string;
+}
+
+export function sniffImageExt(buf: Buffer): string | null {
+  if (!buf || buf.length < 4) return null;
+  if (
+    buf.length >= 8 &&
+    buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+  )
+    return ".png";
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return ".jpg";
+  if (buf.subarray(0, 4).toString("latin1") === "GIF8") return ".gif";
+  if (
+    buf.length >= 12 &&
+    buf.subarray(0, 4).toString("latin1") === "RIFF" &&
+    buf.subarray(8, 12).toString("latin1") === "WEBP"
+  )
+    return ".webp";
+  const head = buf.subarray(0, 512).toString("latin1").trimStart().toLowerCase();
+  if (head.startsWith("<svg") || head.startsWith("<?xml")) return ".svg";
+  return null;
+}
+
+/**
+ * Compute the per-workspace asset health summary. Expensive byte fetches run
+ * with a small concurrency limit so a large library doesn't blow up a single
+ * request or cron step.
+ */
+export async function computeAssetHealth(
+  supabase: any
+): Promise<WorkspaceAssetHealth[]> {
+  const pullHost = (process.env.BUNNY_PULL_HOST || "agencyos.b-cdn.net")
+    .replace(/^https?:\/\//, "")
+    .replace(/\/+$/, "");
+  const cdnPrefix = `https://${pullHost}/`;
+
+  const [{ data: assets }, { data: workspaces }, { data: tenants }] = await Promise.all([
+    supabase.from("media_assets").select("id, tenant_id, workspace_id, url, type"),
+    supabase.from("workspaces").select("id, tenant_id, name"),
+    supabase.from("tenants").select("id, name"),
+  ]);
+
+  const wsName = new Map<string, string>();
+  for (const w of workspaces ?? []) wsName.set(w.id, w.name ?? "Unnamed");
+  const tenantName = new Map<string, string>();
+  for (const t of tenants ?? []) tenantName.set(t.id, t.name ?? "Unknown");
+
+  // Classify each asset; CDN bytes are fetched + sniffed (bounded).
+  const verdicts = new Map<
+    string,
+    { ok: number; broken: number; emptyUrl: number; nonCdn: number }
+  >();
+  const key = (wsId: string | null) => wsId ?? "(no workspace)";
+
+  const classify = (wsId: string | null, url: string | null) => {
+    const v = verdicts.get(key(wsId)) ?? { ok: 0, broken: 0, emptyUrl: 0, nonCdn: 0 };
+    if (!url || url.trim() === "") v.emptyUrl++;
+    else v.nonCdn++; // non-CDN (provider/legacy) URLs are never byte-checked
+    verdicts.set(key(wsId), v);
+  };
+
+  // Byte-check CDN assets with a concurrency cap. A row is OK only when the
+  // sniffed extension matches the stored one (MP4/ftyp accepted for videos).
+  const cdnRows = (assets ?? []).filter((a: any) =>
+    a.url && a.url.startsWith(cdnPrefix)
+  );
+  const CONCURRENCY = 8;
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < cdnRows.length) {
+      const row = cdnRows[cursor++];
+      const wsId = row.workspace_id ?? null;
+      const v = verdicts.get(key(wsId)) ?? { ok: 0, broken: 0, emptyUrl: 0, nonCdn: 0 };
+      try {
+        const res = await fetch(row.url, { signal: AbortSignal.timeout(45000) });
+        if (!res.ok) { v.broken++; verdicts.set(key(wsId), v); continue; }
+        const body = Buffer.from(await res.arrayBuffer());
+        const pathPart = row.url.slice(cdnPrefix.length);
+        const ext = path.extname(pathPart).toLowerCase();
+        const isMp4 =
+          body.length >= 12 && body.subarray(4, 8).toString("latin1") === "ftyp";
+        const sniffed = sniffImageExt(body);
+        if (body.length > 0 && ((sniffed && ext === sniffed) || (ext === ".mp4" && isMp4))) {
+          v.ok++;
+        } else {
+          v.broken++;
+        }
+      } catch {
+        v.broken++;
+      }
+      verdicts.set(key(wsId), v);
+    }
+  };
+  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+
+  // Non-CDN / empty rows were classified above without byte checks.
+  for (const a of assets ?? []) {
+    if (a.url && a.url.startsWith(cdnPrefix)) continue;
+    classify(a.workspace_id ?? null, a.url);
+  }
+
+  const checkedAt = new Date().toISOString();
+  const out: WorkspaceAssetHealth[] = [];
+  for (const [wsKey, v] of verdicts) {
+    const wsId = wsKey === "(no workspace)" ? null : wsKey;
+    const wsRow = (workspaces ?? []).find((w: any) => w.id === wsId);
+    out.push({
+      workspaceId: wsId,
+      workspaceName: wsRow?.name ?? (wsKey === "(no workspace)" ? "(no workspace)" : "Unnamed"),
+      tenantId: wsRow?.tenant_id ?? null,
+      tenantName: wsRow ? (tenantName.get(wsRow.tenant_id) ?? "Unknown") : "—",
+      total: v.ok + v.broken + v.emptyUrl + v.nonCdn,
+      ok: v.ok,
+      broken: v.broken,
+      emptyUrl: v.emptyUrl,
+      nonCdn: v.nonCdn,
+      checkedAt,
+    });
+  }
+  out.sort((a, b) => a.tenantName.localeCompare(b.tenantName) || a.workspaceName.localeCompare(b.workspaceName));
+
+  return out;
+}

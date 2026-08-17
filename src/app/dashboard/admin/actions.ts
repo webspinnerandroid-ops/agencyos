@@ -1,6 +1,7 @@
 "use server";
 
 import path from "node:path";
+import { computeAssetHealth, sniffImageExt, type WorkspaceAssetHealth } from "@/lib/asset-health";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getTenantId, getRole, getUserEmail } from "@/lib/auth";
 import { createNotification } from "@/lib/in-app-notifications";
@@ -1000,49 +1001,43 @@ export async function deleteTenant(
 // corrupt or dead assets at a glance.
 // ------------------------------------------------------------------
 
-export interface WorkspaceAssetHealth {
-  workspaceId: string | null;
-  workspaceName: string;
-  tenantId: string | null;
-  tenantName: string;
-  total: number;
-  ok: number;
-  broken: number;
-  emptyUrl: number;
-  nonCdn: number;
-  checkedAt: string;
-}
-
-function sniffImageExt(buf: Buffer): string | null {
-  if (!buf || buf.length < 4) return null;
-  if (
-    buf.length >= 8 &&
-    buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
-  )
-    return ".png";
-  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return ".jpg";
-  if (buf.subarray(0, 4).toString("latin1") === "GIF8") return ".gif";
-  if (
-    buf.length >= 12 &&
-    buf.subarray(0, 4).toString("latin1") === "RIFF" &&
-    buf.subarray(8, 12).toString("latin1") === "WEBP"
-  )
-    return ".webp";
-  const head = buf.subarray(0, 512).toString("latin1").trimStart().toLowerCase();
-  if (head.startsWith("<svg") || head.startsWith("<?xml")) return ".svg";
-  return null;
-}
+export type { WorkspaceAssetHealth };
 
 /**
- * Per-workspace asset health summary. For every media_assets row, the URL is
- * classified (empty / non-CDN / CDN) and CDN assets are byte-checked against
- * their stored extension, mirroring the CI asset-integrity job. Expensive
- * byte fetches run with a small concurrency limit so a large library doesn't
- * blow up the request.
+ * Per-workspace asset health summary — delegates to the shared smoke test so
+ * the dashboard and the weekly email always agree.
  */
 export async function getAssetHealth(): Promise<
   ActionResponse<WorkspaceAssetHealth[]>
 > {
+  try {
+    await requireSuperAdmin();
+    const supabase = await createServiceClient();
+    const data = await computeAssetHealth(supabase);
+    return { success: true, data };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+export interface BrokenAsset {
+  id: string;
+  workspaceId: string | null;
+  tenantId: string | null;
+  type: string | null;
+  url: string | null;
+  prompt: string | null;
+  reason: "empty-url" | "non-cdn" | "http-failed" | "byte-mismatch";
+  detail: string;
+}
+
+/**
+ * List the specific broken assets for one workspace (or the "(no workspace)"
+ * bucket) so the super admin can delete or regenerate them one at a time.
+ */
+export async function getBrokenAssets(
+  workspaceId: string | null
+): Promise<ActionResponse<BrokenAsset[]>> {
   try {
     await requireSuperAdmin();
     const supabase = await createServiceClient();
@@ -1052,92 +1047,156 @@ export async function getAssetHealth(): Promise<
       .replace(/\/+$/, "");
     const cdnPrefix = `https://${pullHost}/`;
 
-    const [{ data: assets }, { data: workspaces }, { data: tenants }] = await Promise.all([
-      supabase.from("media_assets").select("id, tenant_id, workspace_id, url, type"),
-      supabase.from("workspaces").select("id, tenant_id, name"),
-      supabase.from("tenants").select("id, name"),
-    ]);
+    const q = supabase
+      .from("media_assets")
+      .select("id, tenant_id, workspace_id, url, type, prompt");
+    const { data: assets, error } = workspaceId
+      ? await q.eq("workspace_id", workspaceId)
+      : await q.is("workspace_id", null);
+    if (error) throw new Error(error.message);
 
-    const wsName = new Map<string, string>();
-    for (const w of workspaces ?? []) wsName.set(w.id, w.name ?? "Unnamed");
-    const tenantName = new Map<string, string>();
-    for (const t of tenants ?? []) tenantName.set(t.id, t.name ?? "Unknown");
-
-    // Classify each asset; CDN bytes are fetched + sniffed (bounded).
-    const verdicts = new Map<
-      string,
-      { ok: number; broken: number; emptyUrl: number; nonCdn: number }
-    >();
-    const key = (wsId: string | null) => wsId ?? "(no workspace)";
-
-    const classify = (wsId: string | null, url: string | null) => {
-      const v = verdicts.get(key(wsId)) ?? { ok: 0, broken: 0, emptyUrl: 0, nonCdn: 0 };
-      if (!url || url.trim() === "") v.emptyUrl++;
-      else v.nonCdn++; // non-CDN (provider/legacy) URLs are never byte-checked
-      verdicts.set(key(wsId), v);
-    };
-
-    // Byte-check CDN assets with a concurrency cap. A row is OK only when the
-    // sniffed extension matches the stored one (MP4/ftyp accepted for videos).
-    const cdnRows = (assets ?? []).filter((a: any) =>
-      a.url && a.url.startsWith(cdnPrefix)
-    );
+    const broken: BrokenAsset[] = [];
     const CONCURRENCY = 8;
     let cursor = 0;
     const worker = async () => {
-      while (cursor < cdnRows.length) {
-        const row = cdnRows[cursor++];
-        const wsId = row.workspace_id ?? null;
-        const v = verdicts.get(key(wsId)) ?? { ok: 0, broken: 0, emptyUrl: 0, nonCdn: 0 };
-        try {
-          const res = await fetch(row.url, { signal: AbortSignal.timeout(45000) });
-          if (!res.ok) { v.broken++; verdicts.set(key(wsId), v); continue; }
-          const body = Buffer.from(await res.arrayBuffer());
-          const pathPart = row.url.slice(cdnPrefix.length);
-          const ext = path.extname(pathPart).toLowerCase();
-          const isMp4 =
-            body.length >= 12 && body.subarray(4, 8).toString("latin1") === "ftyp";
-          const sniffed = sniffImageExt(body);
-          if (body.length > 0 && ((sniffed && ext === sniffed) || (ext === ".mp4" && isMp4))) {
-            v.ok++;
-          } else {
-            v.broken++;
-          }
-        } catch {
-          v.broken++;
+      while (cursor < (assets?.length ?? 0)) {
+        const row = (assets ?? [])[cursor++];
+        const base: Omit<BrokenAsset, "reason" | "detail"> = {
+          id: row.id,
+          workspaceId: row.workspace_id ?? null,
+          tenantId: row.tenant_id ?? null,
+          type: row.type ?? null,
+          url: row.url ?? null,
+          prompt: row.prompt ?? null,
+        };
+        const url = row.url || "";
+        if (!url.trim()) {
+          broken.push({ ...base, reason: "empty-url", detail: "stored URL is empty" });
+          continue;
         }
-        verdicts.set(key(wsId), v);
+        if (!url.startsWith(cdnPrefix) && !url.startsWith("data:")) {
+          broken.push({ ...base, reason: "non-cdn", detail: "provider/legacy URL — likely expired" });
+          continue;
+        }
+        try {
+          const res = await fetch(url, { signal: AbortSignal.timeout(45000) });
+          if (!res.ok) {
+            broken.push({ ...base, reason: "http-failed", detail: `HTTP ${res.status}` });
+            continue;
+          }
+          const body = Buffer.from(await res.arrayBuffer());
+          const pathPart = url.startsWith(cdnPrefix) ? url.slice(cdnPrefix.length) : null;
+          const ext = pathPart ? path.extname(pathPart).toLowerCase() : "(data)";
+          const sniffed = sniffImageExt(body);
+          const isMp4 = body.length >= 12 && body.subarray(4, 8).toString("latin1") === "ftyp";
+          const ok =
+            body.length > 0 &&
+            ((sniffed && ext === sniffed) || (ext === ".mp4" && isMp4));
+          if (!ok) {
+            broken.push({ ...base, reason: "byte-mismatch", detail: `stored=${ext} sniffed=${sniffed ?? "?"}` });
+          }
+        } catch (e) {
+          broken.push({ ...base, reason: "http-failed", detail: (e as Error).message.slice(0, 80) });
+        }
       }
     };
     await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+    return { success: true, data: broken };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
 
-    // Non-CDN / empty rows were classified above without byte checks.
-    for (const a of assets ?? []) {
-      if (a.url && a.url.startsWith(cdnPrefix)) continue;
-      classify(a.workspace_id ?? null, a.url);
+/** Permanently delete one asset (row + its Bunny object, best-effort). */
+export async function deleteAsset(assetId: string): Promise<ActionResponse> {
+  try {
+    await requireSuperAdmin();
+    const supabase = await createServiceClient();
+
+    const { data: asset } = await supabase
+      .from("media_assets")
+      .select("id, url")
+      .eq("id", assetId)
+      .maybeSingle();
+    if (!asset) throw new Error("Asset not found.");
+
+    if (asset.url && asset.url.includes("b-cdn.net")) {
+      try {
+        const { deleteStoredImage } = await import("@/lib/media/storage");
+        await deleteStoredImage(asset.url);
+      } catch (err) {
+        console.warn("[admin] asset storage cleanup failed:", err);
+      }
     }
 
-    const checkedAt = new Date().toISOString();
-    const out: WorkspaceAssetHealth[] = [];
-    for (const [wsKey, v] of verdicts) {
-      const wsId = wsKey === "(no workspace)" ? null : wsKey;
-      const wsRow = (workspaces ?? []).find((w: any) => w.id === wsId);
-      out.push({
-        workspaceId: wsId,
-        workspaceName: wsRow?.name ?? (wsKey === "(no workspace)" ? "(no workspace)" : "Unnamed"),
-        tenantId: wsRow?.tenant_id ?? null,
-        tenantName: wsRow ? (tenantName.get(wsRow.tenant_id) ?? "Unknown") : "—",
-        total: v.ok + v.broken + v.emptyUrl + v.nonCdn,
-        ok: v.ok,
-        broken: v.broken,
-        emptyUrl: v.emptyUrl,
-        nonCdn: v.nonCdn,
-        checkedAt,
-      });
-    }
-    out.sort((a, b) => a.tenantName.localeCompare(b.tenantName) || a.workspaceName.localeCompare(b.workspaceName));
+    const { error } = await supabase.from("media_assets").delete().eq("id", assetId);
+    if (error) throw new Error(error.message);
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
 
-    return { success: true, data: out };
+/**
+ * Re-run an asset's original prompt through the image pipeline and replace
+ * its URL. Only works when the asset still has its prompt stored.
+ */
+export async function regenerateAsset(
+  assetId: string
+): Promise<ActionResponse<{ url: string }>> {
+  try {
+    await requireSuperAdmin();
+    const supabase = await createServiceClient();
+
+    const { data: asset } = await supabase
+      .from("media_assets")
+      .select("id, tenant_id, prompt, metadata")
+      .eq("id", assetId)
+      .maybeSingle();
+    if (!asset) throw new Error("Asset not found.");
+    if (!asset.tenant_id) {
+      throw new Error("This asset has no tenant, so it can't be regenerated automatically.");
+    }
+    const prompt = (asset.prompt ?? "").trim();
+    if (!prompt) {
+      throw new Error("This asset has no stored prompt, so it can't be regenerated automatically.");
+    }
+
+    const meta = (asset.metadata ?? {}) as Record<string, any>;
+    const task = meta.task === "brand_design" ? "brand_design" : "image_generation";
+    const modelId = typeof meta.modelId === "string" ? meta.modelId : undefined;
+    const size = typeof meta.size === "string" ? meta.size : undefined;
+
+    const [{ generateImage }, { persistImageToStorage }] = await Promise.all([
+      import("@/lib/ai/orchestrator"),
+      import("@/lib/media/storage"),
+    ]);
+
+    const images = await generateImage(asset.tenant_id, prompt, {
+      size: (size as any) ?? "1024x1024",
+      n: 1,
+      task: task as any,
+      modelId,
+    });
+    if (!images.length || !images[0].url) throw new Error("Generation returned no image.");
+
+    const url = await persistImageToStorage(asset.tenant_id, images[0].url);
+    const { error: updErr } = await supabase
+      .from("media_assets")
+      .update({
+        url,
+        status: "completed",
+        metadata: {
+          ...meta,
+          revisedPrompt: images[0].revisedPrompt ?? null,
+          regeneratedAt: new Date().toISOString(),
+          regeneratedFrom: assetId,
+        },
+      })
+      .eq("id", assetId);
+    if (updErr) throw new Error(updErr.message);
+
+    return { success: true, data: { url } };
   } catch (err) {
     return { success: false, error: (err as Error).message };
   }

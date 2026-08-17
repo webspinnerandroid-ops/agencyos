@@ -198,6 +198,12 @@ const IGNORE = new Set([
   // (never a tenant-supplied value) and is never reachable from a user
   // session. Verified.
   "src/lib/inngest/functions/autoAuditMonitoredSites.ts",
+  // assetHealthWeeklyEmail.ts: weekly cross-tenant maintenance job, same
+  // class as autoAuditMonitoredSites — runs the asset smoke test with the
+  // service role and emails the summary to super admins. It reads user_roles
+  // only to resolve the recipient list and never writes anything; never
+  // reachable from a user session. Verified.
+  "src/lib/inngest/functions/assetHealthWeeklyEmail.ts",
   // auth/dev-login route: DEV-ONLY (404s unless ALLOW_DEV_LOGIN=true, which
   // is only set in local .env.local) — checks one hard-coded owner account's
   // super_admin role by user_id to mint a magic-link token. Single-row role

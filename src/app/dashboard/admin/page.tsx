@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState, useTransition } from "react";
+import { Fragment, useCallback, useEffect, useState, useTransition } from "react";
 import { createBrowserClient } from "@supabase/ssr";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -9,7 +9,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Building2, Users, FileText, Key, TrendingUp, Shield, X, UserCog, Menu, Wallet, LayoutTemplate, LogIn, Image as ImageIcon } from "lucide-react";
-import { getDashboardStats, getAllTenants, getLicenses, getLicenseAudit, issueLicense, updateLicensePlan, renewLicense, revokeLicense, deleteLicense, deleteUser, deleteTenant, getAllUsers, assignLevel, grantHub, revokeHub, getAdminAudit, getAssetHealth, type TenantSummary, type LicenseRecord, type LicenseAuditEntry, type AdminAuditEntry, type UserRecord, type WorkspaceAssetHealth } from "./actions";
+import { getDashboardStats, getAllTenants, getLicenses, getLicenseAudit, issueLicense, updateLicensePlan, renewLicense, revokeLicense, deleteLicense, deleteUser, deleteTenant, getAllUsers, assignLevel, grantHub, revokeHub, getAdminAudit, getAssetHealth, getBrokenAssets, deleteAsset, regenerateAsset, type TenantSummary, type LicenseRecord, type LicenseAuditEntry, type AdminAuditEntry, type UserRecord, type WorkspaceAssetHealth, type BrokenAsset } from "./actions";
 import TokenBilling from "./token-billing";
 
 // Hub-and-spoke add-ons the super admin can grant/revoke without payment.
@@ -101,6 +101,50 @@ export default function AdminDashboardPage() {
 
   // Non-blocking: byte-checks every CDN asset, so run it after first paint.
   useEffect(() => { void loadAssetHealth(); }, [loadAssetHealth]);
+
+  const [expandedHealth, setExpandedHealth] = useState<string | null>(null);
+  const [brokenAssets, setBrokenAssets] = useState<Record<string, BrokenAsset[]>>({});
+  const [brokenLoading, setBrokenLoading] = useState<Record<string, boolean>>({});
+
+  const toggleHealthRow = (key: string) => {
+    const next = expandedHealth === key ? null : key;
+    setExpandedHealth(next);
+    if (next && !brokenAssets[key]) {
+      setBrokenLoading((p) => ({ ...p, [key]: true }));
+      getBrokenAssets(key === "(no workspace)" ? null : key).then((r) => {
+        setBrokenAssets((p) => ({ ...p, [key]: r.success ? (r.data ?? []) : [] }));
+        setBrokenLoading((p) => ({ ...p, [key]: false }));
+      });
+    }
+  };
+
+  const handleDeleteAsset = (key: string, id: string) => {
+    if (!confirm("Permanently delete this asset (and its stored file)? This cannot be undone.")) return;
+    startTransition(async () => {
+      const r = await deleteAsset(id);
+      setFeedback(r.success
+        ? { type: "success", message: "Asset deleted." }
+        : { type: "error", message: r.error ?? "Failed to delete asset." });
+      if (r.success) {
+        loadAssetHealth();
+        setBrokenAssets((p) => { const n = { ...p }; delete n[key]; return n; });
+        setExpandedHealth(null);
+      }
+    });
+  };
+
+  const handleRegenerateAsset = (key: string, id: string) => {
+    startTransition(async () => {
+      const r = await regenerateAsset(id);
+      setFeedback(r.success
+        ? { type: "success", message: "Asset regenerated." }
+        : { type: "error", message: r.error ?? "Failed to regenerate asset." });
+      if (r.success) {
+        loadAssetHealth();
+        setBrokenAssets((p) => { const n = { ...p }; delete n[key]; return n; });
+      }
+    });
+  };
   const [selTenant, setSelTenant] = useState("");
   const [selPlan, setSelPlan] = useState("starter");
   const [seats, setSeats] = useState(5);
@@ -573,18 +617,77 @@ export default function AdminDashboardPage() {
             <p className="text-sm text-muted-foreground">No media assets in any workspace yet.</p>
           ) : assetHealth ? (
             <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b text-left"><th className="py-2 px-3 text-muted-foreground">Tenant</th><th className="py-2 px-3 text-muted-foreground">Workspace</th><th className="py-2 px-3 text-muted-foreground">Total</th><th className="py-2 px-3 text-muted-foreground">Healthy</th><th className="py-2 px-3 text-muted-foreground">Broken</th><th className="py-2 px-3 text-muted-foreground">Empty URL</th><th className="py-2 px-3 text-muted-foreground">Non-CDN</th><th className="py-2 px-3 text-muted-foreground">Checked</th></tr></thead><tbody>
-              {assetHealth.map((h) => (
-                <tr key={h.workspaceId ?? "(none)"} className="border-b last:border-0">
-                  <td className="py-2 px-3">{h.tenantName}</td>
-                  <td className="py-2 px-3 font-medium">{h.workspaceName}</td>
-                  <td className="py-2 px-3">{h.total}</td>
-                  <td className="py-2 px-3">{h.broken === 0 && h.emptyUrl === 0 && h.nonCdn === 0 ? <Badge className="bg-green-100 text-green-700">{h.ok} OK</Badge> : <span>{h.ok}</span>}</td>
-                  <td className="py-2 px-3">{h.broken > 0 ? <Badge className="bg-red-100 text-red-700">{h.broken}</Badge> : <span>0</span>}</td>
-                  <td className="py-2 px-3">{h.emptyUrl > 0 ? <Badge className="bg-orange-100 text-orange-700">{h.emptyUrl}</Badge> : <span>0</span>}</td>
-                  <td className="py-2 px-3">{h.nonCdn > 0 ? <Badge className="bg-yellow-100 text-yellow-700">{h.nonCdn}</Badge> : <span>0</span>}</td>
-                  <td className="py-2 px-3 text-muted-foreground text-xs">{new Date(h.checkedAt).toLocaleTimeString()}</td>
-                </tr>
-              ))}
+              {assetHealth.map((h) => {
+                const key = h.workspaceId ?? "(no workspace)";
+                const issueCount = h.broken + h.emptyUrl + h.nonCdn;
+                const hasIssues = issueCount > 0;
+                const expanded = expandedHealth === key;
+                return (
+                  <Fragment key={key}>
+                    <tr
+                      className={`border-b last:border-0 ${hasIssues ? "cursor-pointer hover:bg-muted/40" : ""}`}
+                      onClick={hasIssues ? () => toggleHealthRow(key) : undefined}
+                      title={hasIssues ? "Click to list broken assets" : undefined}
+                    >
+                      <td className="py-2 px-3">{h.tenantName}</td>
+                      <td className="py-2 px-3 font-medium">{h.workspaceName}</td>
+                      <td className="py-2 px-3">{h.total}</td>
+                      <td className="py-2 px-3">{!hasIssues ? <Badge className="bg-green-100 text-green-700">{h.ok} OK</Badge> : <span>{h.ok}</span>}</td>
+                      <td className="py-2 px-3">{h.broken > 0 ? <Badge className="bg-red-100 text-red-700">{h.broken}</Badge> : <span>0</span>}</td>
+                      <td className="py-2 px-3">{h.emptyUrl > 0 ? <Badge className="bg-orange-100 text-orange-700">{h.emptyUrl}</Badge> : <span>0</span>}</td>
+                      <td className="py-2 px-3">{h.nonCdn > 0 ? <Badge className="bg-yellow-100 text-yellow-700">{h.nonCdn}</Badge> : <span>0</span>}</td>
+                      <td className="py-2 px-3 text-muted-foreground text-xs">
+                        {new Date(h.checkedAt).toLocaleTimeString()}
+                        {hasIssues && <span className="ml-1 text-primary">{expanded ? "▲" : "▼"}</span>}
+                      </td>
+                    </tr>
+                    {expanded && (
+                      <tr className="border-b last:border-0 bg-muted/20">
+                        <td colSpan={8} className="py-3 px-4">
+                          <div className="text-sm">
+                            <p className="font-medium mb-2">Broken assets in “{h.workspaceName}”</p>
+                            {brokenLoading[key] ? (
+                              <div className="flex items-center gap-2 py-2 text-muted-foreground"><Loader2 className="size-4 animate-spin" /> Checking…</div>
+                            ) : !brokenAssets[key] || brokenAssets[key].length === 0 ? (
+                              <p className="text-muted-foreground">No broken assets found in this workspace (the counts above may reflect a previous check).</p>
+                            ) : (
+                              <table className="w-full text-xs">
+                                <thead><tr className="border-b text-left text-muted-foreground"><th className="py-1 pr-2">Type</th><th className="py-1 pr-2">Reason</th><th className="py-1 pr-2">Prompt / URL</th><th className="py-1">Actions</th></tr></thead>
+                                <tbody>
+                                  {brokenAssets[key].map((b) => (
+                                    <tr key={b.id} className="border-b last:border-0">
+                                      <td className="py-1 pr-2">{b.type ?? "—"}</td>
+                                      <td className="py-1 pr-2">
+                                        <Badge className={
+                                          b.reason === "empty-url" ? "bg-orange-100 text-orange-700" :
+                                          b.reason === "non-cdn" ? "bg-yellow-100 text-yellow-700" :
+                                          "bg-red-100 text-red-700"
+                                        }>{b.reason}</Badge>
+                                        <span className="text-muted-foreground ml-1">{b.detail}</span>
+                                      </td>
+                                      <td className="py-1 pr-2 max-w-[320px] truncate">{b.prompt ? b.prompt.slice(0, 60) : (b.url ?? "")}</td>
+                                      <td className="py-1 whitespace-nowrap">
+                                        {b.prompt && (
+                                          <Button variant="outline" size="sm" disabled={isPending} onClick={() => handleRegenerateAsset(key, b.id)} className="mr-1">
+                                            Regenerate
+                                          </Button>
+                                        )}
+                                        <Button variant="destructive" size="sm" disabled={isPending} onClick={() => handleDeleteAsset(key, b.id)}>
+                                          Delete
+                                        </Button>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                );
+              })}
               </tbody></table></div>
           ) : null}
         </CardContent>

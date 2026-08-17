@@ -22,6 +22,10 @@ interface DashAsset {
   url?: string | null;
   prompt: string;
   created_at: string;
+  metadata?: {
+    scores?: { seo?: number; aeo?: number; geo?: number };
+    postId?: string;
+  } | null;
 }
 
 export function DashboardRecents({
@@ -240,27 +244,49 @@ function RecentAssetSection({
         </div>
       ) : (
         <div className="grid grid-cols-4 gap-3">
-          {assets.map((a) => (
-            <a
-              key={a.id}
-              href={viewAllHref}
-              className="rounded-lg border overflow-hidden group"
-              title={a.prompt}
-            >
-              {a.url ? (
-                <img
-                  src={a.url}
-                  alt={a.prompt}
-                  className="aspect-square w-full object-cover group-hover:opacity-90 transition-opacity"
-                  onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
-                />
-              ) : (
-                <div className="aspect-square w-full bg-muted flex items-center justify-center text-muted-foreground">
-                  <Film className="size-6 opacity-40" />
-                </div>
-              )}
-            </a>
-          ))}
+          {assets.map((a) => {
+            const scores = a.metadata?.scores;
+            return (
+              <a
+                key={a.id}
+                href={a.metadata?.postId ? `/dashboard/posts?post=${a.metadata.postId}` : viewAllHref}
+                className="rounded-lg border overflow-hidden group flex flex-col"
+                title={a.prompt}
+              >
+                {a.url ? (
+                  <img
+                    src={a.url}
+                    alt={a.prompt}
+                    className="aspect-square w-full object-cover group-hover:opacity-90 transition-opacity"
+                    onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                  />
+                ) : (
+                  <div className="aspect-square w-full bg-muted flex items-center justify-center text-muted-foreground">
+                    <Film className="size-6 opacity-40" />
+                  </div>
+                )}
+                {scores && (scores.seo != null || scores.aeo != null || scores.geo != null) && (
+                  <div className="px-1.5 py-1 flex items-center gap-1 flex-wrap">
+                    {scores.seo != null && (
+                      <span className="text-[9px] px-1 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 font-medium">
+                        SEO {scores.seo}
+                      </span>
+                    )}
+                    {scores.aeo != null && (
+                      <span className="text-[9px] px-1 py-0.5 rounded bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300 font-medium">
+                        AEO {scores.aeo}
+                      </span>
+                    )}
+                    {scores.geo != null && (
+                      <span className="text-[9px] px-1 py-0.5 rounded bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300 font-medium">
+                        GEO {scores.geo}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </a>
+            );
+          })}
         </div>
       )}
     </div>

@@ -1066,6 +1066,9 @@ Use the above context to craft a compelling, platform-optimized caption that dri
               .update({
                 metadata: {
                   ...meta,
+                  // Links the asset card back to its source post so the
+                  // library can deep-link to the full factor breakdown.
+                  postId: blogPostId,
                   scores: {
                     seo: seoScore.total,
                     aeo: aeoGeo.aeoScore,

@@ -91,3 +91,37 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
         run: npm run build
+  # ────────────────────────────────────────────────────────────────
+  # 4. Asset integrity — smoke-test every stored asset's bytes against
+  #    its extension (magic bytes + HTTP status + non-zero size). A
+  #    migration or deploy that silently corrupts asset formats fails
+  #    the check. Skipped (not failed) when the Supabase secrets haven't
+  #    been configured in the repo yet.
+  # ────────────────────────────────────────────────────────────────
+  asset-integrity:
+    name: Asset integrity
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify stored asset bytes
+        if: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY != '' }}
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: node scripts/backfill-assets.cjs --verify
+
+      - name: Skip notice (Supabase secrets not configured)
+        if: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY == '' }}
+        run: echo "Asset-integrity check skipped — set SUPABASE_SERVICE_ROLE_KEY and NEXT_PUBLIC_SUPABASE_URL (vars/secrets) in repo settings to enable it."

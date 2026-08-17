@@ -62,7 +62,9 @@ const DRY = process.argv.includes("--dry");
 const VERIFY = process.argv.includes("--verify");
 
 (async () => {
-  const env = loadEnv(path.join(__dirname, "..", ".env.local"));
+  // Local .env.local first, then real process.env on top so the script runs
+  // unchanged in CI (where secrets come from GitHub env, not a local file).
+  const env = { ...loadEnv(path.join(__dirname, "..", ".env.local")), ...process.env };
   const { createClient } = require("@supabase/supabase-js");
   const sb = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);
 

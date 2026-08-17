@@ -514,6 +514,11 @@ export default function AssetsPage() {
             <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
               {assets.map((asset) => {
                 const src = asset.thumbnail_url || asset.url;
+                const scores = (asset.metadata as {
+                  scores?: { seo?: number; aeo?: number; geo?: number };
+                  postId?: string;
+                } | null)?.scores;
+                const postId = (asset.metadata as { postId?: string } | null)?.postId;
                 return (
                   <Card
                     key={asset.id}
@@ -548,23 +553,31 @@ export default function AssetsPage() {
                       <p className="text-xs text-muted-foreground line-clamp-2" title={asset.prompt}>
                         {asset.prompt}
                       </p>
-                      {(asset.metadata as { scores?: { seo?: number; aeo?: number; geo?: number; gate?: number } } | null)
-                        ?.scores && (
+                      {scores && (
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          {(asset.metadata as { scores?: { seo?: number; aeo?: number; geo?: number } }).scores!.seo != null && (
+                          {scores.seo != null && (
                             <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 font-medium">
-                              SEO {(asset.metadata as { scores?: { seo?: number } }).scores!.seo}
+                              SEO {scores.seo}
                             </span>
                           )}
-                          {(asset.metadata as { scores?: { aeo?: number } }).scores!.aeo != null && (
+                          {scores.aeo != null && (
                             <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300 font-medium">
-                              AEO {(asset.metadata as { scores?: { aeo?: number } }).scores!.aeo}
+                              AEO {scores.aeo}
                             </span>
                           )}
-                          {(asset.metadata as { scores?: { geo?: number } }).scores!.geo != null && (
+                          {scores.geo != null && (
                             <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300 font-medium">
-                              GEO {(asset.metadata as { scores?: { geo?: number } }).scores!.geo}
+                              GEO {scores.geo}
                             </span>
+                          )}
+                          {postId && (
+                            <a
+                              href={`/dashboard/posts?post=${postId}`}
+                              className="text-[10px] text-primary underline hover:no-underline"
+                              title="Open the source post with its full SEO/AEO/GEO factor breakdown"
+                            >
+                              Compare scores →
+                            </a>
                           )}
                         </div>
                       )}

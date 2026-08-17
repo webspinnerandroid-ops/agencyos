@@ -8,8 +8,8 @@ import { Label } from "@/components/ui/label";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Building2, Users, FileText, Key, TrendingUp, Shield, X, UserCog, Menu, Wallet, LayoutTemplate, LogIn } from "lucide-react";
-import { getDashboardStats, getAllTenants, getLicenses, getLicenseAudit, issueLicense, updateLicensePlan, renewLicense, revokeLicense, deleteLicense, deleteUser, deleteTenant, getAllUsers, assignLevel, grantHub, revokeHub, getAdminAudit, type TenantSummary, type LicenseRecord, type LicenseAuditEntry, type AdminAuditEntry, type UserRecord } from "./actions";
+import { Loader2, Building2, Users, FileText, Key, TrendingUp, Shield, X, UserCog, Menu, Wallet, LayoutTemplate, LogIn, Image as ImageIcon } from "lucide-react";
+import { getDashboardStats, getAllTenants, getLicenses, getLicenseAudit, issueLicense, updateLicensePlan, renewLicense, revokeLicense, deleteLicense, deleteUser, deleteTenant, getAllUsers, assignLevel, grantHub, revokeHub, getAdminAudit, getAssetHealth, type TenantSummary, type LicenseRecord, type LicenseAuditEntry, type AdminAuditEntry, type UserRecord, type WorkspaceAssetHealth } from "./actions";
 import TokenBilling from "./token-billing";
 
 // Hub-and-spoke add-ons the super admin can grant/revoke without payment.
@@ -88,6 +88,19 @@ export default function AdminDashboardPage() {
   const [showForm, setShowForm] = useState(false);
   const [auditFor, setAuditFor] = useState<Record<string, LicenseAuditEntry[]>>({});
   const [expandedAudit, setExpandedAudit] = useState<string | null>(null);
+  const [assetHealth, setAssetHealth] = useState<WorkspaceAssetHealth[] | null>(null);
+  const [healthLoading, setHealthLoading] = useState(false);
+
+  const loadAssetHealth = useCallback(() => {
+    setHealthLoading(true);
+    getAssetHealth().then((r) => {
+      if (r.success) setAssetHealth(r.data ?? []);
+      setHealthLoading(false);
+    });
+  }, []);
+
+  // Non-blocking: byte-checks every CDN asset, so run it after first paint.
+  useEffect(() => { void loadAssetHealth(); }, [loadAssetHealth]);
   const [selTenant, setSelTenant] = useState("");
   const [selPlan, setSelPlan] = useState("starter");
   const [seats, setSeats] = useState(5);
@@ -540,6 +553,42 @@ export default function AdminDashboardPage() {
           </tbody></table></div>
         )}
       </CardContent></Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <ImageIcon className="size-5 text-primary" /> Asset Health
+            <Button variant="ghost" size="sm" onClick={() => void loadAssetHealth()} disabled={healthLoading} className="ml-2">
+              {healthLoading ? <><Loader2 className="size-3 animate-spin mr-1" /> Checking…</> : "Re-check"}
+            </Button>
+          </CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Per-workspace smoke test of stored asset bytes (same magic-byte check the CI asset-integrity job runs).
+          </p>
+        </CardHeader>
+        <CardContent>
+          {healthLoading && assetHealth === null ? (
+            <div className="flex justify-center py-6"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
+          ) : assetHealth && assetHealth.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No media assets in any workspace yet.</p>
+          ) : assetHealth ? (
+            <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b text-left"><th className="py-2 px-3 text-muted-foreground">Tenant</th><th className="py-2 px-3 text-muted-foreground">Workspace</th><th className="py-2 px-3 text-muted-foreground">Total</th><th className="py-2 px-3 text-muted-foreground">Healthy</th><th className="py-2 px-3 text-muted-foreground">Broken</th><th className="py-2 px-3 text-muted-foreground">Empty URL</th><th className="py-2 px-3 text-muted-foreground">Non-CDN</th><th className="py-2 px-3 text-muted-foreground">Checked</th></tr></thead><tbody>
+              {assetHealth.map((h) => (
+                <tr key={h.workspaceId ?? "(none)"} className="border-b last:border-0">
+                  <td className="py-2 px-3">{h.tenantName}</td>
+                  <td className="py-2 px-3 font-medium">{h.workspaceName}</td>
+                  <td className="py-2 px-3">{h.total}</td>
+                  <td className="py-2 px-3">{h.broken === 0 && h.emptyUrl === 0 && h.nonCdn === 0 ? <Badge className="bg-green-100 text-green-700">{h.ok} OK</Badge> : <span>{h.ok}</span>}</td>
+                  <td className="py-2 px-3">{h.broken > 0 ? <Badge className="bg-red-100 text-red-700">{h.broken}</Badge> : <span>0</span>}</td>
+                  <td className="py-2 px-3">{h.emptyUrl > 0 ? <Badge className="bg-orange-100 text-orange-700">{h.emptyUrl}</Badge> : <span>0</span>}</td>
+                  <td className="py-2 px-3">{h.nonCdn > 0 ? <Badge className="bg-yellow-100 text-yellow-700">{h.nonCdn}</Badge> : <span>0</span>}</td>
+                  <td className="py-2 px-3 text-muted-foreground text-xs">{new Date(h.checkedAt).toLocaleTimeString()}</td>
+                </tr>
+              ))}
+              </tbody></table></div>
+          ) : null}
+        </CardContent>
+      </Card>
 
       <TokenBilling />
     </div>

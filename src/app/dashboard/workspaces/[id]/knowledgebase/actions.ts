@@ -2,6 +2,7 @@
 
 import { createClient } from "@supabase/supabase-js";
 import { getTenantId } from "@/lib/auth";
+import { extractDocumentText, mimeTypeForFilename } from "@/lib/media/docx-text";
 
 function getAdminClient() {
   return createClient(
@@ -29,10 +30,16 @@ export async function uploadFile(
     const buffer = Buffer.from(bytes);
     const storagePath = `${tenantId}/workspaces/${workspaceId}/knowledgebase/${Date.now()}_${file.name}`;
 
-    const mime = file.type;
+    // Browsers can report an empty type for .docx/.pdf, so derive it from the
+    // extension when needed — a blank contentType breaks the storage upload.
+    const mime = file.type || mimeTypeForFilename(file.name) || "application/octet-stream";
     let type: "doc" | "image" | "video" = "doc";
     if (mime.startsWith("image/")) type = "image";
     else if (mime.startsWith("video/")) type = "video";
+
+    // Extract readable text so uploaded documents actually feed the AI's
+    // knowledge-base context (not just get stored as opaque bytes).
+    const extracted = extractDocumentText(file.name, mime, buffer);
 
     const { error: uploadError } = await supabase.storage
       .from("tenant-assets")
@@ -59,7 +66,8 @@ export async function uploadFile(
         storage_path: storagePath,
         mime_type: mime,
         file_size: file.size,
-        extracted_metadata: { publicUrl: urlData.publicUrl },
+        scraped_text: extracted.extracted ? extracted.text.substring(0, 50000) : null,
+        extracted_metadata: { publicUrl: urlData.publicUrl, textExtracted: extracted.extracted },
         status: "ready",
       })
       .select("*")

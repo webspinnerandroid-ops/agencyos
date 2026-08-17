@@ -141,7 +141,7 @@ export default function KnowledgebasePage() {
           <p className="text-muted-foreground text-sm mt-1">Organize brand knowledge, scraped URLs, uploaded files, and reference material.</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          <input ref={fileInputRef} type="file" className="hidden" onChange={handleUpload} accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.webp,.svg,.mp4,.mov,.webm" />
+          <input ref={fileInputRef} type="file" className="hidden" onChange={handleUpload} accept=".pdf,.doc,.docx,.txt,.md,.csv,.png,.jpg,.jpeg,.webp,.svg,.mp4,.mov,.webm" />
           <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()} disabled={isPending}><Upload className="size-3 mr-1" /> Upload</Button>
           <Button variant="outline" size="sm" onClick={() => setShowAddUrl(!showAddUrl)} disabled={isPending}><Globe className="size-3 mr-1" /> Add URL</Button>
           <Button variant="outline" size="sm" onClick={() => setShowAddText(!showAddText)} disabled={isPending}><FileText className="size-3 mr-1" /> Add Text</Button>

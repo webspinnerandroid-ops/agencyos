@@ -125,12 +125,12 @@ export async function GET(request: NextRequest) {
 
     const redirectTarget =
       stateRow.platform === "google_business"
-        ? "/dashboard/settings/gbp?success=connected"
+        ? "/dashboard/connections?success=connected"
         : stateRow.platform === "gmail"
           ? "/dashboard/settings?success=gmail_connected"
           : isConnectionsPlatform
             ? `/dashboard/connections?success=${stateRow.platform}_connected`
-            : "/dashboard/settings/social?success=connected";
+            : "/dashboard/connections?success=connected";
     // Absolute redirect so the browser lands on the canonical site even if
     // this callback was served by a dev/local instance (which used to strand
     // the user on localhost after a successful connection).
@@ -142,8 +142,8 @@ export async function GET(request: NextRequest) {
       stateRow.platform === "search_console"
         ? "/dashboard/connections?error=server_error"
         : stateRow.platform === "google_business"
-          ? "/dashboard/settings/gbp?error=server_error"
-          : "/dashboard/settings/social?error=server_error";
+          ? "/dashboard/connections?error=server_error"
+          : "/dashboard/connections?error=server_error";
     return NextResponse.redirect(`${siteUrl()}${fallback}`);
   }
 }

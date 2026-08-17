@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getTenantId } from "@/lib/auth";
 import { encrypt } from "@/lib/encryption";
+import { getCurrentWorkspaceId } from "@/lib/workspace";
 import {
   encodeTokenBundle,
   getAccessToken,
@@ -31,12 +32,19 @@ export interface ActionResponse<T = void> {
 export async function getProfiles(): Promise<ActionResponse<GoogleBusinessProfile[]>> {
   try {
     const tenantId = await getTenantId();
+    const workspaceId = await getCurrentWorkspaceId().catch(() => null);
     const supabase = await createServiceClient();
-    const { data, error } = await supabase
+    // Workspace-scoped listings plus legacy tenant-wide rows so pre-006
+    // profiles keep showing for tenants that haven't reconnected yet.
+    let query = supabase
       .from("google_business_profiles")
       .select("*, client:clients(name)")
       .eq("tenant_id", tenantId)
       .order("created_at", { ascending: false });
+    if (workspaceId) {
+      query = query.or(`workspace_id.is.null,workspace_id.eq.${workspaceId}`);
+    }
+    const { data, error } = await query;
     if (error) throw new Error(error.message);
     return { success: true, data: data as GoogleBusinessProfile[] };
   } catch (err) {
@@ -52,12 +60,14 @@ export async function connectProfile(
 ): Promise<ActionResponse<GoogleBusinessProfile>> {
   try {
     const tenantId = await getTenantId();
+    const workspaceId = await getCurrentWorkspaceId().catch(() => null);
     const supabase = await createServiceClient();
     const encryptedToken = encrypt(accessToken);
     const { data, error } = await supabase
       .from("google_business_profiles")
       .insert({
         tenant_id: tenantId,
+        workspace_id: workspaceId ?? null,
         client_id: clientId || null,
         account_name: accountName,
         location_id: locationId,
@@ -68,6 +78,7 @@ export async function connectProfile(
       .single();
     if (error) throw new Error(error.message);
     revalidatePath("/dashboard/settings/gbp");
+    revalidatePath("/dashboard/connections");
     return { success: true, data: data as GoogleBusinessProfile };
   } catch (err) {
     return { success: false, error: (err as Error).message };
@@ -85,6 +96,7 @@ export async function removeProfile(profileId: string): Promise<ActionResponse> 
       .eq("tenant_id", tenantId);
     if (error) throw new Error(error.message);
     revalidatePath("/dashboard/settings/gbp");
+    revalidatePath("/dashboard/connections");
     return { success: true };
   } catch (err) {
     return { success: false, error: (err as Error).message };
@@ -123,16 +135,21 @@ interface GbpLocation {
 export async function syncGbpProfiles(): Promise<ActionResponse<GoogleBusinessProfile[]>> {
   try {
     const tenantId = await getTenantId();
+    const workspaceId = await getCurrentWorkspaceId().catch(() => null);
     const supabase = await createServiceClient();
 
-    const { data: row } = await supabase
+    let tokenQuery = supabase
       .from("google_business_profiles")
       .select("encrypted_token, account_email")
       .eq("tenant_id", tenantId)
       .eq("connected", true)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .order("created_at", { ascending: false });
+    if (workspaceId) {
+      tokenQuery = tokenQuery.or(
+        `workspace_id.is.null,workspace_id.eq.${workspaceId}`
+      );
+    }
+    const { data: row } = await tokenQuery.limit(1).maybeSingle();
     if (!row?.encrypted_token) {
       return { success: false, error: "Connect a Google account first, then refresh." };
     }
@@ -219,6 +236,7 @@ export async function syncGbpProfiles(): Promise<ActionResponse<GoogleBusinessPr
     };
     const rows = locations.map(({ account, location }) => ({
       tenant_id: tenantId,
+      workspace_id: workspaceId,
       account_name: location.title || account.split("/").pop() || "Business Profile",
       location_id: location.name,
       location_name: addressText(location),
@@ -227,22 +245,35 @@ export async function syncGbpProfiles(): Promise<ActionResponse<GoogleBusinessPr
       connected: true,
     }));
 
-    const { error: delErr } = await supabase
+    // Replace only this workspace's rows (plus any legacy tenant-wide row so
+    // a pre-006 profile gets promoted into the workspace instead of duplicating).
+    let delQuery = supabase
       .from("google_business_profiles")
       .delete()
       .eq("tenant_id", tenantId);
+    if (workspaceId) {
+      delQuery = delQuery.or(`workspace_id.is.null,workspace_id.eq.${workspaceId}`);
+    }
+    const { error: delErr } = await delQuery;
     if (delErr) throw new Error(delErr.message);
 
-    // Rows are pre-bound to this tenant; the map re-affirms tenant_id inline
-    // (kept on one chain so the isolation audit sees the scope).
+    // Rows are pre-bound to this tenant/workspace; the map re-affirms both
+    // inline (kept on one chain so the isolation audit sees the scope).
     const { data: inserted, error: insErr } = await supabase
       .from("google_business_profiles")
-      .insert(rows.map((r) => ({ ...r, tenant_id: tenantId })))
+      .insert(
+        rows.map((r) => ({
+          ...r,
+          tenant_id: tenantId,
+          workspace_id: workspaceId,
+        }))
+      )
       .select("*")
       .order("account_name", { ascending: true });
     if (insErr) throw new Error(insErr.message);
 
     revalidatePath("/dashboard/settings/gbp");
+    revalidatePath("/dashboard/connections");
     return { success: true, data: (inserted ?? []) as GoogleBusinessProfile[] };
   } catch (err) {
     return { success: false, error: (err as Error).message };

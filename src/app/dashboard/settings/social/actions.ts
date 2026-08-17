@@ -302,6 +302,41 @@ export async function addSocialAccountFromCallback(
 }
 
 // ------------------------------------------------------------------
+// Add a social account manually (platforms without an OAuth flow yet)
+// ------------------------------------------------------------------
+
+export async function addManualSocialAccount(
+  platform: string,
+  accountName: string
+): Promise<ActionResponse<SocialAccount>> {
+  try {
+    const tenantId = await getTenantId();
+    const workspaceId = await getCurrentWorkspaceId().catch(() => null);
+    const supabase = await createServiceClient();
+
+    const { data, error } = await supabase
+      .from("social_accounts")
+      .insert({
+        tenant_id: tenantId,
+        workspace_id: workspaceId ?? null,
+        platform,
+        account_name: accountName,
+        encrypted_token: null,
+      })
+      .select("*")
+      .single();
+
+    if (error) throw new Error(error.message);
+
+    revalidatePath("/dashboard/settings/social");
+    revalidatePath("/dashboard/connections");
+    return { success: true, data: data as SocialAccount };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+// ------------------------------------------------------------------
 // Remove a social account
 // ------------------------------------------------------------------
 
@@ -319,6 +354,7 @@ export async function removeSocialAccount(accountId: string): Promise<ActionResp
     if (error) throw new Error(error.message);
 
     revalidatePath("/dashboard/settings/social");
+    revalidatePath("/dashboard/connections");
     return { success: true };
   } catch (err) {
     return { success: false, error: (err as Error).message };

@@ -8,7 +8,7 @@ export async function GET(request: NextRequest) {
   const error = url.searchParams.get("error");
 
   if (error || !code || !state) {
-    return NextResponse.redirect(new URL("/dashboard/settings/social?error=oauth_denied", request.url));
+    return NextResponse.redirect(new URL("/dashboard/connections?error=oauth_denied", request.url));
   }
 
   const supabase = createClient(
@@ -25,7 +25,7 @@ export async function GET(request: NextRequest) {
     .single();
 
   if (stateErr || !stateRow) {
-    return NextResponse.redirect(new URL("/dashboard/settings/social?error=invalid_state", request.url));
+    return NextResponse.redirect(new URL("/dashboard/connections?error=invalid_state", request.url));
   }
 
   // Exchange code for token
@@ -41,7 +41,7 @@ export async function GET(request: NextRequest) {
 
     if (tokenData.error) {
       console.error("[meta-callback] Token exchange failed:", tokenData.error);
-      return NextResponse.redirect(new URL("/dashboard/settings/social?error=token_exchange_failed", request.url));
+      return NextResponse.redirect(new URL("/dashboard/connections?error=token_exchange_failed", request.url));
     }
 
     // Get user info
@@ -69,9 +69,9 @@ export async function GET(request: NextRequest) {
     // Clean up used state
     await supabase.from("oauth_states").delete().eq("state", state);
 
-    return NextResponse.redirect(new URL("/dashboard/settings/social?success=connected", request.url));
+    return NextResponse.redirect(new URL("/dashboard/connections?success=connected", request.url));
   } catch (err) {
     console.error("[meta-callback] Error:", err);
-    return NextResponse.redirect(new URL("/dashboard/settings/social?error=server_error", request.url));
+    return NextResponse.redirect(new URL("/dashboard/connections?error=server_error", request.url));
   }
 }

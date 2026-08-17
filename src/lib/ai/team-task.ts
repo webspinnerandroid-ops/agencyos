@@ -1101,8 +1101,8 @@ async function buildSetupChecklist(
     {
       label: "Social accounts connected",
       done: socials,
-      hint: "How-to: open Settings → Social Accounts, pick the platform, click Connect, and authorize in the popup. Facebook and Instagram connect via OAuth today; X, LinkedIn, YouTube, TikTok, Threads and Pinterest are supported as OAuth rolls out.",
-      url: "/dashboard/settings/social",
+      hint: "How-to: open Connections, pick the platform, click Connect (or Add for LinkedIn/TikTok/Threads/Reddit), and authorize in the popup. Facebook and Instagram connect via OAuth today; X, LinkedIn, YouTube, TikTok, Threads, Reddit and Pinterest are supported as OAuth rolls out.",
+      url: "/dashboard/connections",
     },
     {
       label: "Google accounts connected (Analytics + Search Console)",

@@ -50,6 +50,12 @@ export default function sitemap(): MetadataRoute.Sitemap {
       priority: 0.2,
     },
     {
+      url: `${SITE_URL}/data-deletion`,
+      lastModified: now,
+      changeFrequency: "yearly",
+      priority: 0.2,
+    },
+    {
       url: `${SITE_URL}/terms`,
       lastModified: now,
       changeFrequency: "yearly",

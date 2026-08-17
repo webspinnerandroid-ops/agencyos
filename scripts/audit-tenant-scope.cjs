@@ -75,6 +75,12 @@ const IGNORE = new Set([
   "src/lib/voice/haven.ts",
   // Super-admin wide access
   "src/app/dashboard/admin/actions.ts",
+  // data-deletion route: public request intake (no session). It writes the
+  // request into admin_audit_log and reads user_roles to find ALL super
+  // admins to notify — a cross-tenant read by design (same trust class as
+  // admin/actions.ts). It never returns tenant data to the caller; the
+  // response is a fixed confirmation string.
+  "src/app/api/data-deletion/route.ts",
   // apis/route.ts: the APIs & Balances panel is a super-admin-wide view by
   // design — it lists tenant_api_keys counts and balance state across ALL
   // tenants (the same trust model as admin/actions.ts). The admin gate

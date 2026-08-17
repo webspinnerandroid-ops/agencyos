@@ -52,7 +52,14 @@ export default function PrivacyPage() {
           law and your content may be deleted after a reasonable period.
         </p>
 
-        <h2 className="text-xl font-semibold mt-8">6. Contact</h2>
+        <h2 className="text-xl font-semibold mt-8">6. Your Rights & Deletion</h2>
+        <p className="mt-2 text-muted-foreground leading-relaxed">
+          You may request deletion of your account and personal data at any time. To do so, visit our{" "}
+          <Link href="/data-deletion" className="text-primary hover:underline">Data Deletion Request</Link>{" "}
+          page or contact us at the address below.
+        </p>
+
+        <h2 className="text-xl font-semibold mt-8">7. Contact</h2>
         <p className="mt-2 text-muted-foreground leading-relaxed">
           Questions about this policy? Contact <a href="mailto:support@blissmedialab.com" className="text-primary hover:underline">support@blissmedialab.com</a>.
         </p>

@@ -102,6 +102,9 @@ jobs:
     name: Asset integrity
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
 
     steps:
       - uses: actions/checkout@v4
@@ -116,12 +119,9 @@ jobs:
         run: npm ci
 
       - name: Verify stored asset bytes
-        if: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY != '' }}
-        env:
-          NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        if: env.SUPABASE_SERVICE_ROLE_KEY != ''
         run: node scripts/backfill-assets.cjs --verify
 
       - name: Skip notice (Supabase secrets not configured)
-        if: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY == '' }}
+        if: env.SUPABASE_SERVICE_ROLE_KEY == ''
         run: echo "Asset-integrity check skipped — set SUPABASE_SERVICE_ROLE_KEY and NEXT_PUBLIC_SUPABASE_URL (vars/secrets) in repo settings to enable it."

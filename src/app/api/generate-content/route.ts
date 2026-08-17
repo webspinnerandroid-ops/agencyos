@@ -177,26 +177,30 @@ async function generateBlogImages(
           spec.description && spec.description.trim().length > 0
             ? spec.description.trim()
             : `${postTitle}: ${spec.sectionTitle || "featured image"}`;
-        const { error: assetErr } = await supabase.from("media_assets").insert({
-          tenant_id: tenantId,
-          client_id: clientId ?? null,
-          workspace_id: workspaceId,
-          type: "image",
-          prompt: spec.prompt,
-          url,
-          alt_text: altText,
-          metadata: {
-            placement: spec.placement,
-            sectionTitle: spec.sectionTitle,
-            seo: {
-              altText,
-              // Page-unique image title: post title + section context.
-              title: `${postTitle}${spec.sectionTitle ? ` — ${spec.sectionTitle}` : " — featured"}`,
-              description: spec.description || spec.sectionTitle || postTitle,
+        const { data: assetRow, error: assetErr } = await supabase
+          .from("media_assets")
+          .insert({
+            tenant_id: tenantId,
+            client_id: clientId ?? null,
+            workspace_id: workspaceId,
+            type: "image",
+            prompt: spec.prompt,
+            url,
+            alt_text: altText,
+            metadata: {
+              placement: spec.placement,
+              sectionTitle: spec.sectionTitle,
+              seo: {
+                altText,
+                // Page-unique image title: post title + section context.
+                title: `${postTitle}${spec.sectionTitle ? ` — ${spec.sectionTitle}` : " — featured"}`,
+                description: spec.description || spec.sectionTitle || postTitle,
+              },
             },
-          },
-          status: "completed",
-        });
+            status: "completed",
+          })
+          .select("id")
+          .single();
         if (assetErr) {
           console.warn(
             "[generate-content] Failed to save generated image to media_assets:",
@@ -204,7 +208,9 @@ async function generateBlogImages(
           );
         }
 
-        results.push({ spec, url });
+        // Keep the asset id so the post flow can stamp the final
+        // SEO/AEO/GEO scores onto the card in the Asset Library.
+        results.push({ spec, url, assetId: assetRow?.id ?? null });
         void incrementUsage(tenantId, "image_generations", 1);
         void incrementUsage(tenantId, "ai_tokens", 1000);
       } catch (err) {
@@ -273,26 +279,34 @@ async function persistUploadedImages(
       img.spec.description && img.spec.description.trim().length > 0
         ? img.spec.description.trim()
         : `${postTitle}: ${img.spec.placement === "featured" ? "featured image" : "inline image"}`;
-    const { error } = await supabase.from("media_assets").insert({
-      tenant_id: tenantId,
-      client_id: clientId ?? null,
-      workspace_id: workspaceId,
-      type: "image",
-      prompt: "",
-      url: img.url,
-      alt_text: altText,
-      metadata: {
-        placement: img.spec.placement,
-        sectionTitle: img.spec.sectionTitle,
-        source: "upload",
-      },
-      status: "completed",
-    });
+    const { data: assetRow, error } = await supabase
+      .from("media_assets")
+      .insert({
+        tenant_id: tenantId,
+        client_id: clientId ?? null,
+        workspace_id: workspaceId,
+        type: "image",
+        prompt: "",
+        url: img.url,
+        alt_text: altText,
+        metadata: {
+          placement: img.spec.placement,
+          sectionTitle: img.spec.sectionTitle,
+          source: "upload",
+        },
+        status: "completed",
+      })
+      .select("id")
+      .single();
     if (error) {
       console.warn(
         "[generate-content] Failed to save uploaded image to media_assets:",
         error.message
       );
+    } else if (assetRow?.id) {
+      // The caller holds the same array — stamp the id so scores can be
+      // attached to uploaded images too.
+      img.assetId = assetRow.id;
     }
   }
 }
@@ -1025,6 +1039,52 @@ Use the above context to craft a compelling, platform-optimized caption that dri
       );
     }
     const blogPostId = blogPostRow.id;
+
+    // Stamp the final SEO/AEO/GEO scores onto this post's media_assets so
+    // the Asset Library card shows how the generated piece scored (chips on
+    // the card render only when metadata.scores exists). Best-effort — a
+    // failure here never fails the request.
+    {
+      const assetIds = [
+        ...new Set(
+          generatedImages
+            .map((img) => img.assetId)
+            .filter((id): id is string => Boolean(id))
+        ),
+      ];
+      if (assetIds.length > 0) {
+        try {
+          const { data: assetRows } = await supabase
+            .from("media_assets")
+            .select("id, metadata")
+            .eq("tenant_id", tenantId)
+            .in("id", assetIds);
+          for (const row of assetRows ?? []) {
+            const meta = (row.metadata ?? {}) as Record<string, unknown>;
+            await supabase
+              .from("media_assets")
+              .update({
+                metadata: {
+                  ...meta,
+                  scores: {
+                    seo: seoScore.total,
+                    aeo: aeoGeo.aeoScore,
+                    geo: aeoGeo.geoSscore,
+                    gate,
+                  },
+                },
+              })
+              .eq("tenant_id", tenantId)
+              .eq("id", row.id);
+          }
+        } catch (err) {
+          console.warn(
+            "[generate-content] Failed to stamp scores on assets:",
+            err
+          );
+        }
+      }
+    }
 
     // Insert social posts
     const socialPostRows: unknown[] = [];

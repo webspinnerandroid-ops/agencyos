@@ -59,6 +59,7 @@ function mimeForExt(ext) {
 }
 
 const DRY = process.argv.includes("--dry");
+const VERIFY = process.argv.includes("--verify");
 
 (async () => {
   const env = loadEnv(path.join(__dirname, "..", ".env.local"));
@@ -74,10 +75,12 @@ const DRY = process.argv.includes("--dry");
   let tagFixed = 0;
   let urlFixed = 0;
   let skipped = 0;
+  let okCount = 0;
+  let failed = 0;
   let offset = 0;
   const PAGE = 200;
 
-  console.log(`Mode: ${DRY ? "DRY RUN (no writes)" : "LIVE"}`);
+  console.log(`Mode: ${VERIFY ? "VERIFY (read-only smoke test)" : DRY ? "DRY RUN (no writes)" : "LIVE"}`);
   console.log(`CDN: ${cdnPrefix}`);
 
   for (;;) {
@@ -95,6 +98,58 @@ const DRY = process.argv.includes("--dry");
 
     for (const row of data) {
       const metaTask = row.metadata && typeof row.metadata === "object" ? row.metadata.task : null;
+
+      // --- 0. Verify mode: smoke-test every asset's bytes against its
+      // stored extension. Nothing is written; a future migration or deploy
+      // that silently corrupts asset formats shows up here as a MISMATCH.
+      if (VERIFY) {
+        const url = row.url || "";
+        if (!url) { skipped++; continue; }
+        let body = null;
+        if (url.startsWith("data:")) {
+          const m = url.match(/^data:([^;,]+)?(;base64)?,([\s\S]*)$/);
+          if (!m) { skipped++; continue; }
+          body = m[2] ? Buffer.from(m[3], "base64") : Buffer.from(decodeURIComponent(m[3]), "latin1");
+        } else if (url.startsWith(cdnPrefix)) {
+          try {
+            const res = await fetch(url, { signal: AbortSignal.timeout(45000) });
+            if (!res.ok) {
+              console.log(`  [verify] ${row.id.slice(0, 8)} HTTP ${res.status} — ${url.slice(0, 90)}`);
+              failed++;
+              continue;
+            }
+            body = Buffer.from(await res.arrayBuffer());
+          } catch (e) {
+            console.log(`  [verify] ${row.id.slice(0, 8)} fetch error: ${e.message}`);
+            failed++;
+            continue;
+          }
+        } else {
+          console.log(`  [verify] ${row.id.slice(0, 8)} non-CDN URL (${url.slice(0, 70)}…) — skipped`);
+          skipped++;
+          continue;
+        }
+        const sniffed = sniffImageExt(body);
+        // Videos: MP4/MOV/WebM all start with an ftyp box — accept .mp4 for them.
+        const isMp4 =
+          body.length >= 12 &&
+          body.subarray(4, 8).toString("latin1") === "ftyp";
+        const pathPart = url.startsWith(cdnPrefix) ? url.slice(cdnPrefix.length) : null;
+        const currentExt = pathPart ? path.extname(pathPart).toLowerCase() : "(data)";
+        const ok =
+          body.length > 0 &&
+          ((sniffed !== null && currentExt === sniffed) ||
+            (currentExt === ".mp4" && isMp4));
+        if (ok) {
+          okCount++;
+        } else {
+          failed++;
+          console.log(
+            `  [verify] MISMATCH ${row.id.slice(0, 8)} stored=${currentExt} sniffed=${sniffed ?? "?"} bytes=${body.length} — ${url.slice(0, 90)}`
+          );
+        }
+        continue;
+      }
 
       // --- 1. Task tag backfill ---
       if (!row.task && metaTask) {
@@ -187,5 +242,9 @@ const DRY = process.argv.includes("--dry");
     offset += PAGE;
   }
 
+  if (VERIFY) {
+    console.log(`\nVerify done. OK: ${okCount}, FAILED: ${failed}, skipped: ${skipped}`);
+    process.exit(failed > 0 ? 1 : 0);
+  }
   console.log(`\nDone. task tags fixed: ${tagFixed}, urls fixed: ${urlFixed}, rows skipped/ok: ${skipped}`);
 })();

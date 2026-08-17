@@ -190,35 +190,51 @@ export default function AssetsPage() {
     }
   };
 
+  const KEYWORD_MAP: Record<string, string> = {
+    logo: "logo",
+    icon: "icon",
+    "brand mark": "logo",
+    mockup: "mockup",
+    website: "mockup",
+    ui: "mockup",
+    social: "social",
+    instagram: "social",
+    packaging: "packaging",
+    label: "packaging",
+    guideline: "guidelines",
+    "brand book": "guidelines",
+    banner: "social",
+    ad: "social",
+    flyer: "print",
+    poster: "print",
+    brochure: "print",
+    business: "print",
+    card: "print",
+    video: "video",
+    thumbnail: "video",
+  };
+
+  // Which deliverable keyword (if any) best describes this prompt.
+  const detectKeyword = (prompt: string): string | null => {
+    const p = (prompt || "").toLowerCase();
+    let best: string | null = null;
+    let bestLen = 0;
+    for (const [needle, name] of Object.entries(KEYWORD_MAP)) {
+      if (p.includes(needle) && needle.length > bestLen) {
+        best = name;
+        bestLen = needle.length;
+      }
+    }
+    return best;
+  };
+
   // Pick the folder whose name best matches this asset's prompt (or a known
   // deliverable keyword) so one click files the asset instead of a manual
   // select+apply dance. Returns null when nothing matches.
   const suggestFolder = (prompt: string, list: Folder[]): Folder | null => {
     const p = (prompt || "").toLowerCase();
     const words = new Set(p.split(/[^a-z0-9]+/).filter((w) => w.length > 2));
-    const KEYWORD_MAP: Record<string, string> = {
-      logo: "logo",
-      icon: "icon",
-      "brand mark": "logo",
-      mockup: "mockup",
-      website: "mockup",
-      ui: "mockup",
-      social: "social",
-      instagram: "social",
-      packaging: "packaging",
-      label: "packaging",
-      guideline: "guidelines",
-      "brand book": "guidelines",
-      banner: "social",
-      ad: "social",
-      flyer: "print",
-      poster: "print",
-      brochure: "print",
-      business: "print",
-      card: "print",
-      video: "video",
-      thumbnail: "video",
-    };
+    const keyword = detectKeyword(prompt);
     let best: Folder | null = null;
     let bestScore = 0;
     for (const f of list) {
@@ -231,8 +247,7 @@ export default function AssetsPage() {
           if (w.length > 2 && words.has(w)) score += 10 + w.length;
         }
       }
-      const keyword = Object.entries(KEYWORD_MAP).find(([k]) => p.includes(k));
-      if (keyword && name.includes(keyword[1])) score += 20;
+      if (keyword && name.includes(keyword)) score += 20;
       if (score > bestScore) {
         bestScore = score;
         best = f;
@@ -241,10 +256,36 @@ export default function AssetsPage() {
     return bestScore > 0 ? best : null;
   };
 
+  // One-click filing: file into the best-matching folder, or CREATE that
+  // folder on the spot (named from the deliverable keyword) when nothing
+  // matches yet — the asset is never left stranded.
   const autoFile = async (asset: Asset) => {
-    const target = suggestFolder(asset.prompt, foldersForKind);
+    let target = suggestFolder(asset.prompt, foldersForKind);
     if (!target) {
-      setError("No matching folder yet — create one (or a folder named after the deliverable) first.");
+      const keyword = detectKeyword(asset.prompt);
+      const name = keyword
+        ? keyword.charAt(0).toUpperCase() + keyword.slice(1)
+        : "Misc";
+      const res = await fetch("/api/assets/folders", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, kind: assetTypeForKind(kind) }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error ?? "Failed to create a folder for this asset");
+        return;
+      }
+      await loadFolders();
+      const data = await res.json();
+      const created = (data.folders ?? []).find(
+        (f: Folder) => f.name.toLowerCase() === name.toLowerCase()
+      ) ?? data.folder;
+      target = created ?? suggestFolder(asset.prompt, foldersForKind);
+    }
+    if (!target) {
+      setError("Could not find or create a folder for this asset.");
       return;
     }
     await moveAsset(asset, target.id);
@@ -507,11 +548,42 @@ export default function AssetsPage() {
                       <p className="text-xs text-muted-foreground line-clamp-2" title={asset.prompt}>
                         {asset.prompt}
                       </p>
+                      {(asset.metadata as { scores?: { seo?: number; aeo?: number; geo?: number; gate?: number } } | null)
+                        ?.scores && (
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {(asset.metadata as { scores?: { seo?: number; aeo?: number; geo?: number } }).scores!.seo != null && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 font-medium">
+                              SEO {(asset.metadata as { scores?: { seo?: number } }).scores!.seo}
+                            </span>
+                          )}
+                          {(asset.metadata as { scores?: { aeo?: number } }).scores!.aeo != null && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300 font-medium">
+                              AEO {(asset.metadata as { scores?: { aeo?: number } }).scores!.aeo}
+                            </span>
+                          )}
+                          {(asset.metadata as { scores?: { geo?: number } }).scores!.geo != null && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300 font-medium">
+                              GEO {(asset.metadata as { scores?: { geo?: number } }).scores!.geo}
+                            </span>
+                          )}
+                        </div>
+                      )}
                       <div className="flex items-center justify-between">
                         <span className="text-[10px] text-muted-foreground">
                           {new Date(asset.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
                         </span>
                         <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => autoFile(asset)}
+                            className="p-1 rounded hover:bg-purple-100 dark:hover:bg-purple-900 text-purple-600"
+                            title={
+                              suggestFolder(asset.prompt, foldersForKind)
+                                ? `Auto-file into "${suggestFolder(asset.prompt, foldersForKind)!.name}"`
+                                : "Auto-file (creates a folder if none matches)"
+                            }
+                          >
+                            <Wand2 className="size-3.5" />
+                          </button>
                           {asset.url && (
                             <button
                               onClick={() => download(asset.url!, `asset-${asset.id.slice(0, 8)}`)}
@@ -532,17 +604,6 @@ export default function AssetsPage() {
                       </div>
                       {foldersForKind.length > 0 && (
                         <div className="flex items-center gap-1">
-                          <button
-                            onClick={() => autoFile(asset)}
-                            className="p-1 rounded hover:bg-purple-100 dark:hover:bg-purple-900 text-purple-600 shrink-0"
-                            title={
-                              suggestFolder(asset.prompt, foldersForKind)
-                                ? `File into "${suggestFolder(asset.prompt, foldersForKind)!.name}"`
-                                : "No matching folder — create one first"
-                            }
-                          >
-                            <Wand2 className="size-3" />
-                          </button>
                           <select
                             value={moveTarget[asset.id] ?? ""}
                             onChange={(e) => setMoveTarget((prev) => ({ ...prev, [asset.id]: e.target.value }))}

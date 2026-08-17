@@ -45,6 +45,12 @@ export async function GET(request: NextRequest) {
     }
     if (type) query = query.eq("type", type);
     if (task) query = query.eq("task", task);
+    // The plain Images tab must never overlap with the Brand Design tab: when
+    // no explicit task is requested, brand_design assets are excluded (legacy
+    // rows with no task tag still show, so nothing pre-078 disappears).
+    if (type === "image" && !task && !folderId) {
+      query = query.or("task.is.null,task.eq.image_generation");
+    }
     if (folderId) query = query.eq("folder_id", folderId);
     if (unfiled) query = query.is("folder_id", null);
     if (q) query = query.ilike("prompt", `%${q}%`);

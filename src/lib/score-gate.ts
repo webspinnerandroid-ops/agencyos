@@ -136,7 +136,7 @@ export function mapReusedImages(
   const out: GeneratedBlogImage[] = [];
   newSpecs.forEach((spec, i) => {
     const url = oldImages[i]?.url;
-    if (url) out.push({ spec, url });
+    if (url) out.push({ spec, url, assetId: oldImages[i]?.assetId });
   });
   return out;
 }

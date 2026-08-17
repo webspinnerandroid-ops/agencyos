@@ -21,6 +21,8 @@ export interface BlogImageSpec {
 export interface GeneratedBlogImage {
   spec: BlogImageSpec;
   url: string;
+  /** media_assets row id — lets the post flow stamp SEO/AEO/GEO scores onto the asset. */
+  assetId?: string | null;
 }
 
 /**

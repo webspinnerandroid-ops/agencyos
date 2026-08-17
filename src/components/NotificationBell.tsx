@@ -45,6 +45,22 @@ function tenantIdFromCookie(): string {
   }
 }
 
+// PWA app-icon badge: mirrored from the bell's unread count (setAppBadge on
+// the device icon; cleared when everything is read). Best-effort — browsers
+// that lack the API simply skip it.
+function syncAppBadge(count: number): void {
+  if (!("setAppBadge" in navigator) && !("clearAppBadge" in navigator)) return;
+  try {
+    if (count > 0) {
+      void (navigator as Navigator & { setAppBadge?: (n: number) => Promise<void> }).setAppBadge?.(count);
+    } else {
+      void (navigator as Navigator & { clearAppBadge?: () => Promise<void> }).clearAppBadge?.();
+    }
+  } catch {
+    // badge unsupported — ignore
+  }
+}
+
 /**
  * Top-nav bell: listens for realtime broadcasts from background AI work
  * (plus a polling fallback), shows a red dot for unread items, and drops
@@ -72,7 +88,9 @@ export default function NotificationBell() {
         unread?: number;
       };
       setItems(data.notifications ?? []);
-      setUnread(data.unread ?? 0);
+      const nextUnread = data.unread ?? 0;
+      setUnread(nextUnread);
+      syncAppBadge(nextUnread);
     } catch {
       // offline / first paint — leave the last known state
     } finally {

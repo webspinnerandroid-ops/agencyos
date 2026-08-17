@@ -3,6 +3,8 @@ import {
   EMPLOYEE_PERSONAS,
   buildEmployeeSystemPrompt,
   employeeKeyNameList,
+  employeeRosterText,
+  employeeRosterSection,
   isProprietaryQuery,
   buildProprietaryRefusal,
 } from "./employee-personas";
@@ -16,6 +18,30 @@ describe("employee personas", () => {
     for (const key of keys) {
       expect(EMPLOYEE_PERSONAS[key], key).toBeDefined();
     }
+  });
+
+  it("the roster is complete and accurate (no hallucinated roles)", () => {
+    const roster = employeeRosterText();
+    // Everyone who exists is listed:
+    for (const p of Object.values(EMPLOYEE_PERSONAS)) {
+      expect(roster).toContain(`${p.name} — ${p.role}`);
+    }
+    // 12 employees today — if this changes, update on purpose.
+    expect(Object.keys(EMPLOYEE_PERSONAS)).toHaveLength(12);
+    // Bilbo is the brand/vector designer, never "Research":
+    expect(roster).toContain("Bilbo — Lead Brand & Vector Graphic Designer");
+    expect(roster.toLowerCase()).not.toContain("bilbo — research");
+    // Woodhouse is the executive assistant, never forgotten:
+    expect(roster).toContain("Woodhouse — Executive Assistant");
+    // Roles are the persona roles verbatim — e.g. Barry is lead gen, not web:
+    expect(roster).toContain("Barry — Lead Generation");
+    expect(roster).toContain("AK — Technical SEO Auditor");
+    expect(roster).toContain("Lana — Reputation Manager");
+    expect(roster).toContain("Brett — Receptionist");
+    // The prompt section carries the roster and forbids inventing more:
+    const section = employeeRosterSection();
+    expect(section).toContain("Bilbo");
+    expect(section).toContain("There are no others");
   });
 
   it("Bilbo is the Lead Brand & Vector Graphic Designer", () => {

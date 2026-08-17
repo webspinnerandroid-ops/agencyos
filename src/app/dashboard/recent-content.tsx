@@ -33,7 +33,12 @@ export function RecentContentList({ posts: initialPosts }: { posts: PostRow[] })
       if (res.ok) {
         setPosts((prev) => prev.filter((p) => p.id !== postId));
       } else {
-        alert("Failed to delete post. Please try again.");
+        const data = await res.json().catch(() => ({}));
+        const reason =
+          (data as { details?: string; error?: string })?.details ??
+          (data as { error?: string })?.error ??
+          "Unknown error";
+        alert(`Failed to delete post: ${reason.slice(0, 300)}`);
       }
     } catch {
       alert("Network error. Please try again.");

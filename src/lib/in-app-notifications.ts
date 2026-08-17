@@ -110,6 +110,22 @@ export async function createNotification(
     } catch (err) {
       console.warn("[in-app-notifications] discord mirror failed:", err);
     }
+    // Web push (PWA): an empty-payload push wakes the service worker, which
+    // fetches the real payload from /api/push/pending. Fire-and-forget — a
+    // push failure must never break the notification itself.
+    try {
+      const { webPushNotify } = await import("@/lib/web-push");
+      void webPushNotify({
+        tenantId: input.tenantId,
+        userId: input.userId,
+        kind: input.kind ?? "info",
+        title: input.title,
+        body: input.body,
+        link: input.link,
+      });
+    } catch (err) {
+      console.warn("[in-app-notifications] web push mirror failed:", err);
+    }
   } catch (err) {
     console.warn("[in-app-notifications] create failed:", err);
   }

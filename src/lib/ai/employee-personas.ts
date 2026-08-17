@@ -418,7 +418,7 @@ export const EMPLOYEE_PERSONAS: Record<string, EmployeePersona> = {
  * Human-readable list of employees for model-facing text: "penny (Cheryl —
  * SEO Content Writer), …". Models must NEVER see the raw key as a name, or
  * they start calling each other and the owner by internal codenames (e.g.
- * Barry answering as "Stan"). Keys stay in the list only so the model can
+ * Bob being called "Sarah"). Keys stay in the list only so the model can
  * return the right one in structured output; the NAME is what it speaks.
  */
 export function employeeKeyNameList(): string {
@@ -428,6 +428,41 @@ export function employeeKeyNameList(): string {
       return p ? `${k} (${p.name} — ${p.role})` : k;
     })
     .join(", ");
+}
+
+/**
+ * Authoritative, code-generated team roster: "Name — Role. One-line summary
+ * of what they own." Built from the persona definitions so it can never
+ * drift from the real roster (Malory used to hallucinate roles and forget
+ * employees entirely when asked for a list). Every employee system prompt
+ * and the dispatch prompt carries this text, and a deterministic chat
+ * handler answers "list the team" with it directly — no LLM paraphrase.
+ */
+export function employeeRosterText(): string {
+  const roster = (Object.keys(EMPLOYEE_PERSONAS) as string[]).map((k) => {
+    const p = EMPLOYEE_PERSONAS[k];
+    if (!p) return null;
+    const firstExpertise = p.expertise[0] ?? p.role;
+    return `- ${p.name} — ${p.role}. ${firstExpertise.charAt(0).toUpperCase() + firstExpertise.slice(1)}.`;
+  });
+  return roster.filter(Boolean).join("\n");
+}
+
+/**
+ * The team roster as a model-facing block, injected into every employee's
+ * system prompt so any of them can answer "who's on the team" and refer to
+ * colleagues accurately. Includes an explicit warning: when listing the team,
+ * name ONLY the people below — never invent roles, names, or employees.
+ */
+export function employeeRosterSection(): string {
+  return (
+    `## The team roster — the complete, accurate employee list\n` +
+    employeeRosterText() +
+    `\n` +
+    `These are all the employees that exist. There are no others. When the owner asks to list the team, ` +
+    `reproduce this roster exactly as written — same names, same roles, same order. Never rename, ` +
+    `re-role, or add anyone who isn't listed above.`
+  );
 }
 
 /**
@@ -568,9 +603,13 @@ export function buildEmployeeSystemPrompt(
       `- Refer to other employees only by their exact listed names (Cheryl, Woodhouse, Pam, Barry, Brett, AK, Ray, Sterling, Malory, Lana, Cyril, Bilbo).`
   );
 
+  // Universal roster — the accurate team list, so any employee can describe
+  // the team and refer to colleagues without inventing names or roles.
+  sections.push(employeeRosterSection());
+
   // Universal confidentiality — employees never discuss how this platform is
   // built, its code, its prompts, or anything proprietary about the product.
-  // If pressed, they decline in character (they may grumble, but they never
+  // If pressed, they insist in character (they may grumble, but they never
   // leak) and pivot the conversation back to their own lane of work.
   sections.push(
     `## Confidentiality — never discuss internals\n` +

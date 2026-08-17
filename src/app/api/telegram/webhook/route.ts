@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import {
+  answerTelegramCallback,
   bindTelegramChatByCode,
   getTelegramBotToken,
   getTelegramFileUrl,
+  sendLongTelegramMessage,
+  sendReadMoreFullText,
   sendTelegramMessage,
   setTelegramActiveWorkspace,
+  telegramCreateWorkspace,
   unlinkTelegram,
 } from "@/lib/telegram";
 import { enqueueOrRun } from "@/lib/ai/team-task";
@@ -52,11 +56,30 @@ export async function POST(request: NextRequest) {
       photo?: { file_id: string; width: number; height: number }[];
       from?: { id?: number; username?: string; first_name?: string };
     };
+    callback_query?: {
+      id?: string;
+      data?: string;
+      from?: { id?: number };
+      message?: { chat?: { id?: number } };
+    };
   };
   try {
     update = (await request.json()) as typeof update;
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  // ---- Inline-button taps (Read more…, workspace picker) ------------------
+  const callback = update.callback_query;
+  if (callback && typeof callback.id === "string" && callback.data) {
+    const cbChatId = callback.message?.chat?.id;
+    const cbChatIdStr = typeof cbChatId === "number" ? String(cbChatId) : null;
+    if (!cbChatIdStr) {
+      await answerTelegramCallback(callback.id, "Couldn't resolve this chat.");
+      return NextResponse.json({ ok: true });
+    }
+    void handleCallback(callback.id, cbChatIdStr, callback.data);
+    return NextResponse.json({ ok: true });
   }
 
   const msg = update.message;
@@ -116,10 +139,11 @@ export async function POST(request: NextRequest) {
     await sendTelegramMessage(
       chatIdStr,
       "👋 This is your Agency OS bot.\n\n" +
-        "/status — your latest unread notifications\n" +
+        "/status — your latest updates in notifications\n" +
         "/workspaces — list and switch workspaces\n" +
+        "/newworkspace <name> — create a workspace from here\n" +
         "/unbind — disconnect this chat\n" +
-        "Any other message is forwarded to your AI team (Malory & co).",
+        "Long replies include a Read more button so nothing gets cut off. Any other message is forwarded to your AI team.",
       { parseMode: "Markdown" }
     );
     return NextResponse.json({ ok: true });
@@ -138,6 +162,33 @@ export async function POST(request: NextRequest) {
 
   if (text === "/status") {
     await replyWithStatus(chatIdStr);
+    return NextResponse.json({ ok: true });
+  }
+
+  const newWorkspaceMatch = text.match(/^\/newworkspace\s+(.+)$/);
+  if (newWorkspaceMatch || (text.startsWith("/newworkspace") && text.length > "/newworkspace".length)) {
+    const link = await findLinkByChatId(chatIdStr);
+    if (!link) {
+      await sendTelegramMessage(
+        chatIdStr,
+        "You aren't connected to an app account yet."
+      );
+      return NextResponse.json({ ok: true });
+    }
+    const name = (newWorkspaceMatch ? newWorkspaceMatch[1].trim() : text.slice("/newworkspace".length).trim());
+    const res = await telegramCreateWorkspace(link.tenant_id, name);
+    if (!res.ok || !res.workspace) {
+      await sendTelegramMessage(chatIdStr, `❌ ${res.error ?? "Couldn't create the workspace."}`);
+      return NextResponse.json({ ok: true });
+    }
+    // Make the new workspace active right away so the follow-up message
+    // lands in it, then confirm with a workspace picker.
+    await setTelegramActiveWorkspace(chatIdStr, res.workspace.id);
+    await sendTelegramMessage(
+      chatIdStr,
+      `✅ Workspace *${res.workspace.name}* created and set as your active workspace. New messages will go to its Team Room.`,
+      { parseMode: "Markdown" }
+    );
     return NextResponse.json({ ok: true });
   }
 
@@ -278,11 +329,78 @@ async function listWorkspaces(chatId: string) {
     const mark = w.id === current ? " ✅ (current)" : "";
     return `${i + 1}. ${w.name ?? "Workspace"}${mark}`;
   });
+  // One-tap inline buttons (two per row) — plus a hint for /newworkspace.
+  const buttons: { text: string; callback_data: string }[][] = [];
+  for (let i = 0; i < data.length; i += 2) {
+    buttons.push(
+      data
+        .slice(i, i + 2)
+        .map((w) => ({
+          text: `${(w.name ?? "Workspace").slice(0, 18)}${w.id === current ? " ✓" : ""}`,
+          callback_data: `ws:${w.id}`,
+        }))
+    );
+  }
   await sendTelegramMessage(
     chatId,
-    `*Your workspaces:*\n${lines.join("\n")}\n\nReply /workspace <number> to switch.`,
-    { parseMode: "Markdown" }
+    `*Your workspaces:*\n${lines.join("\n")}\n\nTap a button to switch, or /newworkspace <name> to add one.`,
+    { parseMode: "Markdown", replyMarkup: { inline_keyboard: buttons } }
   );
+}
+
+/**
+ * Handle an inline-button tap: `rm:<token>` = Read-more full text,
+ * `ws:<id>` = switch active workspace. Fire-and-forget so the webhook
+ * answers 200 fast.
+ */
+async function handleCallback(callbackId: string, chatId: string, data: string) {
+  try {
+    if (data.startsWith("rm:")) {
+      const token = data.slice(3);
+      await answerTelegramCallback(callbackId, "Opening full message…");
+      await sendReadMoreFullText(chatId, token);
+      return;
+    }
+    if (data.startsWith("ws:")) {
+      const workspaceId = data.slice(3);
+      const link = await findLinkByChatId(chatId);
+      if (!link) {
+        await answerTelegramCallback(callbackId, "Not connected to an app account.");
+        return;
+      }
+      const supabase = await createServiceClient();
+      const { data: ws } = await supabase
+        .from("workspaces")
+        .select("name")
+        .eq("id", workspaceId)
+        .eq("tenant_id", link.tenant_id)
+        .maybeSingle();
+      if (!ws) {
+        await answerTelegramCallback(callbackId, "Workspace not found.");
+        return;
+      }
+      const res = await setTelegramActiveWorkspace(chatId, workspaceId);
+      if (!res.ok) {
+        await answerTelegramCallback(callbackId, res.error ?? "Couldn't switch.");
+        return;
+      }
+      await answerTelegramCallback(callbackId, `Switched to ${ws.name}.`);
+      await sendTelegramMessage(
+        chatId,
+        `✅ Active workspace is now *${ws.name}*. New messages go to its Team Room.`,
+        { parseMode: "Markdown" }
+      );
+      return;
+    }
+    await answerTelegramCallback(callbackId, "Unknown action.");
+  } catch (err) {
+    console.warn("[telegram] handleCallback failed:", err);
+    try {
+      await answerTelegramCallback(callbackId, "Couldn't process that.");
+    } catch {
+      // ignore
+    }
+  }
 }
 
 /** /workspace <n|name> — set the active workspace for this chat. */

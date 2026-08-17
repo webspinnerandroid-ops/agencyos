@@ -24,6 +24,8 @@ import {
 import {
   buildEmployeeSystemPrompt,
   employeeKeyNameList,
+  employeeRosterText,
+  employeeRosterSection,
   buildProprietaryRefusal,
   EMPLOYEE_PERSONAS,
 } from "@/lib/ai/employee-personas";
@@ -268,6 +270,15 @@ async function buildChatContext(
 // ----------------------------------------------------------------------------
 
 
+/**
+ * "List the team"-style requests are answered deterministically from
+ * employeeRosterText() — never left to the LLM, which has hallucinated
+ * roles and forgotten whole employees. Matches a broad set of phrasings but
+ * stays narrow enough that normal work questions never trigger it.
+ */
+const ROSTER_REQUEST_RE =
+  /\b(full )?roster\b|\bcrew\b|\bwho works here\b|\b(list|show|name|introduce|tell me|who are)\b[^\n]{0,60}\b(team|staff|employees?|members?)\b/i;
+
 const DISPATCH_SCHEMA = {
   type: "object",
   properties: {
@@ -316,7 +327,9 @@ async function dispatchRequest(
     "Employees (key — name — role): " +
     employeeKeyNameList() +
     ". Content requests (write/create a blog post, article, or content) always go to penny (Cheryl). " +
-    "You speak the employees' NAMES (Cheryl, Woodhouse, Pam, Barry, Brett, AK, Ray, Sterling, Malory, Lana, Cyril), never their keys.\n" +
+    "You speak the employees' NAMES, never their keys.\n" +
+    employeeRosterSection() +
+    "\n" +
     "Examples:\n" +
     '- "check our page speed and core web vitals" → {"employeeKey":"scout","action":"chat","topic":"","note":"technical SEO"}\n' +
     '- "schedule a meeting for tomorrow" → {"employeeKey":"eva","action":"chat","topic":"","note":"calendar"}\n' +
@@ -2024,7 +2037,16 @@ export async function processTeamTask(payload: TeamTaskPayload): Promise<void> {
     let replyContent = "";
     let replyMeta: Record<string, unknown> = {};
 
-    if (decision.action === "onboarding") {
+    // Roster questions are answered with the authoritative roster — no LLM,
+    // so names/roles can never be invented again.
+    const rosterReply = ROSTER_REQUEST_RE.test(userMessage)
+      ? `Here's the complete roster — everyone on the team and exactly what each one owns:\n\n${employeeRosterText()}\n\nThat's the whole team. Need me to map any of them to what you're building, or shuffle responsibilities? Just say the word.`
+      : null;
+
+    if (rosterReply) {
+      replyContent = rosterReply;
+      replyMeta = { action: "roster" };
+    } else if (decision.action === "onboarding") {
       try {
         const result = await maloryOnboardClient({
           tenantId,
@@ -2302,11 +2324,13 @@ export async function processTeamTask(payload: TeamTaskPayload): Promise<void> {
 
     // Mirror the reply to every Telegram chat bound to this tenant so the
     // conversation continues from the phone. Chats are tenant-scoped (not
-    // per-user), so send to all bound chats. Fire-and-forget.
+    // per-user), so send to all bound chats. Long replies are delivered in
+    // full (Telegram's 4096-char limit is handled by senders with a
+    // Read-more button). Fire-and-forget.
     void telegramSendToUser(
       tenantId,
       null,
-      `💬 ${employeeDisplayName}:\n${replyContent.length > 1800 ? replyContent.slice(0, 1800) + "…" : replyContent}`
+      `💬 ${employeeDisplayName}:\n${replyContent}`
     );
 
     // Any conversation held with an employee in a room/team chat is also

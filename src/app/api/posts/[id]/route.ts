@@ -43,6 +43,51 @@ export async function DELETE(
     const supabase = await createServiceClient();
     const { id } = await params;
 
+    // Verify the post belongs to this tenant before touching anything.
+    const { data: existing } = await supabase
+      .from("posts")
+      .select("id, tenant_id, status")
+      .eq("id", id)
+      .eq("tenant_id", tenantId)
+      .maybeSingle();
+    if (!existing) {
+      return NextResponse.json({ error: "Post not found or access denied" }, { status: 404 });
+    }
+
+    // Explicitly clear dependents so a live-schema FK that isn't ON DELETE
+    // CASCADE can never block the delete (and each step is isolated: one
+    // failing child must not abort the rest).
+    const children: [string, string][] = [
+      ["post_platforms", "post_id"],
+      ["comments", "post_id"],
+      ["analytics_snapshots", "post_id"],
+      ["publishing_logs", "post_id"],
+    ];
+    for (const [table, col] of children) {
+      try {
+        const { error } = await supabase.from(table).delete().eq(col, id);
+        if (error) {
+          console.warn(`[posts/delete] cleanup ${table} failed (continuing):`, error.message);
+        }
+      } catch (err) {
+        console.warn(`[posts/delete] cleanup ${table} threw (continuing):`, err);
+      }
+    }
+    // Campaign items may point at this post — null the link so the plan row
+    // survives and loses its content reference.
+    try {
+      const { error: linkErr } = await supabase
+        .from("campaign_plan_items")
+        .update({ linked_post_id: null })
+        .eq("linked_post_id", id)
+        .eq("tenant_id", tenantId);
+      if (linkErr) {
+        console.warn("[posts/delete] detach campaign link failed (warn):", linkErr.message);
+      }
+    } catch (err) {
+      console.warn("[posts/delete] detach campaign link threw (warn):", err);
+    }
+
     const { error } = await supabase
       .from("posts")
       .delete()
@@ -50,8 +95,13 @@ export async function DELETE(
       .eq("tenant_id", tenantId);
 
     if (error) {
+      // Surface the real DB reason so the UI can show it instead of a
+      // generic "failed" — much easier to diagnose from the user's side.
+      const details =
+        (error as { message?: string }).message ?? JSON.stringify(error);
+      console.error(`[posts/delete] Failed deleting post ${id}:`, details);
       return NextResponse.json(
-        { error: "Failed to delete post", details: error },
+        { error: "Failed to delete post", details },
         { status: 500 }
       );
     }

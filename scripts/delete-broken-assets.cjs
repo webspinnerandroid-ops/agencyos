@@ -6,6 +6,9 @@ const path = require("path");
 
 function loadEnv(file) {
   const out = {};
+  // In CI there is no .env.local (it's gitignored) — env comes from
+  // process.env. Never crash on a missing local file.
+  if (!fs.existsSync(file)) return out;
   for (const line of fs.readFileSync(file, "utf8").split("\n")) {
     const m = line.match(/^([A-Z0-9_]+)=(.*)$/);
     if (!m) continue;

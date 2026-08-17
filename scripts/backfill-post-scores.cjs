@@ -19,6 +19,9 @@ const path = require("path");
 
 function loadEnv(file) {
   const out = {};
+  // In CI there is no .env.local (it's gitignored) — env comes from
+  // process.env. Never crash on a missing local file.
+  if (!fs.existsSync(file)) return out;
   for (const line of fs.readFileSync(file, "utf8").split("\n")) {
     const m = line.match(/^([A-Z0-9_]+)=(.*)$/);
     if (!m) continue;
@@ -34,6 +37,8 @@ function loadEnv(file) {
 const DRY = process.argv.includes("--dry");
 
 (async () => {
+  // Local .env.local first, then real process.env on top so the script runs
+  // unchanged in CI (where secrets come from GitHub env, not a local file).
   const env = { ...loadEnv(path.join(__dirname, "..", ".env.local")), ...process.env };
   const { createClient } = require("@supabase/supabase-js");
   const sb = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY);

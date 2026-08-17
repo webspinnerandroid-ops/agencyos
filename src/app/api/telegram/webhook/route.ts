@@ -5,7 +5,6 @@ import {
   bindTelegramChatByCode,
   getTelegramBotToken,
   getTelegramFileUrl,
-  sendLongTelegramMessage,
   sendReadMoreFullText,
   sendTelegramMessage,
   setTelegramActiveWorkspace,

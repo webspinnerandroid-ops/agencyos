@@ -9,7 +9,8 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Building2, Users, FileText, Key, TrendingUp, Shield, X, UserCog, Menu, Wallet, LayoutTemplate, LogIn, Image as ImageIcon } from "lucide-react";
-import { getDashboardStats, getAllTenants, getLicenses, getLicenseAudit, issueLicense, updateLicensePlan, renewLicense, revokeLicense, deleteLicense, deleteUser, deleteTenant, getAllUsers, assignLevel, grantHub, revokeHub, getAdminAudit, getAssetHealth, getBrokenAssets, deleteAsset, regenerateAsset, type TenantSummary, type LicenseRecord, type LicenseAuditEntry, type AdminAuditEntry, type UserRecord, type WorkspaceAssetHealth, type BrokenAsset } from "./actions";
+import { getDashboardStats, getAllTenants, getLicenses, getLicenseAudit, issueLicense, updateLicensePlan, renewLicense, revokeLicense, deleteLicense, deleteUser, deleteTenant, getAllUsers, assignLevel, grantHub, revokeHub, getAdminAudit, getAssetHealth, getBrokenAssets, deleteAsset, regenerateAsset, type TenantSummary, type LicenseRecord, type LicenseAuditEntry, type AdminAuditEntry, type UserRecord, type BrokenAsset } from "./actions";
+import type { WorkspaceAssetHealth } from "@/lib/asset-health";
 import TokenBilling from "./token-billing";
 
 // Hub-and-spoke add-ons the super admin can grant/revoke without payment.

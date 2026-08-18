@@ -69,9 +69,19 @@ export async function getTokenBalance(tenantId: string): Promise<TokenBalance> {
 /**
  * Gate a generation. Returns { allowed:false, reason } with a structured
  * "buy more tokens" message when the tenant has no remaining balance.
- * Not enforced (no balance row) → allowed.
+ * Not enforced (no balance row) → allowed. Super admins are never gated —
+ * the platform owner must always be able to generate regardless of balance.
  */
-export async function checkTokenBalance(tenantId: string): Promise<BalanceCheckResult> {
+export async function checkTokenBalance(
+  tenantId: string,
+  role?: string | null
+): Promise<BalanceCheckResult> {
+  if (role === "super_admin") {
+    return {
+      allowed: true,
+      balance: await getTokenBalance(tenantId),
+    };
+  }
   const balance = await getTokenBalance(tenantId);
   if (!balance.enforced) {
     return { allowed: true, balance };

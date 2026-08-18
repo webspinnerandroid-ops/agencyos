@@ -1001,7 +1001,6 @@ export async function deleteTenant(
 // corrupt or dead assets at a glance.
 // ------------------------------------------------------------------
 
-export type { WorkspaceAssetHealth };
 
 /**
  * Per-workspace asset health summary — delegates to the shared smoke test so

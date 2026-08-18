@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getTenantId } from "@/lib/auth";
+import { getTenantId, getRole } from "@/lib/auth";
 import { generateImage } from "@/lib/ai/orchestrator";
 import { incrementUsage } from "@/lib/usage";
 import { createServiceClient } from "@/lib/supabase/server";
@@ -40,7 +40,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Token-billing balance gate (402 + buyMoreTokens when exhausted).
-    const bal = await checkTokenBalance(tenantId);
+    // Super admins (the platform owner) are never gated.
+    const bal = await checkTokenBalance(tenantId, await getRole());
     if (!bal.allowed) {
       return NextResponse.json(
         { error: bal.reason, buyMoreTokens: true, balance: bal.balance },

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getTenantId, requireRole } from "@/lib/auth";
+import { getTenantId, getRole, requireRole } from "@/lib/auth";
 import { createClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/lib/supabase/server";
 import { generateStructuredOutput, generateText, generateImage } from "@/lib/ai/orchestrator";
@@ -344,9 +344,10 @@ export async function POST(request: NextRequest) {
     // ------------------------------------------------------------------
     // 1.5 Token-billing balance gate — when the monthly allowance + add-on
     // balance are exhausted, return a structured "buy more tokens" response
-    // instead of silently failing mid-generation.
+    // instead of silently failing mid-generation. Super admins (the platform
+    // owner) are never gated.
     // ------------------------------------------------------------------
-    const bal = await checkTokenBalance(tenantId);
+    const bal = await checkTokenBalance(tenantId, await getRole());
     if (!bal.allowed) {
       return NextResponse.json(
         {

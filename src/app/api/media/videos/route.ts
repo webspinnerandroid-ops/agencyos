@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createVideoAsset, listMediaAssets } from "@/lib/media/flux";
-import { getTenantId } from "@/lib/auth";
+import { getTenantId, getRole } from "@/lib/auth";
 import { checkTrialContentLimit } from "@/lib/trial-limits";
 import { checkUsageLimit } from "@/lib/plan-limits";
 import { checkTokenBalance } from "@/lib/token-billing";
@@ -40,7 +40,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Token-billing balance gate (402 + buyMoreTokens when exhausted).
-    const bal = await checkTokenBalance(tenantId);
+    // Super admins (the platform owner) are never gated.
+    const bal = await checkTokenBalance(tenantId, await getRole());
     if (!bal.allowed) {
       return NextResponse.json(
         { error: bal.reason, buyMoreTokens: true, balance: bal.balance },

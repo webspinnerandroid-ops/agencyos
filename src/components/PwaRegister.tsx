@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { captureInstallPrompt, markInstalled } from "@/lib/pwa-install";
+import { markUpdateReady } from "@/lib/pwa-update";
 
 /**
  * Registers the service worker (offline caching) once the page loads, then —
@@ -91,6 +92,21 @@ export default function PwaRegister() {
         // Force an update check on every load so a new deploy reaches phones
         // on the next visit instead of waiting for the browser's own cadence.
         reg.update().catch(() => {});
+
+        // New deploy detection: when a fresh worker installs, flag it so the
+        // UpdateToast offers a one-tap reload instead of a manual app swipe.
+        // (skipWaiting + clients.claim activate it immediately; the page just
+        // needs a reload to swap its own bundle.)
+        if (reg.waiting) markUpdateReady();
+        reg.addEventListener("updatefound", () => {
+          const nw = reg.installing;
+          if (!nw) return;
+          nw.addEventListener("statechange", () => {
+            if (nw.state === "installed" && navigator.serviceWorker.controller) {
+              markUpdateReady();
+            }
+          });
+        });
         // Live badge on the app icon: the service worker pings us with the
         // unread count when a push arrives.
         navigator.serviceWorker.addEventListener("message", (event) => {

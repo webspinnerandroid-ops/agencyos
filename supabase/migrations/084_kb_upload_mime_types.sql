@@ -24,5 +24,8 @@ SET allowed_mime_types = ARRAY[
   'video/mp4',
   'video/quicktime',
   'video/webm'
-]
+],
+file_size_limit = 104857600
 WHERE id = 'tenant-assets';
+-- 100 MB so PDFs and videos upload; previously 5 MB (which Supabase reports
+-- as a confusing "resource not found" on oversize uploads).

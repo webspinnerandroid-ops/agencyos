@@ -13,6 +13,27 @@ function getAdminClient() {
   );
 }
 
+/**
+ * Translate Supabase Storage's terse rejections into something the user can
+ * act on. "mime type ... is not supported" means the bucket whitelist blocked
+ * the file; "The resource was not found" is Supabase's confusing message for
+ * an over-limit upload.
+ */
+function friendlyUploadError(message: string, sizeBytes: number): string {
+  const msg = message.toLowerCase();
+  if (msg.includes("mime type") && msg.includes("not supported")) {
+    return "This file type isn't allowed for uploads yet.";
+  }
+  if (msg.includes("not found") || msg.includes("resource was not found")) {
+    const mb = (sizeBytes / (1024 * 1024)).toFixed(1);
+    return `This file is ${mb} MB — it exceeds the upload size limit.`;
+  }
+  if (msg.includes("payload too large") || msg.includes("too large") || msg.includes("file size")) {
+    return "This file exceeds the upload size limit.";
+  }
+  return message;
+}
+
 export async function uploadFile(
   workspaceId: string,
   formData: FormData
@@ -82,6 +103,13 @@ export async function uploadFile(
 
     return { success: true, item };
   } catch (err: any) {
-    return { success: false, error: err?.message ?? "Upload failed" };
+    let sizeBytes = 0;
+    try {
+      const f = formData.get("file") as File | null;
+      if (f) sizeBytes = f.size;
+    } catch {
+      // ignore
+    }
+    return { success: false, error: friendlyUploadError(err?.message ?? "Upload failed", sizeBytes) };
   }
 }

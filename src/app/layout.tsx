@@ -4,6 +4,7 @@ import "./globals.css";
 import ThemeProvider from "@/components/ThemeProvider";
 import ThemeInit from "@/components/ThemeInit";
 import PwaRegister from "@/components/PwaRegister";
+import UpdateToast from "@/components/UpdateToast";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -150,6 +151,7 @@ export default function RootLayout({
         <ThemeProvider />
         <ThemeInit />
         <PwaRegister />
+        <UpdateToast />
         {children}
       </body>
     </html>

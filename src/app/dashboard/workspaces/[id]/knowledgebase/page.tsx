@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Plus, Trash2, FolderPlus, Folder, FileText, Link2, Upload, Globe, File, AlertCircle, ArrowLeft, RefreshCw } from "lucide-react";
+import { Loader2, Plus, Trash2, FolderPlus, Folder, FileText, Link2, Upload, Globe, File, AlertCircle, ArrowLeft, RefreshCw, HardDrive } from "lucide-react";
 import Link from "next/link";
 import { getFolders, createFolder, deleteFolder, getItems, addUrlItem, addTextItem, deleteItem, type KbFolder, type KbItem } from "@/lib/knowledgebase";
 import { uploadFile } from "./actions";
@@ -48,6 +48,20 @@ export default function KnowledgebasePage() {
   const [textName, setTextName] = useState("");
   const [textValue, setTextValue] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [driveSavingId, setDriveSavingId] = useState<string | null>(null);
+
+  const saveToDrive = (item: KbItem) => {
+    setDriveSavingId(item.id);
+    setFeedback(null);
+    fetch(`/api/knowledgebase/${item.id}/drive`, { method: "POST", credentials: "include" })
+      .then(async (res) => {
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) setFeedback({ type: "success", message: `Saved to Google Drive: ${data.file?.name ?? "file"}` });
+        else setFeedback({ type: "error", message: data.error ?? "Failed to save to Google Drive" });
+      })
+      .catch(() => setFeedback({ type: "error", message: "Failed to save to Google Drive" }))
+      .finally(() => setDriveSavingId(null));
+  };
 
   const load = useCallback(() => {
     startLoading(async () => {
@@ -245,6 +259,18 @@ export default function KnowledgebasePage() {
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                   {isPublicUrl && <a href={isPublicUrl} target="_blank" rel="noopener noreferrer"><Button variant="ghost" size="icon" className="h-7 w-7"><Link2 className="size-3" /></Button></a>}
+                  {item.storage_path && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-emerald-600 hover:bg-emerald-100 dark:hover:bg-emerald-900"
+                      onClick={() => saveToDrive(item)}
+                      disabled={isPending || driveSavingId === item.id}
+                      title="Save to the workspace's attached Google Drive folder"
+                    >
+                      {driveSavingId === item.id ? <Loader2 className="size-3 animate-spin" /> : <HardDrive className="size-3" />}
+                    </Button>
+                  )}
                   <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => handleDeleteItem(item.id, item.name)} disabled={isPending}><Trash2 className="size-3" /></Button>
                 </div>
               </div>

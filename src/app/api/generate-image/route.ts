@@ -10,6 +10,7 @@ import { rateLimitRequest } from "@/lib/rate-limit";
 import { persistImageToStorage } from "@/lib/media/storage";
 import { checkTrialContentLimit } from "@/lib/trial-limits";
 import { buildWorkspacePromptContext, augmentPromptWithContext } from "@/lib/ai/workspace-context";
+import { autoSaveUrlToDrive } from "@/lib/drive-sync";
 
 export async function POST(request: NextRequest) {
   try {
@@ -130,6 +131,31 @@ export async function POST(request: NextRequest) {
       } catch (e: any) {
         console.error("[generate-image] Exception saving to media_assets:", e?.message ?? e);
       }
+    }
+
+    // Mirror into the workspace's attached Drive folder when auto-save is on.
+    for (const img of images) {
+      const ext = (img.url.split("?")[0].match(/\.([a-z0-9]{2,5})$/i) ?? [])[1]?.toLowerCase();
+      const mime =
+        ext === "jpg" || ext === "jpeg" ? "image/jpeg"
+        : ext === "webp" ? "image/webp"
+        : ext === "gif" ? "image/gif"
+        : ext === "svg" ? "image/svg+xml"
+        : "image/png";
+      const slug =
+        prompt.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "image";
+      void autoSaveUrlToDrive({
+        tenantId,
+        workspaceId: workspaceId ?? null,
+        url: img.url,
+        name: `${slug}-${Date.now()}.${ext ?? "png"}`,
+        mime,
+      }).then((r) => {
+        if (r.saved) console.log("[generate-image] auto-saved to Drive:", r.file?.name);
+        else if (r.skipped && r.skipped !== "auto-save off") {
+          console.warn("[generate-image] drive auto-save skipped:", r.skipped);
+        }
+      });
     }
 
     return NextResponse.json({

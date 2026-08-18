@@ -29,6 +29,7 @@ export interface ConnectionRecord {
   resource_label: string | null;
   available_resources: TrafficSourceOption[] | null;
   connected: boolean;
+  auto_save_to_drive?: boolean | null;
   last_synced_at: string | null;
   created_at: string;
   updated_at: string;

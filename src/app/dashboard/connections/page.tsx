@@ -30,6 +30,7 @@ import {
   getResources,
   getDriveFolders,
   selectResource,
+  setDriveAutoSave,
   disconnectConnection,
 } from "./actions";
 import type { GoogleBusinessProfile } from "../settings/gbp/actions";
@@ -59,6 +60,7 @@ interface ConnectionRow {
   selected_resource: string | null;
   resource_label: string | null;
   connected: boolean;
+  auto_save_to_drive?: boolean | null;
   last_synced_at: string | null;
 }
 
@@ -306,6 +308,24 @@ export default function ConnectionsPage() {
     });
   };
 
+  const toggleAutoSave = (enabled: boolean) => {
+    startTransition(async () => {
+      setFeedback(null);
+      const res = await setDriveAutoSave(enabled);
+      if (res.success) {
+        setFeedback({
+          type: "success",
+          message: enabled
+            ? "New images & brand assets will auto-save to the attached Drive folder."
+            : "Auto-save to Drive disabled.",
+        });
+        await loadConnections();
+      } else {
+        setFeedback({ type: "error", message: res.error ?? "Failed to update auto-save" });
+      }
+    });
+  };
+
   const disconnect = (provider: Provider) => {
     startTransition(async () => {
       if (!confirm("Disconnect this connection? Data sync will stop until you reconnect.")) return;
@@ -489,6 +509,17 @@ export default function ConnectionsPage() {
                         <div className="text-xs text-amber-600 mt-1">{provider === "google_drive" ? "No folder attached yet — pick a Drive folder below." : "No property selected yet — choose what to track below."}</div>
                       )}
                     </div>
+                    {provider === "google_drive" && conn.resource_label && (
+                      <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={!!conn.auto_save_to_drive}
+                          onChange={(e) => toggleAutoSave(e.target.checked)}
+                          className="size-4 accent-emerald-600"
+                        />
+                        <span>Auto-save new images & brand assets to this folder</span>
+                      </label>
+                    )}
                     {showPicker[provider] && provider === "google_drive" ? (
                       <div className="space-y-2 rounded-md border p-3 bg-muted/20">
                         {/* Breadcrumb */}

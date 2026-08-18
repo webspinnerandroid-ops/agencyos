@@ -77,7 +77,7 @@ export async function getConnections(): Promise<
     let query = supabase
       .from("tenant_connections")
       .select(
-        "id, tenant_id, workspace_id, provider, account_email, account_name, scopes, selected_resource, resource_label, connected, last_synced_at, created_at, updated_at"
+        "id, tenant_id, workspace_id, provider, account_email, account_name, scopes, selected_resource, resource_label, connected, auto_save_to_drive, last_synced_at, created_at, updated_at"
       )
       .eq("tenant_id", tenantId);
     if (workspaceId) {
@@ -90,7 +90,7 @@ export async function getConnections(): Promise<
       const legacy = await supabase
         .from("tenant_connections")
         .select(
-          "id, tenant_id, provider, account_email, account_name, scopes, selected_resource, resource_label, connected, last_synced_at, created_at, updated_at"
+          "id, tenant_id, provider, account_email, account_name, scopes, selected_resource, resource_label, connected, auto_save_to_drive, last_synced_at, created_at, updated_at"
         )
         .eq("tenant_id", tenantId);
       if (legacy.error) throw new Error(legacy.error.message);
@@ -244,6 +244,28 @@ export async function getDriveFolders(
 
     const folders = await listDriveFolders(accessToken, parentId);
     return { success: true, data: { folders } };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+/** Toggle auto-save of new assets to the workspace's attached Drive folder. */
+export async function setDriveAutoSave(
+  enabled: boolean
+): Promise<ActionResponse<{ enabled: boolean }>> {
+  try {
+    const tenantId = await getTenantId();
+    const workspaceId = await getCurrentWorkspaceId().catch(() => null);
+    const supabase = await createServiceClient();
+    const conn = await resolveConnection(tenantId, workspaceId, "google_drive");
+    if (!conn) return { success: false, error: "Google Drive is not connected yet." };
+    const { error } = await supabase
+      .from("tenant_connections")
+      .update({ auto_save_to_drive: enabled })
+      .eq("id", conn.id);
+    if (error) throw new Error(error.message);
+    revalidatePath("/dashboard/connections");
+    return { success: true, data: { enabled } };
   } catch (err) {
     return { success: false, error: (err as Error).message };
   }

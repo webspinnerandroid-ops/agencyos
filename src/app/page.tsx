@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import { Button } from "@/components/ui/button";
 import MobileNav from "@/components/MobileNav";
 import ThemeToggle from "@/components/ThemeToggle";
+import InstallPromptBanner from "@/components/InstallPromptBanner";
 import ScreenshotSlideshow from "@/components/ScreenshotSlideshow";
 import { Check, ArrowRight, Zap, Users, Globe, Shield, Brain, Calendar } from "lucide-react";
 import { getLandingContent } from "@/lib/landing-content-server";
@@ -93,10 +94,11 @@ export default async function LandingPage() {
 
   return (
     <div className="min-h-screen bg-background">
+      <InstallPromptBanner />
       {/* Nav */}
       <header className="border-b">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between h-16">
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 min-w-0">
             {process.env.NEXT_PUBLIC_BRAND_LOGO_URL ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
@@ -106,8 +108,8 @@ export default async function LandingPage() {
               />
             ) : (
               <>
-                <Brain className="size-6 text-primary" />
-                <span className="text-xl font-bold tracking-tight">Agency OS</span>
+                <Brain className="size-6 text-primary shrink-0" />
+                <span className="text-xl font-bold tracking-tight whitespace-nowrap">Agency OS</span>
               </>
             )}
           </div>
@@ -117,13 +119,15 @@ export default async function LandingPage() {
             <a href="#pricing" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Pricing</a>
             <a href="#faq" className="text-sm text-muted-foreground hover:text-foreground transition-colors">FAQ</a>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 sm:gap-4">
             <div className="sm:hidden">
               <MobileNav sections={landingNavSections} breakpointClass="sm:hidden" />
             </div>
             <ThemeToggle />
-            <Link href="/login"><Button variant="ghost">Sign In</Button></Link>
-            <Link href="/register"><Button>Get Started <ArrowRight className="size-4 ml-2" /></Button></Link>
+            <Link href="/login"><Button variant="ghost" size="sm">Sign In</Button></Link>
+            {/* Get Started stays in the hero on mobile — hiding it here keeps
+                the header to one line so the menu button stays tappable. */}
+            <Link href="/register" className="hidden sm:inline-flex"><Button size="sm">Get Started <ArrowRight className="size-4 ml-2" /></Button></Link>
           </div>
         </div>
       </header>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { createBrowserClient } from "@supabase/ssr";
 import { LogOut, User, ChevronDown, Download } from "lucide-react";
 import {
@@ -57,10 +58,11 @@ export default function AccountMenu({ email }: AccountMenuProps) {
         <ChevronDown className="size-3.5 shrink-0 opacity-60" />
       </button>
 
-      {open && (
-        <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} aria-hidden="true" />
-          <div className="fixed right-2 top-14 z-50 w-56 rounded-md border bg-popover p-1 shadow-md" role="menu">
+      {open &&
+        createPortal(
+          <>
+          <div className="fixed inset-0 z-[60]" onClick={() => setOpen(false)} aria-hidden="true" />
+          <div className="fixed right-2 top-14 z-[70] w-56 rounded-md border bg-popover p-1 shadow-md" role="menu">
             <div className="px-3 py-2 text-xs text-muted-foreground border-b mb-1 truncate">
               {email}
             </div>
@@ -89,8 +91,9 @@ export default function AccountMenu({ email }: AccountMenuProps) {
               {signingOut ? "Signing out..." : "Sign out"}
             </button>
           </div>
-        </>
-      )}
+          </>,
+          document.body
+        )}
     </div>
   );
 }

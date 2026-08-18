@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { usePathname, useSearchParams } from "next/navigation";
 import { Bell, CheckCheck, Loader2 } from "lucide-react";
 import { createBrowserClient } from "@supabase/ssr";
@@ -201,14 +202,17 @@ export default function NotificationBell() {
         )}
       </button>
 
-      {open && (
-        <>
+      {open &&
+        // Portal to <body> so the dropdown can't be affected by the sticky
+        // header's stacking context on mobile browsers.
+        createPortal(
+          <>
           <div
-            className="fixed inset-0 z-40"
+            className="fixed inset-0 z-[60]"
             onClick={() => setOpen(false)}
             aria-hidden="true"
           />
-          <div className="fixed right-2 top-14 z-50 w-80 max-w-[90vw] rounded-md border bg-popover shadow-md flex flex-col">
+          <div className="fixed right-2 top-14 z-[70] w-80 max-w-[90vw] rounded-md border bg-popover shadow-md flex flex-col">
             <div className="flex items-center justify-between px-3 py-2 border-b">
               <span className="text-sm font-semibold">Notifications</span>
               <div className="flex items-center gap-2">
@@ -302,8 +306,9 @@ export default function NotificationBell() {
               )}
             </div>
           </div>
-        </>
-      )}
+          </>,
+          document.body
+        )}
     </div>
   );
 }

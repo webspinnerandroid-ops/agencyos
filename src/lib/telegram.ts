@@ -556,7 +556,13 @@ export async function setTelegramActiveEmployee(
       .from("telegram_links")
       .update({ active_employee_key: employeeKey })
       .eq("chat_id", chatId);
-    if (error) return { ok: false, error: error.message };
+    if (error) {
+      // Column not applied yet (migration 082 pending) — fail with a clear message.
+      if (/active_employee_key/.test(error.message)) {
+        return { ok: false, error: "Employee switching isn't enabled yet — apply migration 082." };
+      }
+      return { ok: false, error: error.message };
+    }
     if (link) {
       await setTelegramUserPrefs(link.user_id as string, link.tenant_id as string, {
         activeEmployeeKey: employeeKey,

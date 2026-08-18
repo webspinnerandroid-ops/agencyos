@@ -62,7 +62,11 @@ export default function AccountMenu({ email }: AccountMenuProps) {
         createPortal(
           <>
           <div className="fixed inset-0 z-[60]" onClick={() => setOpen(false)} aria-hidden="true" />
-          <div className="fixed right-2 top-14 z-[70] w-56 rounded-md border bg-popover p-1 shadow-md" role="menu">
+          <div
+            className="fixed right-2 top-14 z-[70] w-56 rounded-md border bg-popover p-1 shadow-md"
+            role="menu"
+            style={{ backgroundColor: "var(--popover, hsl(0 0% 100%))", color: "var(--popover-foreground, hsl(0 0% 10%))" }}
+          >
             <div className="px-3 py-2 text-xs text-muted-foreground border-b mb-1 truncate">
               {email}
             </div>

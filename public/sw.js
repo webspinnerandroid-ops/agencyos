@@ -12,7 +12,7 @@
 // New deploys bump __VERSION__, which invalidates the old cache in `activate`.
 // ============================================================================
 
-const VERSION = "v3";
+const VERSION = "v4";
 const STATIC_CACHE = `agencyos-static-${VERSION}`;
 const PAGE_CACHE = `agencyos-pages-${VERSION}`;
 
@@ -93,7 +93,34 @@ self.addEventListener("fetch", (event) => {
     return;
   }
 
-  // Static assets (js/css/images/fonts): cache-first with background refresh.
+  // Static assets (js/css/images/fonts):
+  //   - Next.js JS/CSS chunks are content-hashed and unreferenced old chunks
+  //     are harmless, so serve them NETWORK-FIRST (cache only as an offline
+  //     fallback). This guarantees a fresh deploy reaches every device on the
+  //     next load instead of cache-first pinning a phone to a stale bundle
+  //     indefinitely. Images/fonts stay cache-first (stable, large).
+  const isBundledAsset =
+    url.pathname.startsWith("/_next/static/") ||
+    /\.(?:js|css|mjs)$/.test(url.pathname);
+
+  if (isBundledAsset) {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          if (response && response.ok) {
+            const copy = response.clone();
+            caches.open(STATIC_CACHE).then((cache) => cache.put(request, copy));
+          }
+          return response;
+        })
+        .catch(async () => {
+          const cached = await caches.match(request);
+          return cached || Response.error();
+        })
+    );
+    return;
+  }
+
   event.respondWith(
     caches.match(request).then((cached) => {
       const network = fetch(request)

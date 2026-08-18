@@ -212,7 +212,10 @@ export default function NotificationBell() {
             onClick={() => setOpen(false)}
             aria-hidden="true"
           />
-          <div className="fixed right-2 top-14 z-[70] w-80 max-w-[90vw] rounded-md border bg-popover shadow-md flex flex-col">
+          <div
+            className="fixed right-2 top-14 z-[70] w-80 max-w-[90vw] rounded-md border bg-popover shadow-md flex flex-col"
+            style={{ backgroundColor: "var(--popover, hsl(0 0% 100%))", color: "var(--popover-foreground, hsl(0 0% 10%))" }}
+          >
             <div className="flex items-center justify-between px-3 py-2 border-b">
               <span className="text-sm font-semibold">Notifications</span>
               <div className="flex items-center gap-2">

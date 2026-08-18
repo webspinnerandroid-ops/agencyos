@@ -70,6 +70,7 @@ export default function MobileNav({
             />
             <div
               className="fixed inset-y-0 right-0 z-[70] flex w-72 max-w-[85vw] flex-col overflow-y-auto border-l bg-popover shadow-xl"
+              style={{ backgroundColor: "var(--popover, hsl(0 0% 100%))", color: "var(--popover-foreground, hsl(0 0% 10%))" }}
             >
               <div className="flex items-center justify-between border-b px-4 py-3">
                 <span className="text-sm font-semibold">Menu</span>

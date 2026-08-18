@@ -12,6 +12,7 @@ import {
   getAccessToken,
   googleOAuthConfigured,
   isMissingWorkspaceColumn,
+  listDriveFolders,
   listGA4Properties,
   listProviderResources,
   listSearchConsoleSites,
@@ -160,7 +161,10 @@ export async function initiateConnection(
 export async function getResources(
   provider: ConnectionProvider
 ): Promise<
-  ActionResponse<{ kind: "ga4" | "search_console"; options: unknown[] }>
+  ActionResponse<{
+    kind: "ga4" | "search_console" | "drive";
+    options: unknown[];
+  }>
 > {
   try {
     const tenantId = await getTenantId();
@@ -180,6 +184,8 @@ export async function getResources(
     let options: unknown[] = [];
     if (provider === "google_analytics") {
       options = await listGA4Properties(accessToken);
+    } else if (provider === "google_drive") {
+      options = await listDriveFolders(accessToken);
     } else {
       options = await listSearchConsoleSites(accessToken);
     }
@@ -198,7 +204,15 @@ export async function getResources(
 
     return {
       success: true,
-      data: { kind: provider === "google_analytics" ? "ga4" : "search_console", options },
+      data: {
+        kind:
+          provider === "google_analytics"
+            ? "ga4"
+            : provider === "google_drive"
+              ? "drive"
+              : "search_console",
+        options,
+      },
     };
   } catch (err) {
     return { success: false, error: (err as Error).message };

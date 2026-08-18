@@ -209,12 +209,23 @@ export default function NotificationBell() {
           <>
           <div
             className="fixed inset-0 z-[60]"
+            style={{ position: "fixed", inset: 0, zIndex: 60 }}
             onClick={() => setOpen(false)}
             aria-hidden="true"
           />
           <div
             className="fixed right-2 top-14 z-[70] w-80 max-w-[90vw] rounded-md border bg-popover shadow-md flex flex-col"
-            style={{ backgroundColor: "var(--popover, hsl(0 0% 100%))", color: "var(--popover-foreground, hsl(0 0% 10%))" }}
+            style={{
+              position: "fixed",
+              top: "3.5rem",
+              right: "0.5rem",
+              zIndex: 70,
+              width: "min(20rem, 90vw)",
+              display: "flex",
+              flexDirection: "column",
+              backgroundColor: "var(--popover, hsl(0 0% 100%))",
+              color: "var(--popover-foreground, hsl(0 0% 10%))",
+            }}
           >
             <div className="flex items-center justify-between px-3 py-2 border-b">
               <span className="text-sm font-semibold">Notifications</span>

@@ -11,7 +11,10 @@
  */
 import { decrypt, encrypt } from "@/lib/encryption";
 
-export type ConnectionProvider = "google_analytics" | "search_console";
+export type ConnectionProvider =
+  | "google_analytics"
+  | "search_console"
+  | "google_drive";
 
 export interface ConnectionRecord {
   id: string;
@@ -60,11 +63,16 @@ export function isMissingWorkspaceColumn(err: unknown): boolean {
 export const PROVIDER_LABELS: Record<ConnectionProvider, string> = {
   google_analytics: "Google Analytics 4",
   search_console: "Search Console",
+  google_drive: "Google Drive",
 };
 
 export const PROVIDER_SCOPES: Record<ConnectionProvider, string> = {
   google_analytics: "https://www.googleapis.com/auth/analytics.readonly",
   search_console: "https://www.googleapis.com/auth/webmasters.readonly",
+  // drive.file: files the app creates/opens; drive.readonly: browse+list
+  // folders so the user can pick which folder the workspace attaches.
+  google_drive:
+    "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.readonly",
 };
 
 export function googleOAuthConfigured(): boolean {
@@ -249,6 +257,24 @@ export async function listSearchConsoleSites(
     .map((s) => ({ siteUrl: s.siteUrl!, permissionLevel: s.permissionLevel ?? "" }));
 }
 
+/** List the user's Drive folders (top-level, up to 200) for the folder picker. */
+export async function listDriveFolders(
+  accessToken: string
+): Promise<{ id: string; name: string }[]> {
+  const q = encodeURIComponent(
+    `mimeType='application/vnd.google-apps.folder' and 'root' in parents and trashed=false`
+  );
+  const data = await googleGet<{
+    files?: { id?: string; name?: string }[];
+  }>(
+    `https://www.googleapis.com/drive/v3/files?q=${q}&pageSize=200&fields=files(id,name)&orderBy=name`,
+    accessToken
+  );
+  return (data.files ?? [])
+    .filter((f) => f.id && f.name)
+    .map((f) => ({ id: f.id!, name: f.name! }));
+}
+
 /**
  * Flatten the connectable resources for a provider into pickable options
  * (the shape cached in tenant_connections.available_resources).
@@ -262,6 +288,13 @@ export async function listProviderResources(
     return props.map((p) => ({
       resource: p.propertyId,
       label: `${p.displayName}${p.accountName ? ` — ${p.accountName}` : ""}`,
+    }));
+  }
+  if (provider === "google_drive") {
+    const folders = await listDriveFolders(accessToken);
+    return folders.map((f) => ({
+      resource: f.id,
+      label: f.name,
     }));
   }
   const sites = await listSearchConsoleSites(accessToken);

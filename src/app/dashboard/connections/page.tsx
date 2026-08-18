@@ -18,6 +18,7 @@ import {
   Plus,
   Trash2,
   Users,
+  FolderOpen,
 } from "lucide-react";
 import type { GA4PropertyOption } from "@/lib/connections";
 import {
@@ -43,7 +44,7 @@ import {
 } from "../settings/social/actions";
 import type { SocialConnectMode } from "../settings/social/constants";
 
-type Provider = "google_analytics" | "search_console";
+type Provider = "google_analytics" | "search_console" | "google_drive";
 
 interface ConnectionRow {
   id: string;
@@ -73,6 +74,7 @@ interface PlatformInfo {
 const PROVIDERS: { provider: Provider; title: string; blurb: string; icon: typeof BarChart3 }[] = [
   { provider: "google_analytics", title: "Google Analytics 4", blurb: "Pull real traffic, engagement and conversion metrics into this workspace.", icon: BarChart3 },
   { provider: "search_console", title: "Search Console", blurb: "Track impressions, clicks, position and queries straight from Google.", icon: Search },
+  { provider: "google_drive", title: "Google Drive", blurb: "Attach a Drive folder for off-site asset storage — generated files can be saved straight to the client's Drive.", icon: FolderOpen },
 ];
 
 function socialBadgeColor(platform: string): string {
@@ -98,9 +100,9 @@ export default function ConnectionsPage() {
   const [rows, setRows] = useState<ConnectionRow[]>([]);
   const [googleConfigured, setGoogleConfigured] = useState(true);
   const [busy, setBusy] = useState<Provider | null>(null);
-  const [options, setOptions] = useState<Record<Provider, ResourceOption[]>>({ google_analytics: [], search_console: [] });
-  const [showPicker, setShowPicker] = useState<Record<Provider, boolean>>({ google_analytics: false, search_console: false });
-  const [picked, setPicked] = useState<Record<Provider, string>>({ google_analytics: "", search_console: "" });
+  const [options, setOptions] = useState<Record<Provider, ResourceOption[]>>({ google_analytics: [], search_console: [], google_drive: [] });
+  const [showPicker, setShowPicker] = useState<Record<Provider, boolean>>({ google_analytics: false, search_console: false, google_drive: false });
+  const [picked, setPicked] = useState<Record<Provider, string>>({ google_analytics: "", search_console: "", google_drive: "" });
   const [pickerBusy, setPickerBusy] = useState<Provider | null>(null);
 
   // ---- Google Business Profile ----
@@ -155,7 +157,7 @@ export default function ConnectionsPage() {
     const success = params.get("success");
     const error = params.get("error");
     if (success) {
-      const isGoogleData = success.includes("google_analytics") || success.includes("search_console");
+      const isGoogleData = success.includes("google_analytics") || success.includes("search_console") || success.includes("google_drive");
       setFeedback({
         type: "success",
         message: isGoogleData
@@ -204,15 +206,20 @@ export default function ConnectionsPage() {
       const opts =
         res.data.kind === "ga4"
           ? (res.data.options as GA4PropertyOption[]).map((p) => ({ value: p.propertyId, label: `${p.displayName} (${p.accountName})` }))
-          : (res.data.options as { siteUrl: string; permissionLevel: string }[]).map((s) => ({ value: s.siteUrl, label: s.siteUrl }));
+          : res.data.kind === "drive"
+            ? (res.data.options as { id: string; name: string }[]).map((f) => ({ value: f.id, label: f.name }))
+            : (res.data.options as { siteUrl: string; permissionLevel: string }[]).map((s) => ({ value: s.siteUrl, label: s.siteUrl }));
       setOptions((o) => ({ ...o, [provider]: opts }));
       setShowPicker((s) => ({ ...s, [provider]: true }));
       if (opts.length === 0) {
         setFeedback({
           type: "error",
-          message: provider === "google_analytics"
-            ? "No GA4 properties found on this Google account."
-            : "No Search Console sites found. Verify a site in Search Console first.",
+          message:
+            provider === "google_analytics"
+              ? "No GA4 properties found on this Google account."
+              : provider === "google_drive"
+                ? "No folders found in your Drive root. Create a folder first."
+                : "No Search Console sites found. Verify a site in Search Console first.",
         });
       }
     });
@@ -222,7 +229,7 @@ export default function ConnectionsPage() {
     startTransition(async () => {
       const value = picked[provider];
       if (!value) {
-        setFeedback({ type: "error", message: "Select a property or site first." });
+        setFeedback({ type: "error", message: "Select a folder, property, or site first." });
         return;
       }
       const label = options[provider].find((o) => o.value === value)?.label ?? value;
@@ -233,7 +240,7 @@ export default function ConnectionsPage() {
         setFeedback({ type: "error", message: res.error ?? "Failed to save selection" });
         return;
       }
-      setFeedback({ type: "success", message: "Tracking selection saved." });
+      setFeedback({ type: "success", message: provider === "google_drive" ? "Drive folder attached." : "Tracking selection saved." });
       setShowPicker((s) => ({ ...s, [provider]: false }));
       await loadConnections();
     });
@@ -241,7 +248,7 @@ export default function ConnectionsPage() {
 
   const disconnect = (provider: Provider) => {
     startTransition(async () => {
-      if (!confirm("Disconnect this account? Analytics will stop updating until you reconnect.")) return;
+      if (!confirm("Disconnect this connection? Data sync will stop until you reconnect.")) return;
       setBusy(provider);
       const res = await disconnectConnection(provider);
       setBusy(null);
@@ -417,15 +424,15 @@ export default function ConnectionsPage() {
                       <div className="font-medium">{conn.account_name ?? "Google account"}</div>
                       {conn.account_email && <div className="text-xs text-muted-foreground">{conn.account_email}</div>}
                       {conn.resource_label ? (
-                        <div className="text-xs text-primary mt-1">Tracking: {conn.resource_label}</div>
+                        <div className="text-xs text-primary mt-1">{provider === "google_drive" ? `Attached folder: ${conn.resource_label}` : `Tracking: ${conn.resource_label}`}</div>
                       ) : (
-                        <div className="text-xs text-amber-600 mt-1">No property selected yet — choose what to track below.</div>
+                        <div className="text-xs text-amber-600 mt-1">{provider === "google_drive" ? "No folder attached yet — pick a Drive folder below." : "No property selected yet — choose what to track below."}</div>
                       )}
                     </div>
                     {showPicker[provider] ? (
                       <div className="space-y-2">
                         <select value={picked[provider]} onChange={(e) => setPicked((p) => ({ ...p, [provider]: e.target.value }))} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
-                          <option value="">{provider === "google_analytics" ? "Select a GA4 property…" : "Select a site…"}</option>
+                          <option value="">{provider === "google_analytics" ? "Select a GA4 property…" : provider === "google_drive" ? "Select a Drive folder…" : "Select a site…"}</option>
                           {options[provider].map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                         </select>
                         <div className="flex items-center gap-2">
@@ -439,7 +446,9 @@ export default function ConnectionsPage() {
                       <div className="flex items-center gap-2 flex-wrap">
                         <Button size="sm" variant="outline" onClick={() => loadPicker(provider)} disabled={pickerBusy === provider || busy === provider}>
                           {pickerBusy === provider ? <Loader2 className="size-3.5 animate-spin mr-1" /> : <RefreshCw className="size-3.5 mr-1" />}
-                          {conn.resource_label ? "Change tracked property" : "Choose property to track"}
+                          {provider === "google_drive"
+                            ? (conn.resource_label ? "Change attached folder" : "Choose folder to attach")
+                            : (conn.resource_label ? "Change tracked property" : "Choose property to track")}
                         </Button>
                         <Button size="sm" variant="outline" className="text-destructive hover:text-destructive" onClick={() => disconnect(provider)} disabled={busy === provider}>
                           {busy === provider ? <Loader2 className="size-3.5 animate-spin mr-1" /> : <Unplug className="size-3.5 mr-1" />} Disconnect

@@ -53,7 +53,8 @@ export async function GET(request: NextRequest) {
 
     const isConnectionsPlatform =
       stateRow.platform === "google_analytics" ||
-      stateRow.platform === "search_console";
+      stateRow.platform === "search_console" ||
+      stateRow.platform === "google_drive";
 
     if (isConnectionsPlatform) {
       // Cache the connectable GA4 properties / SC sites so the Traffic tab
@@ -78,6 +79,8 @@ export async function GET(request: NextRequest) {
           encrypted_token: encrypted,
           scopes: tokens.scope ?? null,
           available_resources: availableResources,
+          selected_resource: null,
+          resource_label: null,
           connected: true,
         },
         { onConflict: "tenant_id,workspace_id,provider" }

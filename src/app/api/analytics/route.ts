@@ -262,6 +262,7 @@ export async function GET(request: NextRequest) {
     > = {
       google_analytics: { active: null, resources: [] },
       search_console: { active: null, resources: [] },
+      google_drive: { active: null, resources: [] },
     };
     try {
       const workspaceId = (await getCurrentWorkspaceId().catch(() => null)) ?? null;

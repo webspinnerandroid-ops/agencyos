@@ -66,6 +66,9 @@ export default function AccountMenu({ email }: AccountMenuProps) {
             <div className="px-3 py-2 text-xs text-muted-foreground border-b mb-1 truncate">
               {email}
             </div>
+            <div className="px-3 pb-1 text-[10px] text-muted-foreground/60">
+              build {process.env.NEXT_PUBLIC_BUILD_SHA ?? "dev"}
+            </div>
             {installReady && (
               <button
                 onClick={handleInstall}

@@ -1,5 +1,17 @@
 import type { NextConfig } from "next";
 import path from "path";
+import { execSync } from "child_process";
+
+// Baked at build time: the git SHA of the deployed source. Surfaced via the
+// /api/version route and the account menu so it's easy to verify a phone is
+// actually running the newest bundle after an update.
+function buildSha(): string {
+  try {
+    return execSync("git rev-parse --short HEAD", { encoding: "utf8" }).trim();
+  } catch {
+    return "unknown";
+  }
+}
 
 const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
@@ -28,6 +40,9 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
+  env: {
+    NEXT_PUBLIC_BUILD_SHA: buildSha(),
+  },
   poweredByHeader: false,
   // puppeteer-core is dynamically imported only for the optional headless
   // competitor-crawl fallback; keep it external so it resolves from

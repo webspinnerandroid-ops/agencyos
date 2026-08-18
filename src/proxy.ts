@@ -2,7 +2,7 @@ import { type NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import { getTenantThemeSafe, encodeTenantTheme } from "@/lib/tenant"
 
-const PUBLIC_ROUTES = ["/login", "/register", "/forgot-password", "/reset-password", "/pending-approval", "/help", "/about", "/contact", "/privacy", "/data-deletion", "/export-data", "/terms", "/seo/proposal", "/audit", "/site", "/sign", "/api/webhooks", "/api/auth/callback", "/api/auth/session", "/api/auth/dev-login", "/api/register", "/api/data-deletion", "/api/export-data", "/api/inngest", "/api/docusign/connect", "/api/seo/public-proposal", "/api/seo/public-audit", "/api/cms/forms", "/api/outreach/reply-webhook", "/api/sign", "/api/telegram/webhook", "/api/discord/webhook", "/_next", "/favicon.ico", "/robots.txt", "/sitemap.xml", "/og-image.png", "/"]
+const PUBLIC_ROUTES = ["/login", "/register", "/forgot-password", "/reset-password", "/pending-approval", "/help", "/about", "/contact", "/privacy", "/data-deletion", "/export-data", "/terms", "/seo/proposal", "/audit", "/site", "/sign", "/api/webhooks", "/api/auth/callback", "/api/auth/session", "/api/auth/dev-login", "/api/register", "/api/data-deletion", "/api/export-data", "/api/inngest", "/api/docusign/connect", "/api/seo/public-proposal", "/api/seo/public-audit", "/api/cms/forms", "/api/outreach/reply-webhook", "/api/sign", "/api/telegram/webhook", "/api/discord/webhook", "/api/version", "/_next", "/favicon.ico", "/robots.txt", "/sitemap.xml", "/og-image.png", "/"]
 
 function isPublicRoute(pathname: string): boolean {
   return PUBLIC_ROUTES.some(

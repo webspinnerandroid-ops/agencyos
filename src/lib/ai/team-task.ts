@@ -72,6 +72,7 @@ import { extractClientFromMessage } from "@/lib/ai/client-extract";
 import { createCampaignPlan } from "@/lib/campaign-plans";
 import { createNotification } from "@/lib/in-app-notifications";
 import { telegramSendToUser } from "@/lib/telegram";
+import { discordSendToUser } from "@/lib/discord";
 
 // ----------------------------------------------------------------------------
 // Payload + result types
@@ -2331,6 +2332,12 @@ export async function processTeamTask(payload: TeamTaskPayload): Promise<void> {
       tenantId,
       null,
       `💬 ${employeeDisplayName}:\n${replyContent}`
+    );
+    // Same for Discord DMs when a bot is connected (two-way chat).
+    void discordSendToUser(
+      tenantId,
+      null,
+      `💬 **${employeeDisplayName}:**\n${replyContent}`
     );
 
     // Any conversation held with an employee in a room/team chat is also

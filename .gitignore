@@ -9,6 +9,8 @@
 !.yarn/plugins
 !.yarn/releases
 !.yarn/versions
+# Baked by the deploy script before upload; never commit.
+public/version.txt
 
 # testing
 /coverage

@@ -219,6 +219,36 @@ export async function getResources(
   }
 }
 
+/**
+ * Browse Drive folders, optionally drilling into a subfolder via `parentId`.
+ * Returns the folders directly inside that parent so the picker can navigate
+ * beyond the root instead of being limited to top-level folders.
+ */
+export async function getDriveFolders(
+  parentId?: string
+): Promise<ActionResponse<{ folders: { id: string; name: string }[] }>> {
+  try {
+    const tenantId = await getTenantId();
+    const workspaceId = await getCurrentWorkspaceId().catch(() => null);
+    const supabase = await createServiceClient();
+    const conn = await resolveConnection(tenantId, workspaceId, "google_drive");
+    if (!conn) return { success: false, error: "Google Drive is not connected yet." };
+
+    const { accessToken, fresh } = await getAccessToken(conn);
+    if (fresh) {
+      await supabase
+        .from("tenant_connections")
+        .update({ encrypted_token: encodeTokenBundle(fresh) })
+        .eq("id", conn.id);
+    }
+
+    const folders = await listDriveFolders(accessToken, parentId);
+    return { success: true, data: { folders } };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
 /** Save which resource (GA4 property / SC site) this workspace tracks. */
 export async function selectResource(
   provider: ConnectionProvider,

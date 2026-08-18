@@ -20,6 +20,7 @@ import {
   X,
   Check,
   Wand2,
+  HardDrive,
 } from "lucide-react";
 
 interface Asset {
@@ -65,6 +66,8 @@ export default function AssetsPage() {
   const [q, setQ] = useState("");
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
   const [unfiled, setUnfiled] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [savingDrive, setSavingDrive] = useState<string | null>(null);
 
   // Folder editor state
   const [newFolderName, setNewFolderName] = useState("");
@@ -317,6 +320,28 @@ export default function AssetsPage() {
     }
   };
 
+  const saveToDrive = async (asset: Asset) => {
+    setSavingDrive(asset.id);
+    setNotice(null);
+    setError(null);
+    try {
+      const res = await fetch(`/api/media-assets/${asset.id}/drive`, {
+        method: "POST",
+        credentials: "include",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setNotice(`Saved to Google Drive: ${data.file?.name ?? "asset"}`);
+      } else {
+        setError(data.error ?? "Failed to save to Google Drive");
+      }
+    } catch (err: any) {
+      setError(err?.message ?? "Failed to save to Google Drive");
+    } finally {
+      setSavingDrive(null);
+    }
+  };
+
   const download = async (url: string, name: string) => {
     try {
       const res = await fetch(url);
@@ -492,6 +517,13 @@ export default function AssetsPage() {
             </div>
           )}
 
+          {notice && (
+            <div className="p-3 rounded-md bg-green-50 dark:bg-green-950/30 border border-green-200 dark:border-green-900 text-sm text-green-800 dark:text-green-200">
+              {notice}
+              <button className="ml-3 underline text-xs" onClick={() => setNotice(null)}>Dismiss</button>
+            </div>
+          )}
+
           {loading ? (
             <div className="flex items-center justify-center py-16">
               <Loader2 className="size-6 animate-spin text-muted-foreground" />
@@ -604,6 +636,20 @@ export default function AssetsPage() {
                               title="Download"
                             >
                               <Download className="size-3.5" />
+                            </button>
+                          )}
+                          {asset.url && (
+                            <button
+                              onClick={() => saveToDrive(asset)}
+                              disabled={savingDrive === asset.id}
+                              className="p-1 rounded hover:bg-emerald-100 dark:hover:bg-emerald-900 text-emerald-600 disabled:opacity-40"
+                              title="Save to the workspace's attached Google Drive folder"
+                            >
+                              {savingDrive === asset.id ? (
+                                <Loader2 className="size-3.5 animate-spin" />
+                              ) : (
+                                <HardDrive className="size-3.5" />
+                              )}
                             </button>
                           )}
                           <button

@@ -257,12 +257,20 @@ export async function listSearchConsoleSites(
     .map((s) => ({ siteUrl: s.siteUrl!, permissionLevel: s.permissionLevel ?? "" }));
 }
 
-/** List the user's Drive folders (top-level, up to 200) for the folder picker. */
+/**
+ * List the user's Drive folders for the folder picker. Pass `parentId` to
+ * browse subfolders (beyond the top level) so the attached folder doesn't have
+ * to live directly in the Drive root.
+ */
 export async function listDriveFolders(
-  accessToken: string
+  accessToken: string,
+  parentId?: string
 ): Promise<{ id: string; name: string }[]> {
+  const parentClause = parentId
+    ? `'${parentId}' in parents`
+    : `'root' in parents`;
   const q = encodeURIComponent(
-    `mimeType='application/vnd.google-apps.folder' and 'root' in parents and trashed=false`
+    `mimeType='application/vnd.google-apps.folder' and ${parentClause} and trashed=false`
   );
   const data = await googleGet<{
     files?: { id?: string; name?: string }[];

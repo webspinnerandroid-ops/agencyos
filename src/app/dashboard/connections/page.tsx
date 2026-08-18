@@ -19,12 +19,16 @@ import {
   Trash2,
   Users,
   FolderOpen,
+  ChevronRight,
+  ArrowLeft,
+  FolderInput,
 } from "lucide-react";
 import type { GA4PropertyOption } from "@/lib/connections";
 import {
   getConnections,
   initiateConnection,
   getResources,
+  getDriveFolders,
   selectResource,
   disconnectConnection,
 } from "./actions";
@@ -104,6 +108,10 @@ export default function ConnectionsPage() {
   const [showPicker, setShowPicker] = useState<Record<Provider, boolean>>({ google_analytics: false, search_console: false, google_drive: false });
   const [picked, setPicked] = useState<Record<Provider, string>>({ google_analytics: "", search_console: "", google_drive: "" });
   const [pickerBusy, setPickerBusy] = useState<Provider | null>(null);
+
+  // Drive subfolder browser — a stack of {id,name} from the Drive root down.
+  const [driveStack, setDriveStack] = useState<{ id: string; name: string }[]>([]);
+  const [driveFolders, setDriveFolders] = useState<{ id: string; name: string }[]>([]);
 
   // ---- Google Business Profile ----
   const [profiles, setProfiles] = useState<GoogleBusinessProfile[]>([]);
@@ -222,6 +230,58 @@ export default function ConnectionsPage() {
                 : "No Search Console sites found. Verify a site in Search Console first.",
         });
       }
+    });
+  };
+
+  const loadDriveLevel = (parentId?: string) => {
+    startTransition(async () => {
+      setPickerBusy("google_drive");
+      setFeedback(null);
+      const res = await getDriveFolders(parentId);
+      setPickerBusy(null);
+      if (!res.success) {
+        setFeedback({ type: "error", message: res.error ?? "Failed to load Drive folders" });
+        return;
+      }
+      setDriveFolders(res.data?.folders ?? []);
+      setShowPicker((s) => ({ ...s, google_drive: true }));
+    });
+  };
+
+  const openDrivePicker = () => {
+    setDriveStack([]);
+    loadDriveLevel(undefined);
+  };
+
+  const drillDrive = (folder: { id: string; name: string }) => {
+    setDriveStack((s) => [...s, folder]);
+    loadDriveLevel(folder.id);
+  };
+
+  const backDrive = (depth: number) => {
+    const stack = driveStack.slice(0, depth);
+    setDriveStack(stack);
+    loadDriveLevel(stack.length ? stack[stack.length - 1].id : undefined);
+  };
+
+  const attachCurrentDrive = () => {
+    const current = driveStack[driveStack.length - 1];
+    if (!current) {
+      setFeedback({ type: "error", message: "Open a folder first, then attach it." });
+      return;
+    }
+    startTransition(async () => {
+      setBusy("google_drive");
+      const res = await selectResource("google_drive", current.id, current.name);
+      setBusy(null);
+      if (!res.success) {
+        setFeedback({ type: "error", message: res.error ?? "Failed to attach folder" });
+        return;
+      }
+      setFeedback({ type: "success", message: `Drive folder "${current.name}" attached.` });
+      setShowPicker((s) => ({ ...s, google_drive: false }));
+      setDriveStack([]);
+      await loadConnections();
     });
   };
 
@@ -429,10 +489,58 @@ export default function ConnectionsPage() {
                         <div className="text-xs text-amber-600 mt-1">{provider === "google_drive" ? "No folder attached yet — pick a Drive folder below." : "No property selected yet — choose what to track below."}</div>
                       )}
                     </div>
-                    {showPicker[provider] ? (
+                    {showPicker[provider] && provider === "google_drive" ? (
+                      <div className="space-y-2 rounded-md border p-3 bg-muted/20">
+                        {/* Breadcrumb */}
+                        <div className="flex items-center gap-1 text-xs text-muted-foreground flex-wrap">
+                          <button className="underline hover:text-foreground" onClick={() => backDrive(0)} disabled={pickerBusy === provider}>My Drive</button>
+                          {driveStack.map((f, i) => (
+                            <span key={f.id} className="flex items-center gap-1">
+                              <ChevronRight className="size-3" />
+                              <button className="underline hover:text-foreground truncate max-w-[120px]" onClick={() => backDrive(i + 1)} disabled={pickerBusy === provider}>
+                                {f.name}
+                              </button>
+                            </span>
+                          ))}
+                        </div>
+
+                        {/* Folder list */}
+                        {pickerBusy === provider ? (
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground py-2">
+                            <Loader2 className="size-3.5 animate-spin" /> Loading folders…
+                          </div>
+                        ) : driveFolders.length === 0 ? (
+                          <p className="text-xs text-muted-foreground py-1">No subfolders here.</p>
+                        ) : (
+                          <div className="space-y-1 max-h-56 overflow-y-auto">
+                            {driveFolders.map((f) => (
+                              <button
+                                key={f.id}
+                                onClick={() => drillDrive(f)}
+                                className="w-full flex items-center gap-2 text-left text-sm px-2 py-1.5 rounded-md hover:bg-muted"
+                              >
+                                <FolderOpen className="size-4 text-primary shrink-0" />
+                                <span className="truncate">{f.name}</span>
+                                <ChevronRight className="size-4 ml-auto text-muted-foreground shrink-0" />
+                              </button>
+                            ))}
+                          </div>
+                        )}
+
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {driveStack.length > 0 && (
+                            <Button size="sm" onClick={attachCurrentDrive} disabled={busy === provider}>
+                              {busy === provider ? <Loader2 className="size-3.5 animate-spin mr-1" /> : <FolderInput className="size-3.5 mr-1" />}
+                              Attach "{driveStack[driveStack.length - 1].name}"
+                            </Button>
+                          )}
+                          <Button size="sm" variant="ghost" onClick={() => setShowPicker((s) => ({ ...s, [provider]: false }))}>Cancel</Button>
+                        </div>
+                      </div>
+                    ) : showPicker[provider] ? (
                       <div className="space-y-2">
                         <select value={picked[provider]} onChange={(e) => setPicked((p) => ({ ...p, [provider]: e.target.value }))} className="w-full rounded-md border bg-background px-3 py-2 text-sm">
-                          <option value="">{provider === "google_analytics" ? "Select a GA4 property…" : provider === "google_drive" ? "Select a Drive folder…" : "Select a site…"}</option>
+                          <option value="">{provider === "google_analytics" ? "Select a GA4 property…" : "Select a site…"}</option>
                           {options[provider].map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                         </select>
                         <div className="flex items-center gap-2">
@@ -444,7 +552,7 @@ export default function ConnectionsPage() {
                       </div>
                     ) : (
                       <div className="flex items-center gap-2 flex-wrap">
-                        <Button size="sm" variant="outline" onClick={() => loadPicker(provider)} disabled={pickerBusy === provider || busy === provider}>
+                        <Button size="sm" variant="outline" onClick={() => (provider === "google_drive" ? openDrivePicker() : loadPicker(provider))} disabled={pickerBusy === provider || busy === provider}>
                           {pickerBusy === provider ? <Loader2 className="size-3.5 animate-spin mr-1" /> : <RefreshCw className="size-3.5 mr-1" />}
                           {provider === "google_drive"
                             ? (conn.resource_label ? "Change attached folder" : "Choose folder to attach")

@@ -130,6 +130,7 @@ export interface LicenseRecord {
   expires_at: string | null;
   tenant_name?: string;
   hubs?: string[];
+  is_trial?: boolean;
 }
 
 export interface LicenseAuditEntry {
@@ -269,7 +270,13 @@ export async function getLicenses(): Promise<ActionResponse<LicenseRecord[]>> {
       .select("*, tenant:tenants(name)")
       .order("issued_at", { ascending: false });
     if (error) throw new Error(error.message);
-    const mapped = (data ?? []).map((l: any) => ({ ...l, tenant_name: l.tenant?.name ?? "N/A" }));
+    const mapped = (data ?? []).map((l: any) => ({
+      ...l,
+      tenant_name: l.tenant?.name ?? "N/A",
+      is_trial:
+        l.status === "trialing" ||
+        ((l.metadata ?? {}) as Record<string, unknown>)?.is_trial === true,
+    }));
 
     // Attach each tenant's purchased hubs (hub-and-spoke) so the admin table
     // can grant/revoke them without payment.
@@ -629,6 +636,82 @@ export async function updateLicensePlan(
     });
 
     return { success: true };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+/**
+ * Manually convert a license between trial and full (both ways, super admin
+ * only). Setting trial:true marks the tenant as a free trial (status
+ * "trialing", 14-day expiry if none/expired); trial:false makes them a full
+ * paying customer (status "active") and clears the flag. Syncs the matching
+ * subscription row so billing/limits follow.
+ */
+export async function setLicenseTrial(
+  licenseId: string,
+  isTrial: boolean
+): Promise<ActionResponse<{ is_trial: boolean; status: string }>> {
+  try {
+    await requireSuperAdmin();
+    const supabase = await createServiceClient();
+
+    const { data: existing } = await supabase
+      .from("licenses")
+      .select("id, tenant_id, expires_at, metadata")
+      .eq("id", licenseId)
+      .maybeSingle();
+    if (!existing) throw new Error("License not found.");
+
+    const metadata = {
+      ...((existing.metadata ?? {}) as Record<string, unknown>),
+      is_trial: isTrial,
+    };
+
+    // Entering trial: give a fresh 14 days when there's no expiry (or it's
+    // already past) so the trial actually has runway.
+    let expiresAt = existing.expires_at;
+    if (isTrial) {
+      const current = expiresAt ? new Date(expiresAt).getTime() : 0;
+      if (!expiresAt || current < Date.now()) {
+        expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString();
+      }
+    }
+
+    const { error } = await supabase
+      .from("licenses")
+      .update({
+        status: isTrial ? "trialing" : "active",
+        metadata,
+        ...(expiresAt ? { expires_at: expiresAt } : {}),
+      })
+      .eq("id", licenseId);
+    if (error) throw new Error(error.message);
+
+    // Keep the subscription in sync so billing/limits follow the new state.
+    const { data: sub } = await supabase
+      .from("subscriptions")
+      .select("id")
+      .eq("tenant_id", existing.tenant_id)
+      .maybeSingle();
+    if (sub) {
+      await supabase
+        .from("subscriptions")
+        .update({ status: isTrial ? "trialing" : "active" })
+        .eq("id", sub.id);
+    }
+
+    await auditLicense(supabase, {
+      licenseId,
+      tenantId: existing.tenant_id,
+      action: isTrial ? "trial_started" : "trial_ended",
+      details: {
+        isTrial,
+        ...(expiresAt ? { expires_at: expiresAt } : {}),
+      },
+    });
+
+    return { success: true, data: { is_trial: isTrial, status: isTrial ? "trialing" : "active" } };
   } catch (err) {
     return { success: false, error: (err as Error).message };
   }

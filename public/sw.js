@@ -12,7 +12,7 @@
 // New deploys bump __VERSION__, which invalidates the old cache in `activate`.
 // ============================================================================
 
-const VERSION = "v2";
+const VERSION = "v3";
 const STATIC_CACHE = `agencyos-static-${VERSION}`;
 const PAGE_CACHE = `agencyos-pages-${VERSION}`;
 

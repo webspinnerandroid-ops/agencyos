@@ -43,7 +43,7 @@ export default function AccountMenu({ email }: AccountMenuProps) {
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} aria-hidden="true" />
-          <div className="absolute right-0 mt-1 z-50 w-56 rounded-md border bg-popover p-1 shadow-md" role="menu">
+          <div className="fixed right-2 top-14 z-50 w-56 rounded-md border bg-popover p-1 shadow-md" role="menu">
             <div className="px-3 py-2 text-xs text-muted-foreground border-b mb-1 truncate">
               {email}
             </div>

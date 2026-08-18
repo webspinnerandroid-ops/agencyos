@@ -9,7 +9,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Building2, Users, FileText, Key, TrendingUp, Shield, X, UserCog, Menu, Wallet, LayoutTemplate, LogIn, Image as ImageIcon } from "lucide-react";
-import { getDashboardStats, getAllTenants, getLicenses, getLicenseAudit, issueLicense, updateLicensePlan, renewLicense, revokeLicense, deleteLicense, deleteUser, deleteTenant, getAllUsers, assignLevel, grantHub, revokeHub, getAdminAudit, getAssetHealth, getBrokenAssets, deleteAsset, regenerateAsset, type TenantSummary, type LicenseRecord, type LicenseAuditEntry, type AdminAuditEntry, type UserRecord, type BrokenAsset } from "./actions";
+import { getDashboardStats, getAllTenants, getLicenses, getLicenseAudit, issueLicense, updateLicensePlan, renewLicense, revokeLicense, deleteLicense, deleteUser, deleteTenant, getAllUsers, assignLevel, grantHub, revokeHub, getAdminAudit, getAssetHealth, getBrokenAssets, deleteAsset, regenerateAsset, setLicenseTrial, type TenantSummary, type LicenseRecord, type LicenseAuditEntry, type AdminAuditEntry, type UserRecord, type BrokenAsset } from "./actions";
 import type { WorkspaceAssetHealth } from "@/lib/asset-health";
 import TokenBilling from "./token-billing";
 
@@ -206,6 +206,8 @@ export default function AdminDashboardPage() {
       case "revoked": return "License revoked";
       case "issued": return `Issued (${details.planId ?? "?"}, ${details.seats ?? "?"} seats)`;
       case "deleted": return "License permanently deleted";
+      case "trial_started": return "Converted to trial (14 days)";
+      case "trial_ended": return "Converted to full license";
       default: return a.action.replace(/_/g, " ");
     }
   };
@@ -513,6 +515,21 @@ export default function AdminDashboardPage() {
                 Renew
               </Button>
               {l.status === "active" && <Button variant="ghost" size="sm" onClick={() => startTransition(async () => { await revokeLicense(l.id); loadData(); })}>Revoke</Button>}
+              {l.is_trial
+                ? <Button variant="outline" size="sm" className="text-green-600" onClick={() => startTransition(async () => {
+                    const r = await setLicenseTrial(l.id, false);
+                    setFeedback(r.success
+                      ? { type: "success", message: "Converted to full license — trial flag cleared." }
+                      : { type: "error", message: r.error ?? "Failed to convert." });
+                    loadData();
+                  })} title="Convert this trial to a full license">Make full</Button>
+                : <Button variant="outline" size="sm" onClick={() => startTransition(async () => {
+                    const r = await setLicenseTrial(l.id, true);
+                    setFeedback(r.success
+                      ? { type: "success", message: "Converted back to trial — 14 days from today." }
+                      : { type: "error", message: r.error ?? "Failed to convert." });
+                    loadData();
+                  })} title="Convert this full license back to a trial">Make trial</Button>}
               <Button variant="ghost" size="sm" className="text-destructive" onClick={() => handleDeleteLicense(l.id, l.license_key)}>Delete</Button>
             </td>
           </tr>

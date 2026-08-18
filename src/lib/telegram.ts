@@ -464,16 +464,25 @@ export async function bindTelegramChatByCode(
       return { ok: false, error: "That link was already used." };
     }
 
+    // Cross-device memory: a freshly connected chat inherits the workspace
+    // (and last employee) this user chose on their other devices.
+    const prefs = await getTelegramUserPrefs(linkCode.user_id as string);
+    const newWorkspaceId = prefs?.default_workspace_id ?? null;
+    const newEmployeeKey = prefs?.active_employee_key ?? null;
+    const bindPayload: Record<string, unknown> = {
+      user_id: linkCode.user_id,
+      tenant_id: linkCode.tenant_id,
+      chat_id: chatId,
+      bot_username: botUsername,
+      alert_only: false,
+      bound_at: new Date().toISOString(),
+    };
+    if (newWorkspaceId) bindPayload.active_workspace_id = newWorkspaceId;
+    if (newEmployeeKey) bindPayload.active_employee_key = newEmployeeKey;
+
     // Upsert the link: the same chat can be re-bound to the same user.
     const { error: upsertErr } = await supabase.from("telegram_links").upsert(
-      {
-        user_id: linkCode.user_id,
-        tenant_id: linkCode.tenant_id,
-        chat_id: chatId,
-        bot_username: botUsername,
-        alert_only: false,
-        bound_at: new Date().toISOString(),
-      },
+      bindPayload,
       { onConflict: "chat_id" }
     );
     if (upsertErr) return { ok: false, error: upsertErr.message };
@@ -497,6 +506,12 @@ export async function setTelegramActiveWorkspace(
 ): Promise<{ ok: boolean; error?: string }> {
   try {
     const supabase = await createServiceClient();
+    const { data: link, error: linkErr } = await supabase
+      .from("telegram_links")
+      .select("user_id, tenant_id")
+      .eq("chat_id", chatId)
+      .maybeSingle();
+    if (linkErr) return { ok: false, error: linkErr.message };
     const { error } = await supabase
       .from("telegram_links")
       .update({ active_workspace_id: workspaceId })
@@ -508,9 +523,106 @@ export async function setTelegramActiveWorkspace(
       }
       return { ok: false, error: error.message };
     }
+    // Remember the choice per-user too, so a brand-new chat (new device)
+    // inherits it when it connects.
+    if (link) {
+      await setTelegramUserPrefs(link.user_id as string, link.tenant_id as string, {
+        defaultWorkspaceId: workspaceId,
+      });
+    }
     return { ok: true };
   } catch (err) {
     return { ok: false, error: (err as Error).message };
+  }
+}
+
+/**
+ * Set the employee this Telegram chat talks to directly (/team).
+ * A null employeeKey routes messages back to the Team Room.
+ */
+export async function setTelegramActiveEmployee(
+  chatId: string,
+  employeeKey: string | null
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const supabase = await createServiceClient();
+    const { data: link, error: linkErr } = await supabase
+      .from("telegram_links")
+      .select("user_id, tenant_id")
+      .eq("chat_id", chatId)
+      .maybeSingle();
+    if (linkErr) return { ok: false, error: linkErr.message };
+    const { error } = await supabase
+      .from("telegram_links")
+      .update({ active_employee_key: employeeKey })
+      .eq("chat_id", chatId);
+    if (error) return { ok: false, error: error.message };
+    if (link) {
+      await setTelegramUserPrefs(link.user_id as string, link.tenant_id as string, {
+        activeEmployeeKey: employeeKey,
+      });
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+}
+
+/** The user's cross-chat Telegram prefs (or null when never set). */
+export async function getTelegramUserPrefs(
+  userId: string
+): Promise<{
+  default_workspace_id: string | null;
+  active_employee_key: string | null;
+} | null> {
+  try {
+    const supabase = await createServiceClient();
+    const { data, error } = await supabase
+      .from("telegram_user_prefs")
+      .select("default_workspace_id, active_employee_key")
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (error || !data) return null;
+    return {
+      default_workspace_id: (data.default_workspace_id as string | null) ?? null,
+      active_employee_key: (data.active_employee_key as string | null) ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Upsert the user's cross-chat Telegram prefs (fire-and-forget safe). */
+export async function setTelegramUserPrefs(
+  userId: string,
+  tenantId: string,
+  prefs: {
+    defaultWorkspaceId?: string | null;
+    activeEmployeeKey?: string | null;
+  }
+): Promise<void> {
+  try {
+    const supabase = await createServiceClient();
+    const existing = await getTelegramUserPrefs(userId);
+    const { error } = await supabase.from("telegram_user_prefs").upsert(
+      {
+        user_id: userId,
+        tenant_id: tenantId,
+        default_workspace_id:
+          prefs.defaultWorkspaceId !== undefined
+            ? prefs.defaultWorkspaceId
+            : (existing?.default_workspace_id ?? null),
+        active_employee_key:
+          prefs.activeEmployeeKey !== undefined
+            ? prefs.activeEmployeeKey
+            : (existing?.active_employee_key ?? null),
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "user_id" }
+    );
+    if (error) console.warn("[telegram] setUserPrefs failed:", error.message);
+  } catch (err) {
+    console.warn("[telegram] setUserPrefs failed:", err);
   }
 }
 

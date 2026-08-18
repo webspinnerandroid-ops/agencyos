@@ -7,11 +7,13 @@ import {
   getTelegramFileUrl,
   sendReadMoreFullText,
   sendTelegramMessage,
+  setTelegramActiveEmployee,
   setTelegramActiveWorkspace,
   telegramCreateWorkspace,
   unlinkTelegram,
 } from "@/lib/telegram";
 import { enqueueOrRun } from "@/lib/ai/team-task";
+import { EMPLOYEE_PERSONAS } from "@/lib/ai/employee-personas";
 import { persistImageToStorage } from "@/lib/media/storage";
 
 /**
@@ -141,6 +143,7 @@ export async function POST(request: NextRequest) {
         "/status — your latest updates in notifications\n" +
         "/workspaces — list and switch workspaces\n" +
         "/newworkspace <name> — create a workspace from here\n" +
+        "/team — pick an employee to chat with directly\n" +
         "/unbind — disconnect this chat\n" +
         "Long replies include a Read more button so nothing gets cut off. Any other message is forwarded to your AI team.",
       { parseMode: "Markdown" }
@@ -156,6 +159,18 @@ export async function POST(request: NextRequest) {
   const workspaceMatch = text.match(/^\/workspace\s+(.+)$/);
   if (workspaceMatch) {
     await selectWorkspace(chatIdStr, workspaceMatch[1].trim());
+    return NextResponse.json({ ok: true });
+  }
+
+  // /team [name|key|off] — chat with one employee directly instead of the
+  // Team Room. Bare /team lists the roster with one-tap buttons.
+  if (text === "/team" || text === "/team ") {
+    await listTeam(chatIdStr);
+    return NextResponse.json({ ok: true });
+  }
+  const teamMatch = text.match(/^\/team\s+(.+)$/);
+  if (teamMatch) {
+    await selectTeam(chatIdStr, teamMatch[1].trim());
     return NextResponse.json({ ok: true });
   }
 
@@ -217,6 +232,7 @@ export async function POST(request: NextRequest) {
     chatIdStr,
     tenantId: link.tenant_id,
     workspaceId: link.active_workspace_id ?? null,
+    employeeKey: link.active_employee_key ?? null,
     text,
   });
 
@@ -278,6 +294,7 @@ async function findLinkByChatId(chatId: string) {
     user_id: string;
     tenant_id: string;
     active_workspace_id?: string | null;
+    active_employee_key?: string | null;
   };
 }
 
@@ -391,6 +408,45 @@ async function handleCallback(callbackId: string, chatId: string, data: string) 
       );
       return;
     }
+    if (data.startsWith("tm:")) {
+      const employeeKey = data.slice(3);
+      const link = await findLinkByChatId(chatId);
+      if (!link) {
+        await answerTelegramCallback(callbackId, "Not connected to an app account.");
+        return;
+      }
+      if (employeeKey === "__room__") {
+        const res = await setTelegramActiveEmployee(chatId, null);
+        if (!res.ok) {
+          await answerTelegramCallback(callbackId, res.error ?? "Couldn't switch.");
+          return;
+        }
+        await answerTelegramCallback(callbackId, "Back to the Team Room.");
+        await sendTelegramMessage(
+          chatId,
+          "✅ Back to your *Team Room* — new messages go to the whole team again.",
+          { parseMode: "Markdown" }
+        );
+        return;
+      }
+      const persona = EMPLOYEE_PERSONAS[employeeKey as keyof typeof EMPLOYEE_PERSONAS];
+      if (!persona) {
+        await answerTelegramCallback(callbackId, "Unknown employee.");
+        return;
+      }
+      const res = await setTelegramActiveEmployee(chatId, employeeKey);
+      if (!res.ok) {
+        await answerTelegramCallback(callbackId, res.error ?? "Couldn't switch.");
+        return;
+      }
+      await answerTelegramCallback(callbackId, `Now chatting with ${persona.name}.`);
+      await sendTelegramMessage(
+        chatId,
+        `✅ Now chatting directly with *${persona.name}* (${persona.role}). Message me anything and it goes straight to them. /team off returns to the Team Room.`,
+        { parseMode: "Markdown" }
+      );
+      return;
+    }
     await answerTelegramCallback(callbackId, "Unknown action.");
   } catch (err) {
     console.warn("[telegram] handleCallback failed:", err);
@@ -450,6 +506,94 @@ async function selectWorkspace(chatId: string, arg: string) {
   );
 }
 
+/** /team — list the roster with one-tap buttons to chat with one employee. */
+async function listTeam(chatId: string) {
+  const link = await findLinkByChatId(chatId);
+  if (!link) {
+    await sendTelegramMessage(chatId, "You aren't connected to an app account yet.");
+    return;
+  }
+  const current = link.active_employee_key;
+  const keys = Object.keys(EMPLOYEE_PERSONAS) as string[];
+  const lines = keys.map((k) => {
+    const p = EMPLOYEE_PERSONAS[k as keyof typeof EMPLOYEE_PERSONAS];
+    if (!p) return "";
+    return `${p.name} — ${p.role}${k === current ? " ✅ (current)" : ""}`;
+  });
+  const buttons: { text: string; callback_data: string }[][] = [];
+  for (let i = 0; i < keys.length; i += 2) {
+    buttons.push(
+      keys
+        .slice(i, i + 2)
+        .map((k) => {
+          const p = EMPLOYEE_PERSONAS[k as keyof typeof EMPLOYEE_PERSONAS];
+          return {
+            text: `${p?.name ?? k}${k === current ? " ✓" : ""}`,
+            callback_data: `tm:${k}`,
+          };
+        })
+    );
+  }
+  buttons.push([{ text: "🏠 Team Room", callback_data: "tm:__room__" }]);
+  await sendTelegramMessage(
+    chatId,
+    `*Who do you want to talk to?*\n\n${lines.join("\n")}\n\nTap a button, or /team <name> (e.g. /team Cheryl). /team off returns to the Team Room.`,
+    { parseMode: "Markdown", replyMarkup: { inline_keyboard: buttons } }
+  );
+}
+
+/** /team <name|key|off> — set (or clear) the direct employee for this chat. */
+async function selectTeam(chatId: string, arg: string) {
+  const link = await findLinkByChatId(chatId);
+  if (!link) {
+    await sendTelegramMessage(chatId, "You aren't connected to an app account yet.");
+    return;
+  }
+  const lower = arg.toLowerCase();
+  if (lower === "off" || lower === "room" || lower === "reset" || lower === "none") {
+    const res = await setTelegramActiveEmployee(chatId, null);
+    if (!res.ok) {
+      await sendTelegramMessage(chatId, `❌ ${res.error ?? "Couldn't switch back to the Team Room."}`);
+      return;
+    }
+    await sendTelegramMessage(
+      chatId,
+      "✅ Back to your *Team Room* — new messages go to the whole team again.",
+      { parseMode: "Markdown" }
+    );
+    return;
+  }
+  // Match by key first, then by display name.
+  let key: string | null = null;
+  if (EMPLOYEE_PERSONAS[lower as keyof typeof EMPLOYEE_PERSONAS]) {
+    key = lower;
+  } else {
+    const byName = (Object.keys(EMPLOYEE_PERSONAS) as string[]).find((k) => {
+      const p = EMPLOYEE_PERSONAS[k as keyof typeof EMPLOYEE_PERSONAS];
+      return (p?.name ?? "").toLowerCase() === lower;
+    });
+    if (byName) key = byName;
+  }
+  if (!key) {
+    await sendTelegramMessage(
+      chatId,
+      `Couldn't find "${arg}". Use /team to see the roster.`
+    );
+    return;
+  }
+  const persona = EMPLOYEE_PERSONAS[key as keyof typeof EMPLOYEE_PERSONAS];
+  const res = await setTelegramActiveEmployee(chatId, key);
+  if (!res.ok) {
+    await sendTelegramMessage(chatId, `❌ ${res.error ?? "Couldn't switch employee."}`);
+    return;
+  }
+  await sendTelegramMessage(
+    chatId,
+    `✅ Now chatting directly with *${persona?.name ?? key}* (${persona?.role ?? ""}). Message me anything and it goes straight to them. /team off returns to the Team Room.`,
+    { parseMode: "Markdown" }
+  );
+}
+
 /** /status — the user's 5 most recent unread notifications. */
 async function replyWithStatus(chatId: string) {
   const supabase = await createServiceClient();
@@ -484,14 +628,16 @@ async function replyWithStatus(chatId: string) {
 }
 
 /**
- * Insert the message into the user's Team Room and enqueue the normal
- * employee pipeline. Serialized per chat so replies never interleave, and
- * never awaited — the webhook returns before the LLM work starts.
+ * Insert the message into the user's Team Room (or the selected employee's
+ * DM when /team is active) and enqueue the normal employee pipeline.
+ * Serialized per chat so replies never interleave, and never awaited — the
+ * webhook returns before the LLM work starts.
  */
 async function forwardToTeamRoom(input: {
   chatIdStr: string;
   tenantId: string;
   workspaceId: string | null;
+  employeeKey: string | null;
   text: string;
 }): Promise<void> {
   try {
@@ -501,13 +647,19 @@ async function forwardToTeamRoom(input: {
     // first workspace — or null when none exist (the pipeline tolerates that).
     const workspaceId = await resolveWorkspaceId(input.tenantId, input.workspaceId);
 
-    // Find-or-create the Team Room for that workspace.
+    // The chat's active employee (set via /team) routes the message to that
+    // employee's DM instead of the Team Room. "nina" (Malory) is the Team
+    // Room's dispatcher, so treat her as the room itself.
+    const employeeKey = input.employeeKey && input.employeeKey !== "nina" ? input.employeeKey : null;
+
+    // Find-or-create the target chat (Team Room, or the employee's DM).
     let { data: room } = await supabase
       .from("team_chats")
       .select("id, workspace_id, tenant_id")
       .eq("tenant_id", input.tenantId)
       .eq("workspace_id", workspaceId)
-      .eq("kind", "team")
+      .eq("kind", employeeKey ? "employee" : "team")
+      .eq("employee_key", employeeKey ?? null)
       .maybeSingle();
     if (!room) {
       const { data: created, error } = await supabase
@@ -516,16 +668,18 @@ async function forwardToTeamRoom(input: {
           tenant_id: input.tenantId,
           workspace_id: workspaceId,
           client_id: null,
-          title: "Team Room",
-          kind: "team",
-          employee_key: null,
+          title: employeeKey
+            ? (EMPLOYEE_PERSONAS[employeeKey as keyof typeof EMPLOYEE_PERSONAS]?.name ?? employeeKey)
+            : "Team Room",
+          kind: employeeKey ? "employee" : "team",
+          employee_key: employeeKey ?? null,
         })
         .select("id, workspace_id, tenant_id")
         .single();
       if (error) {
         await sendTelegramMessage(
           input.chatIdStr,
-          "Couldn't open your Team Room — try again in a moment."
+          "Couldn't open the chat — try again in a moment."
         );
         return;
       }

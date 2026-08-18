@@ -131,13 +131,13 @@ export function DashboardRecents({
       ) : (
         <div className="grid gap-8 lg:grid-cols-2 items-start">
           {enabled.content && (
-            <div>
+            <div className="min-w-0">
               <RecentContentList posts={posts} />
             </div>
           )}
 
           {enabled.audits && (
-            <div>
+            <div className="min-w-0">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-xl font-semibold tracking-tight">Recent SEO Audits</h2>
                 <a href="/dashboard/seo/campaigns" className="text-sm text-primary underline hover:underline">View all →</a>
@@ -179,7 +179,7 @@ export function DashboardRecents({
           )}
 
           {enabled.images && (
-            <div>
+            <div className="min-w-0">
               <RecentAssetSection
                 title="Recent Images"
                 icon={<FileText className="size-4 text-primary" />}
@@ -191,7 +191,7 @@ export function DashboardRecents({
           )}
 
           {enabled.brands && (
-            <div>
+            <div className="min-w-0">
               <RecentAssetSection
                 title="Recent Brand Assets"
                 icon={<Palette className="size-4 text-primary" />}
@@ -203,7 +203,7 @@ export function DashboardRecents({
           )}
 
           {enabled.videos && (
-            <div>
+            <div className="min-w-0">
               <RecentAssetSection
                 title="Recent Videos"
                 icon={<Film className="size-4 text-primary" />}

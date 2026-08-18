@@ -88,7 +88,7 @@ export function RecentContentList({ posts: initialPosts }: { posts: PostRow[] })
                   <MessageCircle className="size-4 text-blue-500 shrink-0" />
                 )}
                 <div className="min-w-0">
-                  <p className="text-sm font-medium truncate max-w-md">{preview.title}</p>
+                  <p className="text-sm font-medium truncate min-w-0 max-w-full">{preview.title}</p>
                   <div className="flex items-center gap-2 mt-0.5">
                     <span className="text-xs text-muted-foreground capitalize">{preview.type}</span>
                     {preview.platform && (

@@ -88,6 +88,9 @@ export default function PwaRegister() {
     navigator.serviceWorker
       .register("/sw.js")
       .then((reg) => {
+        // Force an update check on every load so a new deploy reaches phones
+        // on the next visit instead of waiting for the browser's own cadence.
+        reg.update().catch(() => {});
         // Live badge on the app icon: the service worker pings us with the
         // unread count when a push arrives.
         navigator.serviceWorker.addEventListener("message", (event) => {

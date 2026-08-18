@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { captureInstallPrompt, markInstalled } from "@/lib/pwa-install";
 
 /**
  * Registers the service worker (offline caching) once the page loads, then —
@@ -68,7 +69,21 @@ async function setupPush(registration: ServiceWorkerRegistration): Promise<void>
 export default function PwaRegister() {
   useEffect(() => {
     if (process.env.NODE_ENV !== "production") return;
+
+    // Capture the browser's install prompt the moment it fires so the UI can
+    // offer an explicit "Install app" button (the native prompt rarely
+    // re-appears on its own once dismissed).
+    const onBeforeInstall = (e: Event) => captureInstallPrompt(e);
+    const onInstalled = () => markInstalled();
+    window.addEventListener("beforeinstallprompt", onBeforeInstall);
+    window.addEventListener("appinstalled", onInstalled);
+
     if (!("serviceWorker" in navigator)) return;
+
+    const cleanup = () => {
+      window.removeEventListener("beforeinstallprompt", onBeforeInstall);
+      window.removeEventListener("appinstalled", onInstalled);
+    };
 
     navigator.serviceWorker
       .register("/sw.js")
@@ -90,6 +105,8 @@ export default function PwaRegister() {
         }
       })
       .catch((err) => console.warn("[pwa] service worker registration failed:", err));
+
+    return cleanup;
   }, []);
 
   return null;

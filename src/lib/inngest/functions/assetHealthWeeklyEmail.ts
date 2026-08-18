@@ -1,6 +1,6 @@
 import { inngest } from "@/lib/inngest/client";
 import { createClient } from "@supabase/supabase-js";
-import { computeAssetHealth, type WorkspaceAssetHealth } from "@/lib/asset-health";
+import { computeAssetHealth, formatBytes, type WorkspaceAssetHealth } from "@/lib/asset-health";
 
 /**
  * Weekly per-workspace asset health email — Mondays 09:30 UTC (right after
@@ -124,6 +124,7 @@ function buildSummaryHtml(
         <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;text-align:center;">${s.broken}</td>
         <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;text-align:center;">${s.emptyUrl}</td>
         <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;text-align:center;">${s.nonCdn}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;text-align:center;">${formatBytes(s.storageBytes ?? 0)}</td>
         <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;text-align:center;">${status}</td>
       </tr>`;
     })

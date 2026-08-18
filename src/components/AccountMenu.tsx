@@ -1,8 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createBrowserClient } from "@supabase/ssr";
-import { LogOut, User, ChevronDown } from "lucide-react";
+import { LogOut, User, ChevronDown, Download } from "lucide-react";
+import {
+  isInstallAvailable,
+  isIosSafari,
+  onInstallAvailable,
+  promptInstall,
+} from "@/lib/pwa-install";
 
 interface AccountMenuProps {
   email: string;
@@ -11,6 +17,17 @@ interface AccountMenuProps {
 export default function AccountMenu({ email }: AccountMenuProps) {
   const [open, setOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
+  const [installReady, setInstallReady] = useState(false);
+
+  // Follow the captured install prompt: show the button only while the
+  // browser has one available (Android Chrome / desktop). iOS has no prompt
+  // API — the menu shows Add-to-Home-Screen instructions instead.
+  useEffect(() => onInstallAvailable(setInstallReady), []);
+
+  const handleInstall = async () => {
+    const accepted = await promptInstall();
+    if (!accepted) setInstallReady(false);
+  };
 
   const handleSignOut = async () => {
     setSigningOut(true);
@@ -47,6 +64,21 @@ export default function AccountMenu({ email }: AccountMenuProps) {
             <div className="px-3 py-2 text-xs text-muted-foreground border-b mb-1 truncate">
               {email}
             </div>
+            {installReady && (
+              <button
+                onClick={handleInstall}
+                className="w-full flex items-center gap-2 rounded-sm px-3 py-2 text-sm hover:bg-muted transition-colors"
+                role="menuitem"
+              >
+                <Download className="size-4" />
+                Install app
+              </button>
+            )}
+            {isIosSafari() && !installReady && (
+              <div className="px-3 py-2 text-xs text-muted-foreground">
+                Install: share menu → <strong>Add to Home Screen</strong>
+              </div>
+            )}
             <button
               onClick={handleSignOut}
               disabled={signingOut}

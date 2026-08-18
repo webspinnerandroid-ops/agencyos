@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Loader2, Building2, Users, FileText, Key, TrendingUp, Shield, X, UserCog, Menu, Wallet, LayoutTemplate, LogIn, Image as ImageIcon } from "lucide-react";
 import { getDashboardStats, getAllTenants, getLicenses, getLicenseAudit, issueLicense, updateLicensePlan, renewLicense, revokeLicense, deleteLicense, deleteUser, deleteTenant, getAllUsers, assignLevel, grantHub, revokeHub, getAdminAudit, getAssetHealth, getBrokenAssets, deleteAsset, regenerateAsset, setLicenseTrial, type TenantSummary, type LicenseRecord, type LicenseAuditEntry, type AdminAuditEntry, type UserRecord, type BrokenAsset } from "./actions";
 import type { WorkspaceAssetHealth } from "@/lib/asset-health";
+import { formatBytes } from "@/lib/asset-health";
 import TokenBilling from "./token-billing";
 
 // Hub-and-spoke add-ons the super admin can grant/revoke without payment.
@@ -634,7 +635,7 @@ export default function AdminDashboardPage() {
           ) : assetHealth && assetHealth.length === 0 ? (
             <p className="text-sm text-muted-foreground">No media assets in any workspace yet.</p>
           ) : assetHealth ? (
-            <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b text-left"><th className="py-2 px-3 text-muted-foreground">Tenant</th><th className="py-2 px-3 text-muted-foreground">Workspace</th><th className="py-2 px-3 text-muted-foreground">Total</th><th className="py-2 px-3 text-muted-foreground">Healthy</th><th className="py-2 px-3 text-muted-foreground">Broken</th><th className="py-2 px-3 text-muted-foreground">Empty URL</th><th className="py-2 px-3 text-muted-foreground">Non-CDN</th><th className="py-2 px-3 text-muted-foreground">Checked</th></tr></thead><tbody>
+            <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b text-left"><th className="py-2 px-3 text-muted-foreground">Tenant</th><th className="py-2 px-3 text-muted-foreground">Workspace</th><th className="py-2 px-3 text-muted-foreground">Total</th><th className="py-2 px-3 text-muted-foreground">Healthy</th><th className="py-2 px-3 text-muted-foreground">Broken</th><th className="py-2 px-3 text-muted-foreground">Empty URL</th><th className="py-2 px-3 text-muted-foreground">Non-CDN</th><th className="py-2 px-3 text-muted-foreground">Storage</th><th className="py-2 px-3 text-muted-foreground">Checked</th></tr></thead><tbody>
               {assetHealth.map((h) => {
                 const key = h.workspaceId ?? "(no workspace)";
                 const issueCount = h.broken + h.emptyUrl + h.nonCdn;
@@ -654,6 +655,7 @@ export default function AdminDashboardPage() {
                       <td className="py-2 px-3">{h.broken > 0 ? <Badge className="bg-red-100 text-red-700">{h.broken}</Badge> : <span>0</span>}</td>
                       <td className="py-2 px-3">{h.emptyUrl > 0 ? <Badge className="bg-orange-100 text-orange-700">{h.emptyUrl}</Badge> : <span>0</span>}</td>
                       <td className="py-2 px-3">{h.nonCdn > 0 ? <Badge className="bg-yellow-100 text-yellow-700">{h.nonCdn}</Badge> : <span>0</span>}</td>
+                      <td className="py-2 px-3 whitespace-nowrap" title={`${(h.storageBytes ?? 0).toLocaleString()} bytes`}>{formatBytes(h.storageBytes ?? 0)}</td>
                       <td className="py-2 px-3 text-muted-foreground text-xs">
                         {new Date(h.checkedAt).toLocaleTimeString()}
                         {hasIssues && <span className="ml-1 text-primary">{expanded ? "▲" : "▼"}</span>}
@@ -661,7 +663,7 @@ export default function AdminDashboardPage() {
                     </tr>
                     {expanded && (
                       <tr className="border-b last:border-0 bg-muted/20">
-                        <td colSpan={8} className="py-3 px-4">
+                        <td colSpan={9} className="py-3 px-4">
                           <div className="text-sm">
                             <p className="font-medium mb-2">Broken assets in “{h.workspaceName}”</p>
                             {brokenLoading[key] ? (

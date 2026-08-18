@@ -20,7 +20,22 @@ export interface WorkspaceAssetHealth {
   broken: number;
   emptyUrl: number;
   nonCdn: number;
+  /** Storage bytes actually served from the CDN during this check. */
+  storageBytes: number;
   checkedAt: string;
+}
+
+/** Human-readable byte count (e.g. "1.4 MB"). */
+export function formatBytes(bytes: number): string {
+  if (!bytes || bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let n = bytes;
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024;
+    i++;
+  }
+  return `${n >= 100 || i === 0 ? Math.round(n) : n.toFixed(1)} ${units[i]}`;
 }
 
 export function sniffImageExt(buf: Buffer): string | null {
@@ -70,12 +85,13 @@ export async function computeAssetHealth(
   // Classify each asset; CDN bytes are fetched + sniffed (bounded).
   const verdicts = new Map<
     string,
-    { ok: number; broken: number; emptyUrl: number; nonCdn: number }
+    { ok: number; broken: number; emptyUrl: number; nonCdn: number; storageBytes: number }
   >();
   const key = (wsId: string | null) => wsId ?? "(no workspace)";
+  const fresh = () => ({ ok: 0, broken: 0, emptyUrl: 0, nonCdn: 0, storageBytes: 0 });
 
   const classify = (wsId: string | null, url: string | null) => {
-    const v = verdicts.get(key(wsId)) ?? { ok: 0, broken: 0, emptyUrl: 0, nonCdn: 0 };
+    const v = verdicts.get(key(wsId)) ?? fresh();
     if (!url || url.trim() === "") v.emptyUrl++;
     else v.nonCdn++; // non-CDN (provider/legacy) URLs are never byte-checked
     verdicts.set(key(wsId), v);
@@ -92,11 +108,12 @@ export async function computeAssetHealth(
     while (cursor < cdnRows.length) {
       const row = cdnRows[cursor++];
       const wsId = row.workspace_id ?? null;
-      const v = verdicts.get(key(wsId)) ?? { ok: 0, broken: 0, emptyUrl: 0, nonCdn: 0 };
+      const v = verdicts.get(key(wsId)) ?? fresh();
       try {
         const res = await fetch(row.url, { signal: AbortSignal.timeout(45000) });
         if (!res.ok) { v.broken++; verdicts.set(key(wsId), v); continue; }
         const body = Buffer.from(await res.arrayBuffer());
+        if (body.length > 0) v.storageBytes += body.length;
         const pathPart = row.url.slice(cdnPrefix.length);
         const ext = path.extname(pathPart).toLowerCase();
         const isMp4 =
@@ -136,6 +153,7 @@ export async function computeAssetHealth(
       broken: v.broken,
       emptyUrl: v.emptyUrl,
       nonCdn: v.nonCdn,
+      storageBytes: v.storageBytes,
       checkedAt,
     });
   }

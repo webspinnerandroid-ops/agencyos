@@ -63,7 +63,13 @@ export default function MobileNav({
             onClick={() => setOpen(false)}
             aria-hidden="true"
           />
-          <div className="fixed inset-y-0 right-0 z-50 flex w-72 max-w-[85vw] flex-col overflow-y-auto border-l bg-popover shadow-xl">
+          {/* Viewport-anchored right drawer. Inline positioning is a belt-and-
+              suspenders fallback so the panel can never render off-screen even
+              if a CSS purge/ordering issue drops a Tailwind utility. */}
+          <div
+            className="flex w-72 max-w-[85vw] flex-col overflow-y-auto border-l bg-popover shadow-xl"
+            style={{ position: "fixed", inset: "0 0 0 auto", zIndex: 50 }}
+          >
             <div className="flex items-center justify-between border-b px-4 py-3">
               <span className="text-sm font-semibold">Menu</span>
               <button
@@ -77,7 +83,7 @@ export default function MobileNav({
             <div className="p-2">
               {sections.map((section) => (
                 <div key={section.label} className="mb-1">
-                  <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                  <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-widest text-primary">
                     {section.label}
                   </div>
                   {section.items.map((item) => (

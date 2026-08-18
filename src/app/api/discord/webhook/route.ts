@@ -1,13 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import {
+  ackDiscordInteraction,
   bindDiscordByCode,
+  consumeDiscordReadMoreToken,
   discordSendMessage,
   findDiscordLinkByChannel,
   getDiscordBotToken,
+  sendDiscordFollowup,
   setDiscordActiveEmployee,
   setDiscordActiveWorkspace,
   unlinkDiscord,
+  type DiscordActionRow,
 } from "@/lib/discord";
 import { enqueueOrRun } from "@/lib/ai/team-task";
 import { EMPLOYEE_PERSONAS } from "@/lib/ai/employee-personas";
@@ -35,12 +39,39 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  let body: { authorId?: string; channelId?: string; text?: string };
+  let body: {
+    authorId?: string;
+    channelId?: string;
+    text?: string;
+    interaction?: {
+      id?: string;
+      token?: string;
+      customId?: string;
+      channelId?: string;
+      applicationId?: string;
+      userId?: string;
+    };
+  };
   try {
     body = (await request.json()) as typeof body;
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
+
+  // ---- Button taps (Read more…, /team picker, /workspaces picker) -------
+  const interaction = body.interaction;
+  if (interaction && interaction.id && interaction.token) {
+    void handleInteraction({
+      id: interaction.id,
+      token: interaction.token,
+      customId: interaction.customId,
+      channelId: interaction.channelId,
+      applicationId: interaction.applicationId,
+      userId: interaction.userId,
+    });
+    return NextResponse.json({ ok: true });
+  }
+
   const channelId = body.channelId;
   const authorId = body.authorId;
   const text = (body.text ?? "").trim();
@@ -161,7 +192,7 @@ async function replyWithStatus(channelId: string, tenantId: string) {
   );
 }
 
-/** /workspaces — list the tenant's workspaces. */
+/** /workspaces — list the tenant's workspaces with one-tap buttons. */
 async function listWorkspaces(
   channelId: string,
   link: { tenant_id: string; active_workspace_id?: string | null }
@@ -181,9 +212,24 @@ async function listWorkspaces(
     const mark = w.id === current ? " ✅ (current)" : "";
     return `${i + 1}. ${w.name ?? "Workspace"}${mark}`;
   });
+  // One-tap buttons (5 per row, max 25 — Discord's component cap).
+  const rows: DiscordActionRow[] = [];
+  for (let i = 0; i < data.length && i < 25; i += 5) {
+    rows.push({
+      type: 1,
+      components: data.slice(i, i + 5).map((w) => ({
+        type: 2,
+        style: w.id === current ? 3 : 1,
+        label: `${(w.name ?? "Workspace").slice(0, 24)}${w.id === current ? " ✓" : ""}`,
+        custom_id: `ws:${w.id}`,
+      })),
+    });
+  }
+  const tooMany = data.length > 25 ? `\n\n(Only the first 25 shown — use /workspace <name> for the rest.)` : "";
   await discordSendMessage(
     channelId,
-    `**Your workspaces:**\n${lines.join("\n")}\n\nUse /workspace <number or name> to switch.`
+    `**Your workspaces:**\n${lines.join("\n")}\n\nTap a button to switch.${tooMany}`,
+    rows
   );
 }
 
@@ -226,7 +272,7 @@ async function selectWorkspace(
   );
 }
 
-/** /team — list the roster. */
+/** /team — list the roster with one-tap buttons. */
 async function listTeam(
   channelId: string,
   link: { active_employee_key?: string | null }
@@ -238,9 +284,33 @@ async function listTeam(
     if (!p) return "";
     return `${p.name} — ${p.role}${k === current ? " ✅ (current)" : ""}`;
   });
+  // One-tap employee buttons (3 per row; 12 employees = 4 rows) + a green
+  // Team Room button on its own row = 5 rows, within Discord's cap.
+  const rows: DiscordActionRow[] = [];
+  for (let i = 0; i < keys.length; i += 3) {
+    rows.push({
+      type: 1,
+      components: keys.slice(i, i + 3).map((k) => {
+        const p = EMPLOYEE_PERSONAS[k as keyof typeof EMPLOYEE_PERSONAS];
+        return {
+          type: 2,
+          style: k === current ? 3 : 1,
+          label: `${p?.name ?? k}${k === current ? " ✓" : ""}`,
+          custom_id: `tm:${k}`,
+        };
+      }),
+    });
+  }
+  rows.push({
+    type: 1,
+    components: [
+      { type: 2, style: 4, label: "🏠 Team Room", custom_id: "tm:__room__" },
+    ],
+  });
   await discordSendMessage(
     channelId,
-    `**Who do you want to talk to?**\n\n${lines.join("\n")}\n\nUse /team <name> (e.g. /team Cheryl). /team off returns to the Team Room.`
+    `**Who do you want to talk to?**\n\n${lines.join("\n")}\n\nTap a button, or /team <name> (e.g. /team Cheryl). /team off returns to the Team Room.`,
+    rows
   );
 }
 
@@ -355,6 +425,98 @@ async function forwardToChat(input: {
   } catch (err) {
     console.error("[discord] forwardToChat failed:", err);
     await discordSendMessage(input.channelId, "Something went wrong reaching your team — please try again.");
+  }
+}
+
+/**
+ * Handle a button tap (interaction): Read-more, employee picker, workspace
+ * picker. Acknowledges fast (Discord's 3s window) then sends the follow-up.
+ * Fire-and-forget so the route answers quickly.
+ */
+async function handleInteraction(input: {
+  id: string;
+  token: string;
+  customId?: string;
+  channelId?: string;
+  applicationId?: string;
+  userId?: string;
+}): Promise<void> {
+  void ackDiscordInteraction(input.id, input.token);
+  try {
+    const follow = (text: string) => sendDiscordFollowup(input.applicationId ?? "", input.token, text);
+    const customId = input.customId ?? "";
+
+    if (customId.startsWith("rm:")) {
+      const token = customId.slice(3);
+      const full = await consumeDiscordReadMoreToken(token);
+      if (!full) {
+        await follow("That full message is no longer cached — ask again and I'll resend it in one piece.");
+        return;
+      }
+      await follow(full);
+      return;
+    }
+
+    if (customId.startsWith("tm:")) {
+      const employeeKey = customId.slice(3);
+      const link = input.channelId ? await findDiscordLinkByChannel(input.channelId) : null;
+      if (!link) {
+        await follow("You're not connected yet. Open the app → Settings → Discord and tap Connect, then DM me `/connect <code>`.");
+        return;
+      }
+      if (employeeKey === "__room__") {
+        const res = await setDiscordActiveEmployee(input.channelId ?? "", null);
+        await follow(
+          res.ok
+            ? "✅ Back to your **Team Room** — new messages go to the whole team again."
+            : `❌ ${res.error ?? "Couldn't switch back to the Team Room."}`
+        );
+        return;
+      }
+      const persona = EMPLOYEE_PERSONAS[employeeKey as keyof typeof EMPLOYEE_PERSONAS];
+      if (!persona) {
+        await follow("Unknown employee.");
+        return;
+      }
+      const res = await setDiscordActiveEmployee(input.channelId ?? "", employeeKey);
+      await follow(
+        res.ok
+          ? `✅ Now chatting directly with **${persona.name}** (${persona.role}). Message me anything and it goes straight to them. /team off returns to the Team Room.`
+          : `❌ ${res.error ?? "Couldn't switch employee."}`
+      );
+      return;
+    }
+
+    if (customId.startsWith("ws:")) {
+      const workspaceId = customId.slice(3);
+      const link = input.channelId ? await findDiscordLinkByChannel(input.channelId) : null;
+      if (!link) {
+        await follow("You're not connected yet. Open the app → Settings → Discord and tap Connect.");
+        return;
+      }
+      const supabase = await createServiceClient();
+      const { data: ws } = await supabase
+        .from("workspaces")
+        .select("name")
+        .eq("id", workspaceId)
+        .eq("tenant_id", link.tenant_id)
+        .maybeSingle();
+      if (!ws) {
+        await follow("Workspace not found.");
+        return;
+      }
+      const res = await setDiscordActiveWorkspace(input.channelId ?? "", workspaceId);
+      await follow(
+        res.ok
+          ? `✅ Active workspace is now **${ws.name}**. New messages go to that workspace's Team Room.`
+          : `❌ ${res.error ?? "Couldn't switch workspace."}`
+      );
+      return;
+    }
+
+    await follow("Unknown action.");
+  } catch (err) {
+    console.warn("[discord] handleInteraction failed:", err);
   }
 }
 

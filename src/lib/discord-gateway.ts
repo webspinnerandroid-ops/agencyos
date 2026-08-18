@@ -53,7 +53,7 @@ function internalSecret(): string {
 }
 
 /** POST an inbound DM to the internal webhook route (fire-and-forget). */
-async function forwardToRoute(authorId: string, channelId: string, text: string): Promise<void> {
+async function forwardToRoute(payload: Record<string, unknown>): Promise<void> {
   try {
     const port = process.env.PORT ?? "3000";
     const base = `http://127.0.0.1:${port}`;
@@ -63,7 +63,7 @@ async function forwardToRoute(authorId: string, channelId: string, text: string)
         "Content-Type": "application/json",
         "x-internal-secret": internalSecret(),
       },
-      body: JSON.stringify({ authorId, channelId, text }),
+      body: JSON.stringify(payload),
       signal: AbortSignal.timeout(15000),
     });
   } catch (err) {
@@ -160,7 +160,34 @@ function handleDispatch(t: string, d: unknown) {
     if (msg.author?.id === botUserId) return;
     const text = (msg.content ?? "").trim();
     if (!text || !msg.channel_id || !msg.author?.id) return;
-    void forwardToRoute(msg.author.id, msg.channel_id, text);
+    void forwardToRoute({ authorId: msg.author.id, channelId: msg.channel_id, text });
+  }
+  if (t === "INTERACTION_CREATE") {
+    const interaction = d as {
+      id?: string;
+      type?: number;
+      token?: string;
+      application_id?: string;
+      channel_id?: string;
+      custom_id?: string;
+      member?: { user?: { id?: string } };
+      user?: { id?: string };
+      message?: { id?: string };
+    };
+    // Only message-component button taps (type 2), never our own.
+    if (interaction.type !== 2) return;
+    const userId = interaction.member?.user?.id ?? interaction.user?.id;
+    if (!interaction.id || !interaction.token || !interaction.channel_id || !userId) return;
+    void forwardToRoute({
+      interaction: {
+        id: interaction.id,
+        token: interaction.token,
+        customId: interaction.custom_id ?? "",
+        channelId: interaction.channel_id,
+        applicationId: interaction.application_id ?? "",
+        userId,
+      },
+    });
   }
 }
 

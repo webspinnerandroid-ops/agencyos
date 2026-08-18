@@ -22,6 +22,18 @@ import { randomBytes } from "crypto";
 
 const API = "https://discord.com/api/v10";
 
+/** A Discord action row of buttons (max 5 rows, 5 buttons per row). */
+export interface DiscordActionRow {
+  type: 1;
+  components: {
+    type: 2;
+    style: 1 | 2 | 3 | 4;
+    label: string;
+    custom_id: string;
+    disabled?: boolean;
+  }[];
+}
+
 /** The bot token lives in env (DISCORD_BOT_TOKEN); null when not configured. */
 export function getDiscordBotToken(): string | null {
   const token = process.env.DISCORD_BOT_TOKEN;
@@ -62,11 +74,13 @@ export function splitDiscordChunks(text: string, max = DISCORD_MAX_CHARS): strin
 
 /**
  * Send a plain message to a Discord channel via the bot's REST API. Long text
- * is split into 2000-char chunks. Returns true on success. Never throws.
+ * is split into 2000-char chunks. Pass `components` to attach button rows.
+ * Returns true on success. Never throws.
  */
 export async function discordSendMessage(
   channelId: string,
-  text: string
+  text: string,
+  components?: DiscordActionRow[]
 ): Promise<boolean> {
   const token = getDiscordBotToken();
   if (!token || !text) return false;
@@ -79,7 +93,10 @@ export async function discordSendMessage(
           "Content-Type": "application/json",
           Authorization: `Bot ${token}`,
         },
-        body: JSON.stringify({ content: chunk }),
+        body: JSON.stringify({
+          content: chunk,
+          ...(components ? { components } : {}),
+        }),
         signal: AbortSignal.timeout(10000),
       });
       if (!res.ok) {
@@ -100,8 +117,9 @@ export async function discordSendMessage(
 
 /**
  * Send a plain conversational message to every Discord DM bound to this user
- * (or the whole tenant when no user is targeted). Ignored when the bot isn't
- * configured. Never throws.
+ * (or the whole tenant when no user is targeted). Long replies go out as a
+ * preview with a Read-more button (mirroring Telegram). Ignored when the bot
+ * isn't configured. Never throws.
  */
 export async function discordSendToUser(
   tenantId: string,
@@ -116,7 +134,7 @@ export async function discordSendToUser(
     const { data, error } = await query;
     if (error || !data || data.length === 0) return;
     for (const row of data as { channel_id: string }[]) {
-      void discordSendMessage(row.channel_id, text);
+      void sendLongDiscordMessage(row.channel_id, text);
     }
   } catch (err) {
     console.warn("[discord] sendToUser failed:", err);
@@ -165,6 +183,128 @@ export async function discordNotify(input: DiscordNotifyInput): Promise<void> {
     }
   } catch (err) {
     console.warn("[discord] notify failed:", err);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Long messages + the Read-more button (mirrors the Telegram pattern).
+//
+// Discord messages cap at 2000 chars. Instead of silently chunking a long
+// team reply into several messages, we send a preview with an inline
+// "Read more…" button; tapping it delivers the full text (split into
+// 2000-char chunks). The full text is cached in-process under a token in the
+// button's custom_id.
+// ---------------------------------------------------------------------------
+
+const DISCORD_PREVIEW_CHARS = 1800;
+const READ_MORE_TTL_MS = 24 * 60 * 60 * 1000;
+
+/** token → { at, text } of pending long messages awaiting "Read more". */
+const readMoreCache = new Map<string, { at: number; text: string }>();
+
+/**
+ * Send a conversational message that may exceed Discord's 2000-char cap.
+ * Short messages go out verbatim; long ones get a preview plus a Read-more
+ * button that expands to the full text. Never throws.
+ */
+export async function sendLongDiscordMessage(
+  channelId: string,
+  text: string
+): Promise<boolean> {
+  if (!getDiscordBotToken() || !text) return false;
+  if (text.length <= DISCORD_PREVIEW_CHARS) {
+    return discordSendMessage(channelId, text);
+  }
+  const token = randomBytes(12).toString("hex");
+  readMoreCache.set(token, { at: Date.now(), text });
+  const preview = splitDiscordChunks(text, DISCORD_PREVIEW_CHARS)[0] ?? text;
+  const sent = await discordSendMessage(channelId, preview, [
+    {
+      type: 1,
+      components: [
+        { type: 2, style: 2, label: "📖 Read more…", custom_id: `rm:${token}` },
+      ],
+    },
+  ]);
+  if (!sent) {
+    // Button delivery failed (unlikely) — fall back to plain chunks so the
+    // text still arrives in full.
+    readMoreCache.delete(token);
+    for (const chunk of splitDiscordChunks(text)) {
+      const ok = await discordSendMessage(channelId, chunk);
+      if (!ok) break;
+    }
+  }
+  return sent;
+}
+
+/** Resolve + consume a Discord Read-more token (called on the rm: callback). */
+export async function consumeDiscordReadMoreToken(token: string): Promise<string | null> {
+  if (!token) return null;
+  const entry = readMoreCache.get(token);
+  if (!entry) return null;
+  if (Date.now() - entry.at > READ_MORE_TTL_MS) {
+    readMoreCache.delete(token);
+    return null;
+  }
+  readMoreCache.delete(token);
+  return entry.text;
+}
+
+/** Acknowledge a message-component interaction (type 6 = DEFERRED_UPDATE_MESSAGE). */
+export async function ackDiscordInteraction(
+  interactionId: string,
+  interactionToken: string
+): Promise<void> {
+  const token = getDiscordBotToken();
+  if (!token) return;
+  try {
+    await fetch(`${API}/interactions/${interactionId}/${interactionToken}/callback`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bot ${token}`,
+      },
+      body: JSON.stringify({ type: 6 }),
+      signal: AbortSignal.timeout(8000),
+    });
+  } catch (err) {
+    console.warn("[discord] ack interaction failed:", err);
+  }
+}
+
+/**
+ * Send follow-up message(s) to an interaction via the webhook API (chunked at
+ * 2000 chars). The application id + interaction token come from the event.
+ */
+export async function sendDiscordFollowup(
+  applicationId: string,
+  interactionToken: string,
+  text: string
+): Promise<void> {
+  const token = getDiscordBotToken();
+  if (!token) return;
+  for (const chunk of splitDiscordChunks(text)) {
+    try {
+      const res = await fetch(`${API}/webhooks/${applicationId}/${interactionToken}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bot ${token}`,
+        },
+        body: JSON.stringify({ content: chunk }),
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!res.ok) {
+        console.warn(
+          `[discord] followup HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`
+        );
+        break;
+      }
+    } catch (err) {
+      console.warn("[discord] followup failed:", err);
+      break;
+    }
   }
 }
 

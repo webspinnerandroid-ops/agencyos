@@ -3,7 +3,10 @@ import { notFound } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
 import { renderBlogBody } from "@/lib/blog-render";
 import { formatShortDate } from "@/lib/post-preview";
-import type { SiteBlogPost } from "@/lib/site-blog";
+import {
+  siteScoreBadgeClass,
+  type SiteBlogPost,
+} from "@/lib/site-blog";
 
 export const dynamic = "force-dynamic";
 
@@ -49,8 +52,30 @@ export default async function BlogPostPage({
         </div>
       </header>
       <main className="max-w-3xl mx-auto px-4 py-12">
-        <div className="text-sm text-muted-foreground mb-3">
-          {post.published_at ? formatShortDate(post.published_at) : ""}
+        <div className="flex items-center gap-3 mb-3">
+          <div className="text-sm text-muted-foreground">
+            {post.published_at ? formatShortDate(post.published_at) : ""}
+          </div>
+          {(post.seo_score != null || post.aeo_geo_score != null) && (
+            <div className="flex items-center gap-1.5">
+              {post.seo_score != null && (
+                <span
+                  className={`px-2 py-0.5 rounded-full text-xs font-semibold ${siteScoreBadgeClass(post.seo_score)}`}
+                  title={`On-page SEO score: ${post.seo_score}/100`}
+                >
+                  SEO {post.seo_score}
+                </span>
+              )}
+              {post.aeo_geo_score != null && (
+                <span
+                  className={`px-2 py-0.5 rounded-full text-xs font-semibold ${siteScoreBadgeClass(post.aeo_geo_score)}`}
+                  title={`AEO/GEO readiness score: ${post.aeo_geo_score}/100`}
+                >
+                  AEO/GEO {post.aeo_geo_score}
+                </span>
+              )}
+            </div>
+          )}
         </div>
         <h1 className="text-3xl font-bold tracking-tight mb-8">{post.title}</h1>
         {post.featured_image_url && (

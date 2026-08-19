@@ -1,7 +1,10 @@
 import Link from "next/link";
 import { createClient } from "@supabase/supabase-js";
 import { formatShortDate } from "@/lib/post-preview";
-import type { SiteBlogPost } from "@/lib/site-blog";
+import {
+  siteScoreBadgeClass,
+  type SiteBlogPost,
+} from "@/lib/site-blog";
 
 export const dynamic = "force-dynamic";
 
@@ -68,8 +71,30 @@ export default async function BlogArchivePage() {
                   </div>
                 )}
                 <div className="p-5 flex-1 flex flex-col">
-                  <div className="text-xs text-muted-foreground mb-2">
-                    {post.published_at ? formatShortDate(post.published_at) : ""}
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="text-xs text-muted-foreground">
+                      {post.published_at ? formatShortDate(post.published_at) : ""}
+                    </div>
+                    {(post.seo_score != null || post.aeo_geo_score != null) && (
+                      <div className="ml-auto flex items-center gap-1">
+                        {post.seo_score != null && (
+                          <span
+                            className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${siteScoreBadgeClass(post.seo_score)}`}
+                            title={`On-page SEO score: ${post.seo_score}/100`}
+                          >
+                            SEO {post.seo_score}
+                          </span>
+                        )}
+                        {post.aeo_geo_score != null && (
+                          <span
+                            className={`px-1.5 py-0.5 rounded-full text-[10px] font-semibold ${siteScoreBadgeClass(post.aeo_geo_score)}`}
+                            title={`AEO/GEO readiness score: ${post.aeo_geo_score}/100`}
+                          >
+                            AEO/GEO {post.aeo_geo_score}
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </div>
                   <h2 className="font-semibold text-lg leading-snug mb-2 group-hover:text-primary transition-colors">
                     {post.title}

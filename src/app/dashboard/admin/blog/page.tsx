@@ -20,7 +20,13 @@ import {
 } from "lucide-react";
 import { renderBlogBody } from "@/lib/blog-render";
 import { formatShortDate } from "@/lib/post-preview";
-import { deriveExcerpt, firstImageUrl, slugifyTitle, type SiteBlogPost } from "@/lib/site-blog";
+import {
+  deriveExcerpt,
+  firstImageUrl,
+  siteScoreBadgeClass,
+  slugifyTitle,
+  type SiteBlogPost,
+} from "@/lib/site-blog";
 
 type Editor = {
   id: string | null; // null = new post
@@ -419,6 +425,20 @@ export default function SiteBlogAdminPage() {
                     <span>/blog/{post.slug}</span>
                     {post.published_at && <span>· {formatShortDate(post.published_at)}</span>}
                   </div>
+                  {(post.seo_score != null || post.aeo_geo_score != null) && (
+                    <div className="flex items-center gap-1.5 mt-1.5 text-xs">
+                      {post.seo_score != null && (
+                        <span className={`px-1.5 py-0.5 rounded-full font-semibold ${siteScoreBadgeClass(post.seo_score)}`}>
+                          SEO {post.seo_score}
+                        </span>
+                      )}
+                      {post.aeo_geo_score != null && (
+                        <span className={`px-1.5 py-0.5 rounded-full font-semibold ${siteScoreBadgeClass(post.aeo_geo_score)}`}>
+                          AEO/GEO {post.aeo_geo_score}
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                   {post.status === "published" && (

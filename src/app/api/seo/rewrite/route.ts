@@ -49,7 +49,7 @@ export async function POST(request: NextRequest) {
         instructions: body.instructions,
         targeted: body.targeted,
       },
-      { tenantId }
+      { tenantId, workspaceId }
     );
 
     // Persist the final (rewritten) version so it shows up in Monitored Sites

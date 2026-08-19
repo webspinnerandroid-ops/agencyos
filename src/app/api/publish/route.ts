@@ -262,7 +262,7 @@ export async function POST(request: NextRequest) {
       const supabase = await createServiceClient();
       const { data: post } = await supabase
         .from("posts")
-        .select("content, title, media_urls")
+        .select("content, title, media_urls, seo_score, aeo_geo_score")
         .eq("id", postId)
         .eq("tenant_id", tenantId)
         .maybeSingle();
@@ -316,6 +316,11 @@ export async function POST(request: NextRequest) {
         status: (asDraft ? "draft" : "published") as "draft" | "published",
         published_at: asDraft ? null : now,
         updated_at: now,
+        // Carry the quality scores from the source post so /blog cards and
+        // the admin list show them (null when the source was unscored).
+        seo_score: typeof post.seo_score === "number" ? post.seo_score : null,
+        aeo_geo_score:
+          typeof post.aeo_geo_score === "number" ? post.aeo_geo_score : null,
       };
       if (existing) {
         await supabase

@@ -16,6 +16,18 @@ export interface SiteBlogPost {
   published_at: string | null;
   created_at: string;
   updated_at: string;
+  /** Denormalized quality scores (migration 092) — stamped when generated
+   * content is published to the site blog; null for manual posts. */
+  seo_score?: number | null;
+  aeo_geo_score?: number | null;
+}
+
+/** Tailwind classes for a score chip by value (matches post lists). */
+export function siteScoreBadgeClass(score: number | null | undefined): string {
+  if (typeof score !== "number") return "bg-gray-100 text-gray-600";
+  if (score >= 80) return "bg-green-100 text-green-700";
+  if (score >= 50) return "bg-yellow-100 text-yellow-700";
+  return "bg-red-100 text-red-700";
 }
 
 /** Slugify a title the way the rest of the app does. */

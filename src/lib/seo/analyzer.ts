@@ -30,6 +30,20 @@ export interface AnalyzeRequest {
    * the live page score consistently.
    */
   pageUrl?: string;
+  /**
+   * Text mode only: the site's own page URLs. The internal-links check needs
+   * at least one link to a known site page — passing the real pages (from
+   * the tenant's knowledge base / published site) makes the check reachable
+   * instead of permanently failing with an empty set.
+   */
+  internalUrls?: string[];
+  /**
+   * Text mode only: an explicit slug to score against (defaults to a
+   * path-derived slug from `pageUrl`, else "/pasted-content"). Used by the
+   * rewriter so the slug check targets the keyword, like the generate
+   * pipeline does for a real post.
+   */
+  slug?: string;
   /** Text mode only: the page's meta description, so the meta check matches the hosted audit. */
   metaDescription?: string;
 }
@@ -214,13 +228,14 @@ export function scoreAnalyzedContent(input: {
   keyword: string;
   internalUrls: string[];
   url?: string;
+  slug?: string;
 }): Pick<AnalyzeResult, "seo" | "aeoGeo" | "scoreGate" | "wordCount"> {
   const seo =
     input.body.trim().length > 0 && input.title
       ? scoreContent({
           title: input.title,
           metaDescription: input.metaDescription,
-          slug: input.url ? slugOf(input.url) : "/pasted-content",
+          slug: input.slug ?? (input.url ? slugOf(input.url) : "/pasted-content"),
           body: input.body,
           keyword: input.keyword,
           internalUrls: input.internalUrls,
@@ -344,8 +359,9 @@ export async function analyzeContent(
     metaDescription: (req.metaDescription || "").trim(),
     body: text,
     keyword,
-    internalUrls: [],
+    internalUrls: req.internalUrls ?? [],
     url: pageUrl ?? undefined,
+    slug: req.slug,
   });
   return {
     mode,

@@ -21,6 +21,12 @@ import {
   buildGateFeedback,
   MAX_SCORE_ATTEMPTS,
 } from "@/lib/score-gate";
+import {
+  buildInternalLinkContext,
+  resolveInternalLinks,
+  appendRelatedReading,
+  type LinkablePage,
+} from "@/lib/content-links";
 import type { SeoScoreResult } from "@/lib/seo-scorer";
 import type { AeoGeoResult } from "@/lib/aeo-geo";
 
@@ -31,6 +37,14 @@ export interface RewriteRequest {
   title?: string;
   /** Optional focus keyword to write toward; auto-detected from the content otherwise. */
   keyword?: string;
+  /**
+   * The site's own page URLs, scored against like the generate pipeline
+   * (internal-links check). When omitted and a tenantId is passed, the
+   * tenant's real pages are loaded automatically.
+   */
+  internalUrls?: string[];
+  /** Explicit slug to score against; derived from the keyword when omitted. */
+  slug?: string;
   /**
    * Free-text edit instructions from the user ("make it punchier", "add a
    * pricing table"). Applied on top of the failing-check feedback.
@@ -96,15 +110,69 @@ async function scoreText(
   text: string,
   title: string,
   keyword: string,
-  metaDescription = ""
+  metaDescription = "",
+  internalUrls: string[] = [],
+  slug?: string
 ): Promise<AnalyzeResult> {
   const result = await analyzeContent({
     text,
     title,
     keyword,
     metaDescription: metaDescription || undefined,
+    internalUrls,
+    slug,
   });
   return result;
+}
+
+/**
+ * Load the tenant's own pages (published CMS blog posts + KB items) so the
+ * rewrite can score and resolve REAL internal links, exactly like the
+ * generate pipeline. Best-effort: empty list on any failure.
+ */
+async function loadTenantPages(
+  tenantId?: string,
+  workspaceId?: string | null
+): Promise<LinkablePage[]> {
+  if (!tenantId) return [];
+  const pages: LinkablePage[] = [];
+  try {
+    const { getWorkspaceLinkablePages } = await import("@/lib/knowledgebase");
+    if (workspaceId) {
+      pages.push(...(await getWorkspaceLinkablePages(workspaceId, tenantId)));
+    }
+  } catch {
+    // KB unavailable — fall through to CMS pages below.
+  }
+  try {
+    const { createServiceClient } = await import("@/lib/supabase/server");
+    const supabase = await createServiceClient();
+    const { data: sitePages } = await supabase
+      .from("site_pages")
+      .select("title, slug")
+      .eq("tenant_id", tenantId)
+      .eq("kind", "blog_post")
+      .eq("is_published", true)
+      .order("created_at", { ascending: false })
+      .limit(50);
+    for (const p of sitePages ?? []) {
+      if (!p.title || !p.slug) continue;
+      pages.push({ title: p.title, url: `/site/${p.slug}`, text: "" });
+    }
+  } catch {
+    // ignore — internal links are a best-effort enhancement
+  }
+  return pages;
+}
+
+/** Derive a real slug from the keyword for scoring (generate-style). */
+function slugFromKeyword(keyword: string): string {
+  const s = keyword
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 120);
+  return s ? "/" + s : "/content";
 }
 
 /**
@@ -113,7 +181,7 @@ async function scoreText(
  */
 export async function rewriteToPassGate(
   input: RewriteRequest,
-  opts?: { tenantId?: string }
+  opts?: { tenantId?: string; workspaceId?: string | null }
 ): Promise<RewriteResult> {
   const gate = getScoreGate();
   const text = (input.text ?? "").trim();
@@ -121,15 +189,33 @@ export async function rewriteToPassGate(
 
   // Focus keyword comes from the content itself unless the user gave one —
   // never from a placeholder title ("Rewritten content" used to become the
-  // keyword, which is exactly why rewrites drifted off-subject).
+  // keyword, which is exactly why rewrites drifted off-subject). A comma-
+  // joined keyword list ("custom software development, custom software,
+  // programming") is normalized to its FIRST segment — the scorer's body/
+  // density checks require the exact literal keyword in the prose, and no
+  // natural writing repeats a comma-joined list verbatim.
   const userTitle = (input.title ?? "").trim();
-  const keyword = (input.keyword ?? "").trim() || deriveKeyword(userTitle, text);
+  const rawKeyword = (input.keyword ?? "").trim() || deriveKeyword(userTitle, text);
+  const keyword = rawKeyword.split(",")[0]?.trim() || rawKeyword;
   // A real title is required for scoring (title checks fail otherwise). If
   // none was provided, lift one from the content: a leading H1, the first
   // substantive line, or a title-cased keyword.
   const title = userTitle || deriveTitleFromText(text, keyword);
 
-  const original = await scoreText(text, title, keyword);
+  // Real internal-link target pages (generate-pipeline parity): when the
+  // caller doesn't supply them, load the tenant's own published pages + KB
+  // so the internal-links check is reachable and resolves to REAL links.
+  const pages: LinkablePage[] =
+    (input.internalUrls ?? []).length > 0
+      ? []
+      : await loadTenantPages(opts?.tenantId, opts?.workspaceId);
+  const internalUrls =
+    (input.internalUrls ?? []).length > 0
+      ? input.internalUrls!
+      : pages.map((p) => p.url);
+  const slug = input.slug ?? slugFromKeyword(keyword);
+
+  const original = await scoreText(text, title, keyword, "", internalUrls, slug);
   const originalPassed =
     original.seo != null &&
     original.aeoGeo != null &&
@@ -143,7 +229,14 @@ export async function rewriteToPassGate(
   let rewriteError: string | undefined;
 
   for (let attempt = 1; attempt <= MAX_SCORE_ATTEMPTS; attempt++) {
-    const scored = await scoreText(currentBody, currentTitle, keyword, currentMeta);
+    // Resolve the model's [INTERNAL LINK: …] markers + append a related-
+    // reading section when the body has no internal links yet, so the scored
+    // body is exactly what gets saved (same as the generate pipeline).
+    if (pages.length > 0) {
+      currentBody = resolveInternalLinks(currentBody, pages);
+      currentBody = appendRelatedReading(currentBody, pages);
+    }
+    const scored = await scoreText(currentBody, currentTitle, keyword, currentMeta, internalUrls, slug);
     const passed =
       scored.seo != null &&
       scored.aeoGeo != null &&
@@ -175,6 +268,13 @@ export async function rewriteToPassGate(
       ? `\nTARGETED EDIT MODE: Keep the current content essentially as written. Fix ONLY the failing checks listed above (plus any user edit instructions below) — do not rewrite the rest, do not change the topic, structure, or wording of the parts that already pass.`
       : "";
 
+    const internalLinkContext =
+      pages.length > 0
+        ? `\nINTERNAL LINKS (the site's own pages — link to at least one of these with a [INTERNAL LINK: anchor text → page title] marker, the system resolves it):\n${buildInternalLinkContext(pages, 5)
+          .map((l) => `- ${l.anchorText}`)
+          .join("\n")}`
+        : "";
+
     const systemPrompt = `You are an expert SEO / AEO / GEO content editor. Rewrite the provided content so it passes a strict quality gate: SEO score >= ${gate}/100 AND AEO/GEO score >= ${gate}/100.
 
 TOPIC LOCK (most important rule): The subject is FIXED by the ORIGINAL CONTENT. Stay strictly on that topic — the same product, service, question, or story the original is about. Never introduce a new subject, drift to a different angle, or turn the piece into something else. If the original is about "${keyword}", every sentence of the rewrite must be about "${keyword}".
@@ -190,7 +290,7 @@ Rules for every rewrite:
 - Include at least one numbered how-to/step list.
 - Include 1-2 images as markdown, e.g. ![alt text containing the primary keyword](https://example.com/image.jpg) — the image alt MUST contain the keyword.
 - Include at least one outbound reference link.
-- Preserve the author's original voice and any existing internal links.
+- Preserve the author's original voice and any existing internal links.${internalLinkContext}
 - Return the REWRITTEN CONTENT in valid markdown, no extra commentary.`;
 
     const userInstructions = (input.instructions ?? "").trim();

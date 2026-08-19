@@ -141,15 +141,26 @@ export async function POST(request: NextRequest) {
           metaDescription: description,
           body: result.finalBody,
           keyword: result.keyword,
+          // Canonical score shape (score key) so the DB trigger syncs
+          // seo_score / aeo_geo_score columns and the UI's score resolver
+          // picks it up — same shape the manual generator and AI team write.
+          // `total` kept for back-compat with the rewrite response display.
           seo: {
+            score: result.final.seo?.total ?? null,
             total: result.final.seo?.total ?? null,
+            grade: result.final.seo?.grade ?? null,
+            keyword: result.keyword,
+            wordCount: result.final.seo?.wordCount ?? 0,
             checks: result.final.seo?.checks ?? [],
           },
           aeoGeo: {
+            score: result.final.aeoGeo?.total ?? null,
             total: result.final.aeoGeo?.total ?? null,
             aeoScore: result.final.aeoGeo?.aeoScore ?? null,
             geoSscore: result.final.aeoGeo?.geoSscore ?? null,
+            grade: result.final.aeoGeo?.grade ?? null,
             checks: result.final.aeoGeo?.checks ?? [],
+            qaPairs: result.final.aeoGeo?.qaPairs ?? [],
           },
           rewrite: {
             kind: "rewrite",

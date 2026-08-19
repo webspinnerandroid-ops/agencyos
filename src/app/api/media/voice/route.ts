@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createVoiceAsset, listMediaAssets } from "@/lib/media/flux";
 import { getTenantId } from "@/lib/auth";
+import { getCurrentWorkspaceId } from "@/lib/workspace";
+import { syncAssetToDrive } from "@/lib/drive-sync";
 
 export async function GET(request: NextRequest) {
   try {
@@ -33,6 +35,27 @@ export async function POST(request: NextRequest) {
       clientId: body.clientId,
       tags: body.tags,
     });
+
+    // Mirror voice clips into the attached Drive folder when auto-save is on.
+    if (asset.url) {
+      const workspaceId = await getCurrentWorkspaceId().catch(() => null);
+      void syncAssetToDrive(
+        {
+          id: asset.id,
+          tenant_id: tenantId,
+          workspace_id: workspaceId ?? null,
+          type: asset.type,
+          prompt: asset.prompt,
+          url: asset.url,
+        },
+        workspaceId ?? null
+      ).then((r) => {
+        if (r.saved) console.log("[media/voice] drive auto-saved:", r.file?.name);
+        else if (r.skipped && r.skipped !== "auto-save off") {
+          console.warn("[media/voice] drive auto-save skipped:", r.skipped);
+        }
+      });
+    }
 
     return NextResponse.json({ asset }, { status: 201 });
   } catch (err: any) {

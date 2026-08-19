@@ -5,6 +5,8 @@ import { checkTrialContentLimit } from "@/lib/trial-limits";
 import { checkUsageLimit } from "@/lib/plan-limits";
 import { checkTokenBalance } from "@/lib/token-billing";
 import { buildWorkspacePromptContext, augmentPromptWithContext } from "@/lib/ai/workspace-context";
+import { getCurrentWorkspaceId } from "@/lib/workspace";
+import { syncAssetToDrive } from "@/lib/drive-sync";
 
 export async function GET(request: NextRequest) {
   try {
@@ -18,6 +20,26 @@ export async function GET(request: NextRequest) {
       limit: parseInt(url.searchParams.get("limit") ?? "20"),
       offset: parseInt(url.searchParams.get("offset") ?? "0"),
     });
+
+    // Lazy Drive pickup: async videos finish after the POST returns. The
+    // Asset Library polls this list while a video is processing, so the first
+    // poll that sees a completed URL kicks off the auto-save (only when the
+    // toggle is on — syncAssetToDrive skips otherwise). Fire-and-forget.
+    for (const a of assets) {
+      if (a.status !== "completed" || !a.url || a.drive_synced_at) continue;
+      void syncAssetToDrive({
+        id: a.id,
+        tenant_id: a.tenant_id,
+        type: a.type,
+        prompt: a.prompt,
+        url: a.url,
+      }).then((r) => {
+        if (r.saved) console.log("[media/videos] drive auto-saved:", r.file?.name);
+        else if (r.skipped && r.skipped !== "auto-save off" && r.skipped !== "already synced") {
+          console.warn("[media/videos] drive auto-save skipped:", r.skipped);
+        }
+      });
+    }
 
     return NextResponse.json({ assets, total });
   } catch (err: any) {
@@ -66,6 +88,29 @@ export async function POST(request: NextRequest) {
       modelIdentifier: body.modelIdentifier,
       mode: body.mode,
     });
+
+    // Mirror finished videos into the attached Drive folder when auto-save
+    // is on. Async videos (still processing) are picked up by the GET lazy
+    // pickup above once their URL lands.
+    if (asset.url) {
+      const workspaceId = await getCurrentWorkspaceId().catch(() => null);
+      void syncAssetToDrive(
+        {
+          id: asset.id,
+          tenant_id: tenantId,
+          workspace_id: workspaceId ?? null,
+          type: asset.type,
+          prompt: asset.prompt,
+          url: asset.url,
+        },
+        workspaceId ?? null
+      ).then((r) => {
+        if (r.saved) console.log("[media/videos] drive auto-saved:", r.file?.name);
+        else if (r.skipped && r.skipped !== "auto-save off") {
+          console.warn("[media/videos] drive auto-save skipped:", r.skipped);
+        }
+      });
+    }
 
     // Track usage (1 video + a nominal token cost).
     const { incrementUsage } = await import("@/lib/usage");

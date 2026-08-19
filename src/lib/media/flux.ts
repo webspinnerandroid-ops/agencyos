@@ -23,6 +23,10 @@ export interface MediaAsset {
   metadata?: Record<string, unknown>;
   status: "processing" | "completed" | "failed";
   tags?: string[];
+  /** Google Drive mirror status (migration 087). */
+  drive_synced_at?: string | null;
+  drive_file_id?: string | null;
+  drive_error?: string | null;
   created_at: string;
 }
 

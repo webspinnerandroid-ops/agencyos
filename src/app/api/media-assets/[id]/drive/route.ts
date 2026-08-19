@@ -151,6 +151,17 @@ export async function POST(
       throw new Error(msg ?? `Drive upload failed (${driveRes.status})`);
     }
 
+    // Record the sync status on the asset so the library shows the badge.
+    await supabase
+      .from("media_assets")
+      .update({
+        drive_synced_at: new Date().toISOString(),
+        drive_file_id: driveData.id ?? null,
+        drive_error: null,
+      })
+      .eq("id", id)
+      .eq("tenant_id", tenantId);
+
     return NextResponse.json({
       success: true,
       file: { id: driveData.id, name: driveData.name ?? name },
@@ -158,6 +169,19 @@ export async function POST(
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Internal server error";
+    // Remember the failure on the row (best-effort) so the library shows it.
+    try {
+      const tenantId = await getTenantId();
+      const supabase = await createServiceClient();
+      const { id } = await params;
+      await supabase
+        .from("media_assets")
+        .update({ drive_error: message.slice(0, 500), drive_synced_at: null })
+        .eq("id", id)
+        .eq("tenant_id", tenantId);
+    } catch {
+      // best-effort
+    }
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

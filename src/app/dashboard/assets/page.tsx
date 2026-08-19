@@ -33,6 +33,9 @@ interface Asset {
   folder_id?: string | null;
   metadata?: Record<string, unknown> | null;
   status: string;
+  drive_synced_at?: string | null;
+  drive_file_id?: string | null;
+  drive_error?: string | null;
   created_at: string;
 }
 
@@ -580,6 +583,22 @@ export default function AssetsPage() {
                       <span className="absolute bottom-2 left-2 px-1.5 py-0.5 rounded text-[9px] font-medium bg-black/60 text-white">
                         {asset.task === "brand_design" ? "Brand" : asset.type}
                       </span>
+                      {asset.drive_synced_at && (
+                        <span
+                          className="absolute top-2 right-2 flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold bg-emerald-600 text-white"
+                          title={`Mirrored to Google Drive${asset.drive_file_id ? ` (file ${asset.drive_file_id.slice(0, 8)}…)` : ""} on ${new Date(asset.drive_synced_at).toLocaleString()}`}
+                        >
+                          <HardDrive className="size-2.5" /> Drive
+                        </span>
+                      )}
+                      {!asset.drive_synced_at && asset.drive_error && (
+                        <span
+                          className="absolute top-2 right-2 flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold bg-amber-500 text-white"
+                          title={`Drive sync failed: ${asset.drive_error}`}
+                        >
+                          <HardDrive className="size-2.5" /> Sync failed
+                        </span>
+                      )}
                     </div>
                     <div className="p-2.5 space-y-1.5">
                       <p className="text-xs text-muted-foreground line-clamp-2" title={asset.prompt}>

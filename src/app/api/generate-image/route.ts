@@ -133,7 +133,9 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Mirror into the workspace's attached Drive folder when auto-save is on.
+    // Mirror into the workspace's attached Drive folder when auto-save is on,
+    // and record the outcome on each saved media_assets row so the Asset
+    // Library shows a sync badge (drive_synced_at / drive_error).
     for (const img of images) {
       const ext = (img.url.split("?")[0].match(/\.([a-z0-9]{2,5})$/i) ?? [])[1]?.toLowerCase();
       const mime =
@@ -144,16 +146,38 @@ export async function POST(request: NextRequest) {
         : "image/png";
       const slug =
         prompt.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "image";
+      const savedRow = savedAssets.find(
+        (a) => (a as { url?: string })?.url === img.url
+      ) as { id?: string } | undefined;
       void autoSaveUrlToDrive({
         tenantId,
         workspaceId: workspaceId ?? null,
         url: img.url,
         name: `${slug}-${Date.now()}.${ext ?? "png"}`,
         mime,
-      }).then((r) => {
-        if (r.saved) console.log("[generate-image] auto-saved to Drive:", r.file?.name);
-        else if (r.skipped && r.skipped !== "auto-save off") {
+      }).then(async (r) => {
+        if (r.saved) {
+          console.log("[generate-image] auto-saved to Drive:", r.file?.name);
+          if (savedRow?.id) {
+            await supabase
+              .from("media_assets")
+              .update({
+                drive_synced_at: new Date().toISOString(),
+                drive_file_id: r.file?.id ?? null,
+                drive_error: null,
+              })
+              .eq("id", savedRow.id)
+              .eq("tenant_id", tenantId);
+          }
+        } else if (r.skipped && r.skipped !== "auto-save off") {
           console.warn("[generate-image] drive auto-save skipped:", r.skipped);
+          if (savedRow?.id) {
+            await supabase
+              .from("media_assets")
+              .update({ drive_error: r.skipped.slice(0, 500) })
+              .eq("id", savedRow.id)
+              .eq("tenant_id", tenantId);
+          }
         }
       });
     }

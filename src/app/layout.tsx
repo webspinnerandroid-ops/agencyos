@@ -1,19 +1,26 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 import ThemeProvider from "@/components/ThemeProvider";
 import ThemeInit from "@/components/ThemeInit";
 import PwaRegister from "@/components/PwaRegister";
 import UpdateToast from "@/components/UpdateToast";
 
-const geistSans = Geist({
+// Self-hosted variable fonts — the build no longer depends on fetching from
+// fonts.googleapis.com at build time (a transient egress failure used to
+// break production deploys).
+const geistSans = localFont({
+  src: "./fonts/Geist-Variable.woff2",
   variable: "--font-geist-sans",
-  subsets: ["latin"],
+  weight: "100 900",
+  display: "swap",
 });
 
-const geistMono = Geist_Mono({
+const geistMono = localFont({
+  src: "./fonts/GeistMono-Variable.woff2",
   variable: "--font-geist-mono",
-  subsets: ["latin"],
+  weight: "100 900",
+  display: "swap",
 });
 
 const SITE_URL =

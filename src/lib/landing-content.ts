@@ -250,7 +250,10 @@ export const DEFAULT_LANDING_CONTENT: LandingContent = {
     "Replace your content tool stack with one platform. Start your 14-day free trial today.",
   ctaButton: "Get Started Free",
   pages: [],
-  navLinks: [],
+  // The blog archive is a default header link so the marketing site's blog is
+  // reachable out of the box (the super admin can remove or relabel it in the
+  // page builder).
+  navLinks: [{ label: "Blog", href: "/blog" }],
 };
 
 // ---------------------------------------------------------------------------

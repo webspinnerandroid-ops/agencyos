@@ -69,6 +69,10 @@ const IGNORE = new Set([
   "src/app/api/auth/callback/meta/route.ts",
   "src/app/api/auth/callback/outlook/route.ts",
   "src/app/api/auth/callback/twitter/route.ts",
+  // session route: resolves the CALLER's own role by their authenticated
+  // user_id (never an arbitrary user, never tenant data) so client components
+  // can gate super-admin-only options. Same trust class as the callbacks.
+  "src/app/api/auth/session/route.ts",
   // Service-to-service webhooks
   "src/app/api/webhooks/stripe/route.ts",
   "src/app/api/voice/incoming/respond/route.ts",

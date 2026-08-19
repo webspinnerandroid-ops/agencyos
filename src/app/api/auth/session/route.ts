@@ -111,7 +111,20 @@ export async function GET(request: NextRequest) {
 
     // Sweep stale auth cookies from other Supabase projects off the browser
     // so they stop shadowing the current session.
-    const response = NextResponse.json({ ok: true, email: user.email });
+    // Also resolve the caller's role (best-effort) so client components can
+    // gate super-admin-only options (e.g. the Site Blog publish target).
+    let role: string | null = null;
+    try {
+      const { data: userRole } = await supabaseAdmin
+        .from("user_roles")
+        .select("role")
+        .eq("user_id", user.id)
+        .maybeSingle();
+      role = userRole?.role ?? null;
+    } catch {
+      role = null;
+    }
+    const response = NextResponse.json({ ok: true, email: user.email, role });
     const ref = currentSupabaseRef();
     if (ref) {
       const expected = `sb-${ref}-auth-token`;

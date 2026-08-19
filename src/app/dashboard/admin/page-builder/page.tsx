@@ -171,6 +171,7 @@ export default function PageBuilderPage() {
   const [newHub, setNewHub] = useState({ name: "", price: "", blurb: "" });
   const [creating, setCreating] = useState(false);
   const [newPage, setNewPage] = useState({ title: "", slug: "", body: "" });
+  const [editingPageSlug, setEditingPageSlug] = useState<string | null>(null);
   const [newNavLink, setNewNavLink] = useState({ label: "", href: "" });
 
   // Builder AI chat state.
@@ -244,7 +245,13 @@ export default function PageBuilderPage() {
   const slugify = (s: string) =>
     s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
 
-  const addPage = () => {
+  const startEditPage = (page: LandingPage) => {
+    setEditingPageSlug(page.slug);
+    setNewPage({ title: page.title, slug: page.slug, body: page.body });
+    setFeedback(null);
+  };
+
+  const savePage = () => {
     if (!content) return;
     const title = newPage.title.trim();
     const slug = (newPage.slug.trim() || slugify(title)).toLowerCase();
@@ -256,6 +263,21 @@ export default function PageBuilderPage() {
       setFeedback({ type: "error", message: "Slug may only contain lowercase letters, numbers, and dashes." });
       return;
     }
+    if (editingPageSlug) {
+      // Editing an existing page: keep the old slug out of the uniqueness check.
+      if (content.pages.some((p) => p.slug === slug && p.slug !== editingPageSlug)) {
+        setFeedback({ type: "error", message: `A page with slug "${slug}" already exists.` });
+        return;
+      }
+      patch(
+        "pages",
+        content.pages.map((p) => (p.slug === editingPageSlug ? { slug, title, body: newPage.body } : p))
+      );
+      setEditingPageSlug(null);
+      setNewPage({ title: "", slug: "", body: "" });
+      setFeedback({ type: "success", message: `Page updated — live at /p/${slug} once you Save.` });
+      return;
+    }
     if (content.pages.some((p) => p.slug === slug)) {
       setFeedback({ type: "error", message: `A page with slug "${slug}" already exists.` });
       return;
@@ -263,6 +285,12 @@ export default function PageBuilderPage() {
     patch("pages", [...content.pages, { slug, title, body: newPage.body }]);
     setNewPage({ title: "", slug: "", body: "" });
     setFeedback({ type: "success", message: `Page added — live at /p/${slug} once you Save.` });
+  };
+
+  const cancelEditPage = () => {
+    setEditingPageSlug(null);
+    setNewPage({ title: "", slug: "", body: "" });
+    setFeedback(null);
   };
 
   const addNavLink = () => {
@@ -826,6 +854,7 @@ export default function PageBuilderPage() {
                     <p className="text-sm font-medium truncate">{p.title}</p>
                     <a href={`/p/${p.slug}`} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">/p/{p.slug}</a>
                   </div>
+                  <Button variant="ghost" size="sm" onClick={() => startEditPage(p)} title="Edit">Edit</Button>
                   <Button variant="ghost" size="sm" className="text-destructive" onClick={() => patch("pages", content.pages.filter((_, j) => j !== i))} title="Remove"><Trash2 className="size-3.5" /></Button>
                 </div>
               ))}
@@ -836,9 +865,17 @@ export default function PageBuilderPage() {
             <Field label="Slug" value={newPage.slug} onChange={(v) => setNewPage((s) => ({ ...s, slug: v.toLowerCase() }))} hint="Lowercase + dashes only." />
           </div>
           <AreaField label="Body (markdown)" value={newPage.body} onChange={(v) => setNewPage((s) => ({ ...s, body: v }))} rows={6} />
-          <Button variant="outline" size="sm" onClick={addPage}>
-            <Plus className="size-3.5 mr-1" /> Add page
-          </Button>
+          <div className="flex items-center gap-2">
+            {editingPageSlug && (
+              <Button variant="ghost" size="sm" onClick={cancelEditPage}>
+                Cancel edit
+              </Button>
+            )}
+            <Button variant="outline" size="sm" onClick={savePage}>
+              {editingPageSlug ? <Save className="size-3.5 mr-1" /> : <Plus className="size-3.5 mr-1" />}
+              {editingPageSlug ? "Update page" : "Add page"}
+            </Button>
+          </div>
         </CardContent>
       </Card>
 

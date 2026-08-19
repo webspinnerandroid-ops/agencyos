@@ -56,6 +56,7 @@ export function buildNavSections(isSuperAdmin: boolean): NavSection[] {
               { href: "/dashboard/admin", label: "Super Admin" },
               { href: "/dashboard/admin/data-deletion", label: "Data Deletion Queue" },
               { href: "/dashboard/admin/page-builder", label: "Page Builder" },
+              { href: "/dashboard/admin/blog", label: "Site Blog" },
               { href: "/dashboard/admin/nav-builder", label: "Menu Builder" },
               { href: "/dashboard/admin/apis", label: "APIs & Models" },
               { href: "/dashboard/admin/coupons", label: "Coupons" },

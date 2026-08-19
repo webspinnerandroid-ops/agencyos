@@ -20,6 +20,25 @@ export default function PublishButton({ postId, postType, onPublished }: Publish
   const [scheduledDate, setScheduledDate] = useState("");
   const [feedback, setFeedback] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
+  // Super admin can publish to the marketing site's blog (/blog/<slug>).
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false);
+
+  // Resolve the role once so the Site Blog target only appears for super admins.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/auth/session", { credentials: "include" });
+        const data = await res.json();
+        if (!cancelled) setIsSuperAdmin(data?.role === "super_admin");
+      } catch {
+        // no session info — hide the super-admin-only target
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // WordPress categories for the chosen site (fetched on open when publishing
   // to WordPress so the post lands in the right category, not Uncategorized).
@@ -83,9 +102,14 @@ export default function PublishButton({ postId, postType, onPublished }: Publish
 
         const data = await res.json();
         if (data.success) {
-          const cmsResult = (data.results ?? []).find((r: any) => r.platform === "cms");
-          if (cmsResult?.url) {
-            setFeedback(`Published to your website — /site/${(cmsResult.url as string).split("/").pop()}`);
+          const urlResult = (data.results ?? []).find((r: any) => r.url);
+          if (urlResult?.url) {
+            const path = urlResult.url as string;
+            setFeedback(
+              path.startsWith("/blog/")
+                ? `Published to the site blog — ${path}`
+                : `Published to your website — ${path}`
+            );
           } else {
             setFeedback(`Published! ${data.message}`);
           }
@@ -107,6 +131,9 @@ export default function PublishButton({ postId, postType, onPublished }: Publish
   const platforms = postType === "blog"
     ? [
         { id: "cms", name: "Your Website (CMS)" },
+        ...(isSuperAdmin
+          ? [{ id: "site_blog", name: "Site Blog (/blog)" }]
+          : []),
         { id: "wordpress", name: "WordPress" },
         { id: "all", name: "All Connected" },
       ]

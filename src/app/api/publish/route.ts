@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getTenantId } from "@/lib/auth";
+import { getTenantId, getRole } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import { publishToWordPress } from "@/lib/publishing/wordpressPublisher";
 import { publishPost as publishToSocial } from "@/lib/publishing/socialPublisher";
@@ -249,6 +249,84 @@ export async function POST(request: NextRequest) {
             failed.map((f) => f.detail).join("; ")
           );
         }
+      });
+    } else if (platform === "site_blog") {
+      // Publish to the marketing site's blog (/blog/<slug>) — the super
+      // admin's own site. Super admin only; the generated post's body,
+      // title, excerpt, and featured image are mirrored into the global
+      // site_blog_posts table.
+      const role = await getRole();
+      if (role !== "super_admin") {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      }
+      const supabase = await createServiceClient();
+      const { data: post } = await supabase
+        .from("posts")
+        .select("content, title, media_urls")
+        .eq("id", postId)
+        .eq("tenant_id", tenantId)
+        .maybeSingle();
+      if (!post) {
+        return NextResponse.json({ error: "Post not found" }, { status: 404 });
+      }
+      const content =
+        typeof post.content === "string"
+          ? (() => {
+              try {
+                return JSON.parse(post.content);
+              } catch {
+                return null;
+              }
+            })()
+          : post.content;
+      const title = content?.title || post.title || "Untitled Post";
+      const body = typeof content?.body === "string" ? content.body : "";
+      if (!body.trim()) {
+        return NextResponse.json(
+          { error: "This post has no body content to publish to the site blog." },
+          { status: 400 }
+        );
+      }
+      const { sanitizePostSlug, slugifyTitle, deriveExcerpt, firstImageUrl } =
+        await import("@/lib/site-blog");
+      const slug =
+        sanitizePostSlug(content?.slug) ||
+        slugifyTitle(content?.slug || title);
+      const featuredImage =
+        (Array.isArray(post.media_urls) && post.media_urls[0]) ||
+        firstImageUrl(body);
+      const excerpt =
+        (typeof content?.metaDescription === "string" && content.metaDescription.trim()) ||
+        deriveExcerpt(body, title);
+      const now = new Date().toISOString();
+      const { data: existing } = await supabase
+        .from("site_blog_posts")
+        .select("id")
+        .eq("slug", slug)
+        .maybeSingle();
+      const patch = {
+        title,
+        body,
+        excerpt: excerpt.slice(0, 300),
+        featured_image_url: featuredImage || null,
+        status: "published" as const,
+        published_at: now,
+        updated_at: now,
+      };
+      if (existing) {
+        await supabase
+          .from("site_blog_posts")
+          .update(patch)
+          .eq("id", existing.id);
+      } else {
+        await supabase
+          .from("site_blog_posts")
+          .insert({ ...patch, slug });
+      }
+      results.push({
+        platform: "site_blog",
+        success: true,
+        url: `/blog/${slug}`,
       });
     } else if (platform === "wordpress" || platform === "blog") {
       const wpResult = await publishToWordPress(postId, tenantId, action || "publish", scheduledAt, categoryId);

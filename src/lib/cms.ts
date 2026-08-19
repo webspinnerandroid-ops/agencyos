@@ -241,8 +241,8 @@ export function renderBlockHtml(block: CmsBlock, pageId?: string): string {
     case "section": {
       const s = block.style ?? {};
       const inline: string[] = [];
-      if (s.bg) inline.push(`background:${s.bg}`);
-      if (s.color) inline.push(`color:${s.color}`);
+      if (s.bg) inline.push(`background:${esc(s.bg)}`);
+      if (s.color) inline.push(`color:${esc(s.color)}`);
       if (s.bgImage) inline.push(`background-image:url('${esc(s.bgImage)}');background-size:cover;background-position:center`);
       if (s.bgVideo) inline.push(`position:relative`);
       const styleAttr = inline.length ? ` style="${inline.join(";")}"` : "";
@@ -256,8 +256,8 @@ export function renderBlockHtml(block: CmsBlock, pageId?: string): string {
     case "columns": {
       const s = block.style ?? {};
       const inline: string[] = [];
-      if (s.bg) inline.push(`background:${s.bg}`);
-      if (s.color) inline.push(`color:${s.color}`);
+      if (s.bg) inline.push(`background:${esc(s.bg)}`);
+      if (s.color) inline.push(`color:${esc(s.color)}`);
       if (s.bgImage) inline.push(`background-image:url('${esc(s.bgImage)}');background-size:cover;background-position:center`);
       const styleAttr = inline.length ? ` style="${inline.join(";")}"` : "";
       const cols = [2, 3, 4].includes(block.cols ?? 2) ? (block.cols as number) : 2;

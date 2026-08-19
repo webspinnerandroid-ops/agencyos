@@ -40,7 +40,12 @@ function tenantIdFromCookie(): string {
       .split(";")
       .map((p) => p.trim())
       .find((p) => p.startsWith("x-tenant-id="));
-    return match ? match.split("=")[1] : "";
+    if (!match) return "";
+    const raw = match.split("=").slice(1).join("=");
+    // x-tenant-id is HMAC-signed as `<value>.<signature>`; strip the signature
+    // for the realtime channel name (the signature is server-verified only).
+    const dot = raw.lastIndexOf(".");
+    return dot > 0 ? raw.slice(0, dot) : raw;
   } catch {
     return "";
   }

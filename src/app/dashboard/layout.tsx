@@ -6,7 +6,7 @@ import NavDropdown, { type NavSection } from "@/components/NavDropdown";
 import { getNavSections } from "@/lib/nav-config";
 import ThemeToggle from "@/components/ThemeToggle";
 import NotificationBell from "@/components/NotificationBell";
-import { getRole, getTenantId } from "@/lib/auth";
+import { getRole, getTenantId, getUserEmail } from "@/lib/auth";
 
 /**
  * Dynamic metadata for the dashboard shell.
@@ -39,11 +39,8 @@ export default async function DashboardLayout({
     isAdmin = role === "agency_admin" || isSuperAdmin;
   } catch {
     // no role cookie yet
-  }
-  try {
-    const { cookies } = await import("next/headers");
-    const cookieStore = await cookies();
-    userEmail = cookieStore.get("x-user-email")?.value ?? "";
+  }  try {
+    userEmail = (await getUserEmail()) ?? "";
   } catch {}
 
   // Tenant-customizable navigation (super admin Menu Builder) — falls back

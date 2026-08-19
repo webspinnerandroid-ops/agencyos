@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from "next/server"
 import { createClient } from "@supabase/supabase-js"
 import { getTenantThemeSafe, encodeTenantTheme } from "@/lib/tenant"
+import { signAuthValue } from "@/lib/auth-signature"
 
 const PUBLIC_ROUTES = ["/login", "/register", "/forgot-password", "/reset-password", "/pending-approval", "/help", "/about", "/contact", "/privacy", "/data-deletion", "/export-data", "/terms", "/seo/proposal", "/audit", "/site", "/sign", "/api/webhooks", "/api/auth/callback", "/api/auth/session", "/api/auth/dev-login", "/api/register", "/api/data-deletion", "/api/export-data", "/api/inngest", "/api/docusign/connect", "/api/seo/public-proposal", "/api/seo/public-audit", "/api/cms/forms", "/api/outreach/reply-webhook", "/api/sign", "/api/telegram/webhook", "/api/discord/webhook", "/api/version", "/_next", "/favicon.ico", "/robots.txt", "/sitemap.xml", "/og-image.png", "/"]
 
@@ -424,6 +425,8 @@ export default async function middleware(request: NextRequest) {
   // Pass auth context via cookies so route handlers can read them reliably.
   // Using request headers via NextResponse.next({ request: { headers } })
   // causes type mismatches and crashes in Next.js 16.
+  // workspace_id must stay readable + writable by the client
+  // (WorkspaceSelector), so it keeps the legacy non-httpOnly options.
   const cookieOptions = {
     httpOnly: false,
     sameSite: "lax" as const,
@@ -431,17 +434,28 @@ export default async function middleware(request: NextRequest) {
     maxAge: 60 * 60 * 24,
   }
 
-  response.cookies.set("x-tenant-id", auth.tenantId, cookieOptions)
-  response.cookies.set("x-user-role", auth.role, cookieOptions)
-  response.cookies.set("x-user-id", auth.userId, cookieOptions)
-  response.cookies.set("x-user-email", auth.email, cookieOptions)
-  if (auth.clientId) {
-    response.cookies.set("x-client-id", auth.clientId, cookieOptions)
+  // Authorization cookies are HMAC-signed so a client cannot forge them
+  // (privilege escalation / cross-tenant access), and HttpOnly so XSS cannot
+  // read them. x-tenant-id stays readable for the client (realtime channel
+  // naming) but is still signed — the server verifies before trusting it.
+  const secure = request.nextUrl.protocol === "https:"
+  const authCookieOptions = {
+    httpOnly: true,
+    secure,
+    sameSite: "lax" as const,
+    path: "/",
+    maxAge: 60 * 60 * 24,
   }
-  response.cookies.set("x-tenant-theme", encoded, {
-    ...cookieOptions,
-    httpOnly: false,
-  })
+  const tenantCookieOptions = { ...authCookieOptions, httpOnly: false }
+
+  response.cookies.set("x-tenant-id", signAuthValue(auth.tenantId), tenantCookieOptions)
+  response.cookies.set("x-user-role", signAuthValue(auth.role), authCookieOptions)
+  response.cookies.set("x-user-id", signAuthValue(auth.userId), authCookieOptions)
+  response.cookies.set("x-user-email", signAuthValue(auth.email), authCookieOptions)
+  if (auth.clientId) {
+    response.cookies.set("x-client-id", signAuthValue(auth.clientId), authCookieOptions)
+  }
+  response.cookies.set("x-tenant-theme", encoded, tenantCookieOptions)
 
   // Workspace cookie handling. Setting the `workspace_id` cookie here means
   // getCurrentWorkspaceId() in pages/actions hits the cookie path instead of

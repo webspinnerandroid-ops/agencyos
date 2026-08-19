@@ -1,5 +1,6 @@
 import { cookies } from "next/headers"
 import { createServerClient } from "@supabase/ssr"
+import { verifyAuthValue } from "./auth-signature"
 
 // ------------------------------------------------------------------
 // Types
@@ -11,7 +12,11 @@ export type UserRole = "super_admin" | "agency_admin" | "agency_editor" | "clien
 // ------------------------------------------------------------------
 async function getAuthCookie(name: string): Promise<string | null> {
   const cookieStore = await cookies()
-  return cookieStore.get(name)?.value ?? null
+  const raw = cookieStore.get(name)?.value ?? null
+  if (!raw) return null
+  // Reject forged/tampered cookies — the value must carry a valid HMAC
+  // signature minted by the proxy from the verified Supabase session.
+  return verifyAuthValue(raw)
 }
 
 // ------------------------------------------------------------------

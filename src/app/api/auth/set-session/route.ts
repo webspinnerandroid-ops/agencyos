@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { createServerClient } from '@supabase/ssr';
 import { cookies } from 'next/headers';
+import { signAuthValue } from '@/lib/auth-signature';
 
 export async function POST() {
   const cookieStore = await cookies();
@@ -51,16 +52,19 @@ export async function POST() {
   }
 
   const response = NextResponse.json({ success: true });
+  const secure = process.env.NODE_ENV === 'production';
 
-  response.cookies.set('x-tenant-id', userRole.tenant_id, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+  // Signed so the server can reject forged values; x-tenant-id stays readable
+  // by the client (realtime channel naming) but is still signed.
+  response.cookies.set('x-tenant-id', signAuthValue(userRole.tenant_id), {
+    httpOnly: false,
+    secure,
     sameSite: 'lax',
     path: '/',
   });
-  response.cookies.set('x-user-role', userRole.role, {
+  response.cookies.set('x-user-role', signAuthValue(userRole.role), {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+    secure,
     sameSite: 'lax',
     path: '/',
   });

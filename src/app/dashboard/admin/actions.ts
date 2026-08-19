@@ -1285,11 +1285,12 @@ export async function regenerateAsset(
 }
 
 /**
- * Re-run the Drive mirror for every asset in one workspace (or all
- * workspaces when workspaceId is null) whose mirror failed and hasn't been
- * retried — the admin-side "retry all" for the per-asset badge. Uses the
- * same status-aware sync as the Asset Library so successes clear drive_error
- * and failures refresh it with the fresh reason.
+ * Re-run the Drive mirror for every asset AND knowledgebase item in one
+ * workspace (or all workspaces when workspaceId is null) whose mirror failed
+ * and hasn't been retried — the admin-side "retry all" for the per-item
+ * badge. Uses the same status-aware syncs as the Asset Library and
+ * Knowledgebase so successes clear drive_error and failures refresh it with
+ * the fresh reason.
  */
 export async function retryFailedDriveSyncs(
   workspaceId: string | null
@@ -1305,10 +1306,19 @@ export async function retryFailedDriveSyncs(
       .not("drive_error", "is", null);
     q = workspaceId ? q.eq("workspace_id", workspaceId) : q;
 
-    const { data: rows, error } = await q;
-    if (error) throw new Error(error.message);
+    let kq = supabase
+      .from("knowledgebase_items")
+      .select("id, tenant_id, workspace_id, name, original_filename, storage_path, mime_type, drive_synced_at, drive_error")
+      .is("drive_synced_at", null)
+      .not("drive_error", "is", null)
+      .not("storage_path", "is", null);
+    kq = workspaceId ? kq.eq("workspace_id", workspaceId) : kq;
 
-    const { syncAssetToDrive } = await import("@/lib/drive-sync");
+    const [{ data: rows, error }, { data: kbRows, error: kbError }] = await Promise.all([q, kq]);
+    if (error) throw new Error(error.message);
+    if (kbError) throw new Error(kbError.message);
+
+    const { syncAssetToDrive, mirrorKnowledgebaseFileToDrive } = await import("@/lib/drive-sync");
     let saved = 0;
     let failed = 0;
     for (const row of rows ?? []) {
@@ -1316,7 +1326,22 @@ export async function retryFailedDriveSyncs(
       if (r.saved) saved++;
       else failed++;
     }
-    return { success: true, data: { attempted: (rows ?? []).length, saved, failed } };
+    for (const kb of kbRows ?? []) {
+      const r = await mirrorKnowledgebaseFileToDrive({
+        tenantId: kb.tenant_id,
+        workspaceId: kb.workspace_id ?? null,
+        itemId: kb.id,
+        storagePath: kb.storage_path,
+        name: kb.original_filename || kb.name || "knowledgebase-file",
+        mime: kb.mime_type || "application/octet-stream",
+      });
+      if (r.saved) saved++;
+      else failed++;
+    }
+    return {
+      success: true,
+      data: { attempted: (rows ?? []).length + (kbRows ?? []).length, saved, failed },
+    };
   } catch (err) {
     return { success: false, error: (err as Error).message };
   }

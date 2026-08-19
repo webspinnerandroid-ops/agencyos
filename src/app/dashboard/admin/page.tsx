@@ -640,7 +640,7 @@ export default function AdminDashboardPage() {
           </CardTitle>
           <p className="text-sm text-muted-foreground">
             Per-workspace smoke test of stored asset bytes (same magic-byte check the CI asset-integrity job runs),
-            plus Google Drive mirror status with one-click retry of failed syncs.
+            plus Google Drive mirror status for media assets and knowledgebase files, with one-click retry of failed syncs.
           </p>
         </CardHeader>
         <CardContent>
@@ -671,18 +671,19 @@ export default function AdminDashboardPage() {
                       <td className="py-2 px-3">{h.nonCdn > 0 ? <Badge className="bg-yellow-100 text-yellow-700">{h.nonCdn}</Badge> : <span>0</span>}</td>
                       <td className="py-2 px-3 whitespace-nowrap" title={`${(h.storageBytes ?? 0).toLocaleString()} bytes`}>{formatBytes(h.storageBytes ?? 0)}</td>
                       <td className="py-2 px-3 whitespace-nowrap">
-                        {h.driveSynced > 0 && <Badge className="bg-emerald-100 text-emerald-700 mr-1">{h.driveSynced} synced</Badge>}
-                        {h.driveFailed > 0 ? (
+                        {h.driveSynced > 0 && <Badge className="bg-emerald-100 text-emerald-700 mr-1">{h.driveSynced} media</Badge>}
+                        {h.kbDriveSynced > 0 && <Badge className="bg-emerald-100 text-emerald-700 mr-1">{h.kbDriveSynced} KB</Badge>}
+                        {(h.driveFailed > 0 || h.kbDriveFailed > 0) ? (
                           <button
                             onClick={(e) => { e.stopPropagation(); handleRetryDrive(key); }}
                             disabled={retryingDrive === key}
                             className="inline-flex items-center gap-1 rounded-full bg-amber-100 text-amber-700 px-2 py-0.5 text-[10px] font-semibold hover:bg-amber-200 disabled:opacity-60"
-                            title={`${h.driveFailed} failed Drive mirrors — click to retry them all`}
+                            title={`${h.driveFailed} failed media + ${h.kbDriveFailed} failed KB mirrors — click to retry them all`}
                           >
                             {retryingDrive === key ? <Loader2 className="size-2.5 animate-spin" /> : <HardDrive className="size-2.5" />}
-                            {h.driveFailed} failed{retryingDrive === key ? " — retrying…" : " · retry"}
+                            {h.driveFailed + h.kbDriveFailed} failed{retryingDrive === key ? " — retrying…" : " · retry"}
                           </button>
-                        ) : h.driveSynced > 0 ? (
+                        ) : (h.driveSynced > 0 || h.kbDriveSynced > 0) ? (
                           <span className="text-xs text-muted-foreground">—</span>
                         ) : (
                           <span className="text-xs text-muted-foreground">no mirrors</span>

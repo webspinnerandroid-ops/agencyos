@@ -209,8 +209,19 @@ export async function autoSaveUrlToDrive(opts: {
     if (!src.ok) return { saved: false, skipped: `asset fetch failed (${src.status})` };
     const bytes = await src.arrayBuffer();
 
+    // Keep each client's media in their own subfolder under the attached
+    // folder (falls back to the attached root on any subfolder hiccup).
+    const targetFolderId =
+      (await resolveDriveClientSubfolder(
+        supabase,
+        resolved.accessToken,
+        resolved.folderId,
+        opts.tenantId,
+        opts.workspaceId
+      )) ?? resolved.folderId;
+
     const file = await uploadBufferToDrive(
-      resolved.folderId,
+      targetFolderId,
       resolved.accessToken,
       bytes,
       opts.name,
@@ -277,9 +288,22 @@ export async function syncAssetToDrive(
       return { saved: false, skipped: msg };
     }
 
+    // Keep each client's media in their own subfolder under the attached
+    // folder (falls back to the attached root on any subfolder hiccup).
+    const wsId =
+      workspaceIdOverride !== undefined ? workspaceIdOverride : (asset.workspace_id ?? null);
+    const targetFolderId =
+      (await resolveDriveClientSubfolder(
+        supabase,
+        resolved.accessToken,
+        resolved.folderId,
+        asset.tenant_id,
+        wsId
+      )) ?? resolved.folderId;
+
     const { name, mime } = filenameAndMimeForAsset(asset.type, asset.url, asset.prompt);
     const file = await uploadBufferToDrive(
-      resolved.folderId,
+      targetFolderId,
       resolved.accessToken,
       bytes,
       name,

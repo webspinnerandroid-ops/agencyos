@@ -26,6 +26,10 @@ export interface WorkspaceAssetHealth {
   driveSynced: number;
   /** Rows whose Drive mirror failed and hasn't been retried yet. */
   driveFailed: number;
+  /** Knowledgebase items whose Drive mirror succeeded. */
+  kbDriveSynced: number;
+  /** Knowledgebase items whose Drive mirror failed and hasn't been retried yet. */
+  kbDriveFailed: number;
   checkedAt: string;
 }
 
@@ -75,11 +79,13 @@ export async function computeAssetHealth(
     .replace(/\/+$/, "");
   const cdnPrefix = `https://${pullHost}/`;
 
-  const [{ data: assets }, { data: workspaces }, { data: tenants }] = await Promise.all([
-    supabase.from("media_assets").select("id, tenant_id, workspace_id, url, type, drive_synced_at, drive_error"),
-    supabase.from("workspaces").select("id, tenant_id, name"),
-    supabase.from("tenants").select("id, name"),
-  ]);
+  const [{ data: assets }, { data: workspaces }, { data: tenants }, { data: kbItems }] =
+    await Promise.all([
+      supabase.from("media_assets").select("id, tenant_id, workspace_id, url, type, drive_synced_at, drive_error"),
+      supabase.from("workspaces").select("id, tenant_id, name"),
+      supabase.from("tenants").select("id, name"),
+      supabase.from("knowledgebase_items").select("workspace_id, drive_synced_at, drive_error"),
+    ]);
 
   const wsName = new Map<string, string>();
   for (const w of workspaces ?? []) wsName.set(w.id, w.name ?? "Unnamed");
@@ -152,12 +158,26 @@ export async function computeAssetHealth(
     drive.set(wsKey, d);
   }
 
+  // KB drive counts too, so the admin table covers failed KB mirrors as well
+  // as media assets (a KB-only workspace with no media still shows up).
+  const kbDrive = new Map<string, { synced: number; failed: number }>();
+  for (const k of kbItems ?? []) {
+    const wsKey = key(k.workspace_id ?? null);
+    const d = kbDrive.get(wsKey) ?? { synced: 0, failed: 0 };
+    if (k.drive_synced_at) d.synced++;
+    else if (k.drive_error) d.failed++;
+    kbDrive.set(wsKey, d);
+  }
+
   const checkedAt = new Date().toISOString();
+  const allKeys = new Set<string>([...verdicts.keys(), ...kbDrive.keys()]);
   const out: WorkspaceAssetHealth[] = [];
-  for (const [wsKey, v] of verdicts) {
+  for (const wsKey of allKeys) {
     const wsId = wsKey === "(no workspace)" ? null : wsKey;
     const wsRow = (workspaces ?? []).find((w: any) => w.id === wsId);
+    const v = verdicts.get(wsKey) ?? fresh();
     const d = drive.get(wsKey) ?? { synced: 0, failed: 0 };
+    const kd = kbDrive.get(wsKey) ?? { synced: 0, failed: 0 };
     out.push({
       workspaceId: wsId,
       workspaceName: wsRow?.name ?? (wsKey === "(no workspace)" ? "(no workspace)" : "Unnamed"),
@@ -171,6 +191,8 @@ export async function computeAssetHealth(
       storageBytes: v.storageBytes,
       driveSynced: d.synced,
       driveFailed: d.failed,
+      kbDriveSynced: kd.synced,
+      kbDriveFailed: kd.failed,
       checkedAt,
     });
   }

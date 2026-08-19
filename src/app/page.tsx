@@ -92,6 +92,13 @@ export default async function LandingPage() {
   const hero = await getHeroMedia();
   const content = await getLandingContent();
 
+  const navSections = content.navLinks.length
+    ? [
+        ...landingNavSections,
+        { label: "Pages", items: content.navLinks.map((l) => ({ href: l.href, label: l.label })) },
+      ]
+    : landingNavSections;
+
   return (
     <div className="min-h-screen bg-background">
       <InstallPromptBanner />
@@ -118,10 +125,13 @@ export default async function LandingPage() {
             <a href="#how-it-works" className="text-sm text-muted-foreground hover:text-foreground transition-colors">How it works</a>
             <a href="#pricing" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Pricing</a>
             <a href="#faq" className="text-sm text-muted-foreground hover:text-foreground transition-colors">FAQ</a>
+            {content.navLinks.map((l) => (
+              <a key={l.href} href={l.href} className="text-sm text-muted-foreground hover:text-foreground transition-colors">{l.label}</a>
+            ))}
           </div>
           <div className="flex items-center gap-2 sm:gap-4">
             <div className="sm:hidden">
-              <MobileNav sections={landingNavSections} breakpointClass="sm:hidden" />
+              <MobileNav sections={navSections} breakpointClass="sm:hidden" />
             </div>
             <ThemeToggle />
             <Link href="/login"><Button variant="ghost" size="sm">Sign In</Button></Link>

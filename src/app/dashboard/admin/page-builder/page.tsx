@@ -29,6 +29,8 @@ import {
   type LandingLogo,
   type LandingPlan,
   type LandingHub,
+  type LandingPage,
+  type LandingNavLink,
 } from "@/lib/landing-content";
 import type { PlanPriceStatus, HubPriceStatus } from "@/lib/stripe-pricing";
 import { renderBlogBody } from "@/lib/blog-render";
@@ -168,6 +170,8 @@ export default function PageBuilderPage() {
   });
   const [newHub, setNewHub] = useState({ name: "", price: "", blurb: "" });
   const [creating, setCreating] = useState(false);
+  const [newPage, setNewPage] = useState({ title: "", slug: "", body: "" });
+  const [newNavLink, setNewNavLink] = useState({ label: "", href: "" });
 
   // Builder AI chat state.
   const [chatOpen, setChatOpen] = useState(false);
@@ -235,6 +239,42 @@ export default function PageBuilderPage() {
     if (!confirm("Reset every field to the compiled defaults?")) return;
     setContent(DEFAULT_LANDING_CONTENT);
     setFeedback({ type: "success", message: "Defaults restored — press Save to publish." });
+  };
+
+  const slugify = (s: string) =>
+    s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+
+  const addPage = () => {
+    if (!content) return;
+    const title = newPage.title.trim();
+    const slug = (newPage.slug.trim() || slugify(title)).toLowerCase();
+    if (!title) {
+      setFeedback({ type: "error", message: "Page title is required." });
+      return;
+    }
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+      setFeedback({ type: "error", message: "Slug may only contain lowercase letters, numbers, and dashes." });
+      return;
+    }
+    if (content.pages.some((p) => p.slug === slug)) {
+      setFeedback({ type: "error", message: `A page with slug "${slug}" already exists.` });
+      return;
+    }
+    patch("pages", [...content.pages, { slug, title, body: newPage.body }]);
+    setNewPage({ title: "", slug: "", body: "" });
+    setFeedback({ type: "success", message: `Page added — live at /p/${slug} once you Save.` });
+  };
+
+  const addNavLink = () => {
+    if (!content) return;
+    const label = newNavLink.label.trim();
+    const href = newNavLink.href.trim();
+    if (!label || !href.startsWith("/") || href.includes("://")) {
+      setFeedback({ type: "error", message: "A label and a same-site path (starting with /) are required." });
+      return;
+    }
+    patch("navLinks", [...content.navLinks, { label, href }]);
+    setNewNavLink({ label: "", href: "" });
   };
 
   const planStatus = (planId: string) => pricing.plans.find((p) => p.planId === planId);
@@ -765,6 +805,71 @@ export default function PageBuilderPage() {
           ))}
           <Button variant="outline" size="sm" onClick={() => patch("faqs", [...content.faqs, { q: "", a: "" }])}>
             <Plus className="size-3.5 mr-1" /> Add FAQ
+          </Button>
+        </CardContent>
+      </Card>
+
+      {/* Pages */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Pages</CardTitle>
+          <CardDescription>
+            Create standalone pages that live at /p/&lt;slug&gt; and add them to the header menu below.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {content.pages.length > 0 && (
+            <div className="space-y-2">
+              {content.pages.map((p: LandingPage, i: number) => (
+                <div key={p.slug} className="flex items-center gap-2 rounded-md border p-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium truncate">{p.title}</p>
+                    <a href={`/p/${p.slug}`} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline">/p/{p.slug}</a>
+                  </div>
+                  <Button variant="ghost" size="sm" className="text-destructive" onClick={() => patch("pages", content.pages.filter((_, j) => j !== i))} title="Remove"><Trash2 className="size-3.5" /></Button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Field label="Title" value={newPage.title} onChange={(v) => setNewPage((s) => ({ ...s, title: v }))} hint="Slug auto-derives from the title if left blank." />
+            <Field label="Slug" value={newPage.slug} onChange={(v) => setNewPage((s) => ({ ...s, slug: v.toLowerCase() }))} hint="Lowercase + dashes only." />
+          </div>
+          <AreaField label="Body (markdown)" value={newPage.body} onChange={(v) => setNewPage((s) => ({ ...s, body: v }))} rows={6} />
+          <Button variant="outline" size="sm" onClick={addPage}>
+            <Plus className="size-3.5 mr-1" /> Add page
+          </Button>
+        </CardContent>
+      </Card>
+
+      {/* Navigation links */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Header navigation</CardTitle>
+          <CardDescription>
+            Extra links shown in the landing page header (and mobile menu) after Features / How it works / Pricing / FAQ.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {content.navLinks.length > 0 && (
+            <div className="space-y-2">
+              {content.navLinks.map((l: LandingNavLink, i: number) => (
+                <div key={i} className="flex items-center gap-2 rounded-md border p-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium truncate">{l.label}</p>
+                    <p className="text-xs text-muted-foreground truncate">{l.href}</p>
+                  </div>
+                  <Button variant="ghost" size="sm" className="text-destructive" onClick={() => patch("navLinks", content.navLinks.filter((_, j) => j !== i))} title="Remove"><Trash2 className="size-3.5" /></Button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Field label="Label" value={newNavLink.label} onChange={(v) => setNewNavLink((s) => ({ ...s, label: v }))} />
+            <Field label="Path" value={newNavLink.href} onChange={(v) => setNewNavLink((s) => ({ ...s, href: v }))} hint="e.g. /p/about — same-site paths only" />
+          </div>
+          <Button variant="outline" size="sm" onClick={addNavLink}>
+            <Plus className="size-3.5 mr-1" /> Add link
           </Button>
         </CardContent>
       </Card>

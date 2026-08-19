@@ -55,6 +55,19 @@ export interface LandingHub {
   blurb: string;
 }
 
+/** A standalone marketing page (rendered at /p/<slug>). */
+export interface LandingPage {
+  slug: string;
+  title: string;
+  body: string;
+}
+
+/** A custom link shown in the landing page header navigation. */
+export interface LandingNavLink {
+  label: string;
+  href: string;
+}
+
 export interface LandingContent {
   heroTitle: string;
   heroSubtitle: string;
@@ -80,6 +93,8 @@ export interface LandingContent {
   ctaTitle: string;
   ctaSubtitle: string;
   ctaButton: string;
+  pages: LandingPage[];
+  navLinks: LandingNavLink[];
 }
 
 /** The compiled-in defaults the landing page ships with. */
@@ -234,6 +249,8 @@ export const DEFAULT_LANDING_CONTENT: LandingContent = {
   ctaSubtitle:
     "Replace your content tool stack with one platform. Start your 14-day free trial today.",
   ctaButton: "Get Started Free",
+  pages: [],
+  navLinks: [],
 };
 
 // ---------------------------------------------------------------------------
@@ -375,6 +392,42 @@ function asFaqs(value: unknown): LandingFaq[] | null {
   return out.length ? out : null;
 }
 
+function asPages(value: unknown): LandingPage[] | null {
+  if (!Array.isArray(value)) return null;
+  const out: LandingPage[] = [];
+  const seen = new Set<string>();
+  for (const v of value) {
+    if (!v || typeof v !== "object") continue;
+    const item = v as Record<string, unknown>;
+    const title = typeof item.title === "string" ? item.title.trim() : "";
+    const slug =
+      typeof item.slug === "string" ? item.slug.trim().toLowerCase() : "";
+    const body = typeof item.body === "string" ? item.body : "";
+    if (!title || !slug) continue;
+    // Only safe URL-safe slugs (lowercase + dashes) — never external paths.
+    if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) continue;
+    if (seen.has(slug)) continue;
+    seen.add(slug);
+    out.push({ slug, title, body });
+  }
+  return out.length ? out : null;
+}
+
+function asNavLinks(value: unknown): LandingNavLink[] | null {
+  if (!Array.isArray(value)) return null;
+  const out: LandingNavLink[] = [];
+  for (const v of value) {
+    if (!v || typeof v !== "object") continue;
+    const item = v as Record<string, unknown>;
+    const label = typeof item.label === "string" ? item.label.trim() : "";
+    const href = typeof item.href === "string" ? item.href.trim() : "";
+    // Same-app paths only — no javascript: or external URLs.
+    if (!label || !href.startsWith("/") || href.includes("://")) continue;
+    out.push({ label: label.slice(0, 40), href: href.slice(0, 200) });
+  }
+  return out.length ? out : null;
+}
+
 /**
  * Merge stored content over the compiled defaults field-by-field. Empty/absent
  * values fall back so the public page is never left blank.
@@ -408,6 +461,8 @@ export function mergeLandingContent(raw: unknown): LandingContent {
     ctaTitle: asString(r.ctaTitle, d.ctaTitle),
     ctaSubtitle: asString(r.ctaSubtitle, d.ctaSubtitle),
     ctaButton: asString(r.ctaButton, d.ctaButton),
+    pages: asPages(r.pages) ?? d.pages,
+    navLinks: asNavLinks(r.navLinks) ?? d.navLinks,
   };
 }
 

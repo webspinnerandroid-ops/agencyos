@@ -94,41 +94,82 @@ export function filenameAndMimeForAsset(
   return { name: `${slug}.${ext}`, mime };
 }
 
-/** Multipart-upload a byte buffer into a Drive folder. */
+/** True when a Google API failure is worth retrying (network hiccup, 429
+ * rate-limit, or a 5xx server error). Auth/4xx errors are NOT retried — they
+ * need a human action (reconnect, re-consent, quota approval). */
+export function isTransientDriveError(err: unknown, status?: number): boolean {
+  if (status !== undefined) {
+    return status === 429 || status >= 500;
+  }
+  // A thrown fetch error is a network/transport failure — transient by nature.
+  const name = err instanceof Error ? err.name : "";
+  return name !== "AbortError" && name !== "TimeoutError";
+}
+
+/** Sleep helper for backoff. */
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Multipart-upload a byte buffer into a Drive folder.
+ *
+ * Retries transient failures (network, 429, 5xx) up to `retries` extra times
+ * with exponential backoff + jitter before giving up — the caller records the
+ * final error on the asset row. Callers that don't want retries pass retries: 0.
+ */
 export async function uploadBufferToDrive(
   folderId: string,
   accessToken: string,
   buffer: Buffer | ArrayBuffer,
   name: string,
-  mime: string
+  mime: string,
+  opts: { retries?: number; baseDelayMs?: number } = {}
 ): Promise<{ id: string; name: string }> {
-  const form = new FormData();
-  form.append(
-    "metadata",
-    new Blob([JSON.stringify({ name, parents: [folderId] })], {
-      type: "application/json",
-    })
-  );
-  form.append("file", new Blob([buffer], { type: mime }));
+  const retries = opts.retries ?? 2;
+  const baseDelayMs = opts.baseDelayMs ?? 1200;
 
-  const res = await fetch(
-    "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
-    {
-      method: "POST",
-      headers: { Authorization: `Bearer ${accessToken}` },
-      body: form,
-      signal: AbortSignal.timeout(60_000),
+  for (let attempt = 0; ; attempt++) {
+    const form = new FormData();
+    form.append(
+      "metadata",
+      new Blob([JSON.stringify({ name, parents: [folderId] })], {
+        type: "application/json",
+      })
+    );
+    form.append("file", new Blob([buffer], { type: mime }));
+
+    let res: Response | null = null;
+    try {
+      res = await fetch(
+        "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${accessToken}` },
+          body: form,
+          signal: AbortSignal.timeout(60_000),
+        }
+      );
+    } catch (err) {
+      if (attempt < retries && isTransientDriveError(err)) {
+        await sleep(baseDelayMs * 2 ** attempt + Math.random() * 300);
+        continue;
+      }
+      throw err;
     }
-  );
-  const data = (await res.json().catch(() => ({}))) as {
-    id?: string;
-    name?: string;
-    error?: { message?: string };
-  };
-  if (!res.ok) {
-    throw new Error(data.error?.message ?? `Drive upload failed (${res.status})`);
+
+    const data = (await res.json().catch(() => ({}))) as {
+      id?: string;
+      name?: string;
+      error?: { message?: string };
+    };
+    if (!res.ok) {
+      if (attempt < retries && isTransientDriveError(undefined, res.status)) {
+        await sleep(baseDelayMs * 2 ** attempt + Math.random() * 300);
+        continue;
+      }
+      throw new Error(data.error?.message ?? `Drive upload failed (${res.status})`);
+    }
+    return { id: data.id ?? "", name: data.name ?? name };
   }
-  return { id: data.id ?? "", name: data.name ?? name };
 }
 
 /**
@@ -225,13 +266,16 @@ export async function syncAssetToDrive(
       return { saved: false, skipped: "auto-save off" };
     }
 
-    const src = await fetch(asset.url, { signal: AbortSignal.timeout(30_000) });
-    if (!src.ok) {
-      const msg = `asset fetch failed (${src.status})`;
+    // Fetch the source bytes with a couple of retries for flaky CDN/storage
+    // hosts — a transient hiccup here is exactly what the backoff exists for.
+    let bytes: ArrayBuffer;
+    try {
+      bytes = await fetchWithRetry(asset.url, 2);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : `asset fetch failed`;
       await recordDriveFailure(supabase, asset.id, msg, asset.tenant_id);
       return { saved: false, skipped: msg };
     }
-    const bytes = await src.arrayBuffer();
 
     const { name, mime } = filenameAndMimeForAsset(asset.type, asset.url, asset.prompt);
     const file = await uploadBufferToDrive(
@@ -261,6 +305,76 @@ export async function syncAssetToDrive(
       // status write is best-effort — the sync failure itself is the news
     }
     return { saved: false, skipped: msg };
+  }
+}
+
+/** Fetch a URL's bytes with retry-with-backoff on transient failures. */
+async function fetchWithRetry(url: string, retries: number): Promise<ArrayBuffer> {
+  let lastErr: unknown;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(30_000) });
+      if (res.ok) return await res.arrayBuffer();
+      if (attempt >= retries || !isTransientDriveError(undefined, res.status)) {
+        throw new Error(`asset fetch failed (${res.status})`);
+      }
+    } catch (err) {
+      lastErr = err;
+      if (attempt >= retries || !isTransientDriveError(err)) throw err;
+    }
+    await sleep(800 * 2 ** attempt + Math.random() * 200);
+  }
+}
+
+/**
+ * Mirror a knowledgebase item's stored file into the attached Drive folder
+ * when the workspace's auto-save toggle is on. Fire-and-forget from the
+ * upload path: never throws, missing connection/toggle just skips.
+ */
+export async function autoSaveKnowledgebaseFileToDrive(opts: {
+  tenantId: string;
+  workspaceId: string | null;
+  storagePath: string;
+  name: string;
+  mime: string;
+}): Promise<{ saved: boolean; skipped?: string; file?: { id: string; name: string } }> {
+  try {
+    const resolved = await resolveWorkspaceDriveConnection(
+      opts.tenantId,
+      opts.workspaceId
+    );
+    if (!resolved.ok) return { saved: false, skipped: resolved.error };
+
+    const supabase = resolved.supabase;
+    const { data: row } = await supabase
+      .from("tenant_connections")
+      .select("auto_save_to_drive")
+      .eq("provider", "google_drive")
+      .eq("tenant_id", opts.tenantId)
+      .eq("selected_resource", resolved.folderId)
+      .maybeSingle();
+    if (!(row as { auto_save_to_drive?: boolean } | null)?.auto_save_to_drive) {
+      return { saved: false, skipped: "auto-save off" };
+    }
+
+    const { data: blob, error: dlErr } = await supabase.storage
+      .from("tenant-assets")
+      .download(opts.storagePath);
+    if (dlErr || !blob) {
+      return { saved: false, skipped: `could not read stored file: ${dlErr?.message ?? "not found"}` };
+    }
+    const buffer = Buffer.from(await blob.arrayBuffer());
+
+    const file = await uploadBufferToDrive(
+      resolved.folderId,
+      resolved.accessToken,
+      buffer,
+      opts.name,
+      opts.mime
+    );
+    return { saved: true, file };
+  } catch (err) {
+    return { saved: false, skipped: err instanceof Error ? err.message : String(err) };
   }
 }
 

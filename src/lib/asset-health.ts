@@ -22,6 +22,10 @@ export interface WorkspaceAssetHealth {
   nonCdn: number;
   /** Storage bytes actually served from the CDN during this check. */
   storageBytes: number;
+  /** Rows whose Drive mirror succeeded (drive_synced_at set). */
+  driveSynced: number;
+  /** Rows whose Drive mirror failed and hasn't been retried yet. */
+  driveFailed: number;
   checkedAt: string;
 }
 
@@ -72,7 +76,7 @@ export async function computeAssetHealth(
   const cdnPrefix = `https://${pullHost}/`;
 
   const [{ data: assets }, { data: workspaces }, { data: tenants }] = await Promise.all([
-    supabase.from("media_assets").select("id, tenant_id, workspace_id, url, type"),
+    supabase.from("media_assets").select("id, tenant_id, workspace_id, url, type, drive_synced_at, drive_error"),
     supabase.from("workspaces").select("id, tenant_id, name"),
     supabase.from("tenants").select("id, name"),
   ]);
@@ -138,11 +142,22 @@ export async function computeAssetHealth(
     classify(a.workspace_id ?? null, a.url);
   }
 
+  // Drive mirror counts per workspace (no byte fetches — pure row flags).
+  const drive = new Map<string, { synced: number; failed: number }>();
+  for (const a of assets ?? []) {
+    const wsKey = key(a.workspace_id ?? null);
+    const d = drive.get(wsKey) ?? { synced: 0, failed: 0 };
+    if (a.drive_synced_at) d.synced++;
+    else if (a.drive_error) d.failed++;
+    drive.set(wsKey, d);
+  }
+
   const checkedAt = new Date().toISOString();
   const out: WorkspaceAssetHealth[] = [];
   for (const [wsKey, v] of verdicts) {
     const wsId = wsKey === "(no workspace)" ? null : wsKey;
     const wsRow = (workspaces ?? []).find((w: any) => w.id === wsId);
+    const d = drive.get(wsKey) ?? { synced: 0, failed: 0 };
     out.push({
       workspaceId: wsId,
       workspaceName: wsRow?.name ?? (wsKey === "(no workspace)" ? "(no workspace)" : "Unnamed"),
@@ -154,6 +169,8 @@ export async function computeAssetHealth(
       emptyUrl: v.emptyUrl,
       nonCdn: v.nonCdn,
       storageBytes: v.storageBytes,
+      driveSynced: d.synced,
+      driveFailed: d.failed,
       checkedAt,
     });
   }

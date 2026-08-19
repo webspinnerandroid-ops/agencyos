@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, FileText, Palette, Film } from "lucide-react";
+import { Loader2, FileText, Palette, Film, HardDrive } from "lucide-react";
 import { RecentContentList } from "./recent-content";
 import type { PostRow } from "@/lib/post-preview";
 
@@ -19,9 +19,12 @@ const SECTIONS: { key: SectionKey; label: string }[] = [
 
 interface DashAsset {
   id: string;
+  type?: string | null;
   url?: string | null;
   prompt: string;
   created_at: string;
+  drive_synced_at?: string | null;
+  drive_error?: string | null;
   metadata?: {
     scores?: { seo?: number; aeo?: number; geo?: number };
     postId?: string;
@@ -47,6 +50,7 @@ export function DashboardRecents({
   const [brands, setBrands] = useState<DashAsset[]>([]);
   const [videos, setVideos] = useState<DashAsset[]>([]);
   const [loading, setLoading] = useState(true);
+  const [retryingDrive, setRetryingDrive] = useState<string | null>(null);
 
   // Load the user's display preference once on mount.
   useEffect(() => {
@@ -100,6 +104,25 @@ export function DashboardRecents({
   useEffect(() => {
     if (hydrated) loadRecents();
   }, [hydrated, loadRecents]);
+
+  // One-click retry for a failed Drive mirror: POST to the same route the
+  // Asset Library uses, then refresh the recents so the badge flips.
+  const retryDrive = useCallback(async (a: DashAsset) => {
+    setRetryingDrive(a.id);
+    try {
+      const res = await fetch(`/api/media-assets/${a.id}/drive`, {
+        method: "POST",
+        credentials: "include",
+      });
+      if (res.ok) {
+        await loadRecents();
+      }
+    } catch {
+      // leave the badge showing the failure
+    } finally {
+      setRetryingDrive(null);
+    }
+  }, [loadRecents]);
 
   const anyOn = SECTIONS.some((s) => enabled[s.key]);
 
@@ -186,6 +209,8 @@ export function DashboardRecents({
                 viewAllHref="/dashboard/generate-images"
                 emptyText="No images generated yet."
                 assets={images}
+                onRetryDrive={retryDrive}
+                retryingDrive={retryingDrive}
               />
             </div>
           )}
@@ -198,6 +223,8 @@ export function DashboardRecents({
                 viewAllHref="/dashboard/assets"
                 emptyText="No brand assets yet. Generate one from Brand & Vector Design."
                 assets={brands}
+                onRetryDrive={retryDrive}
+                retryingDrive={retryingDrive}
               />
             </div>
           )}
@@ -210,6 +237,8 @@ export function DashboardRecents({
                 viewAllHref="/dashboard/generate-videos"
                 emptyText="No videos generated yet."
                 assets={videos}
+                onRetryDrive={retryDrive}
+                retryingDrive={retryingDrive}
               />
             </div>
           )}
@@ -225,12 +254,16 @@ function RecentAssetSection({
   viewAllHref,
   emptyText,
   assets,
+  onRetryDrive,
+  retryingDrive,
 }: {
   title: string;
   icon: React.ReactNode;
   viewAllHref: string;
   emptyText: string;
   assets: DashAsset[];
+  onRetryDrive?: (a: DashAsset) => void;
+  retryingDrive?: string | null;
 }) {
   return (
     <div>
@@ -246,11 +279,12 @@ function RecentAssetSection({
         <div className="grid grid-cols-4 gap-3">
           {assets.map((a) => {
             const scores = a.metadata?.scores;
+            const driveFailed = !a.drive_synced_at && !!a.drive_error;
             return (
               <a
                 key={a.id}
                 href={a.metadata?.postId ? `/dashboard/posts?post=${a.metadata.postId}` : viewAllHref}
-                className="rounded-lg border overflow-hidden group flex flex-col"
+                className="relative rounded-lg border overflow-hidden group flex flex-col"
                 title={a.prompt}
               >
                 {a.url ? (
@@ -264,6 +298,33 @@ function RecentAssetSection({
                   <div className="aspect-square w-full bg-muted flex items-center justify-center text-muted-foreground">
                     <Film className="size-6 opacity-40" />
                   </div>
+                )}
+                {a.drive_synced_at && (
+                  <span
+                    className="absolute top-1.5 right-1.5 flex items-center gap-0.5 px-1 py-0.5 rounded text-[8px] font-semibold bg-emerald-600 text-white"
+                    title={`Mirrored to Google Drive on ${new Date(a.drive_synced_at).toLocaleString()}`}
+                  >
+                    <HardDrive className="size-2" /> Drive
+                  </span>
+                )}
+                {driveFailed && (
+                  <button
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      onRetryDrive?.(a);
+                    }}
+                    disabled={retryingDrive === a.id}
+                    className="absolute top-1.5 right-1.5 flex items-center gap-0.5 px-1 py-0.5 rounded text-[8px] font-semibold bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-70"
+                    title={`Drive sync failed: ${a.drive_error} — click to retry`}
+                  >
+                    {retryingDrive === a.id ? (
+                      <Loader2 className="size-2 animate-spin" />
+                    ) : (
+                      <HardDrive className="size-2" />
+                    )}
+                    {retryingDrive === a.id ? "Retrying…" : "Retry sync"}
+                  </button>
                 )}
                 {scores && (scores.seo != null || scores.aeo != null || scores.geo != null) && (
                   <div className="px-1.5 py-1 flex items-center gap-1 flex-wrap">

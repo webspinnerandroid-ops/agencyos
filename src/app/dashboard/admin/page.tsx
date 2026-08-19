@@ -8,8 +8,8 @@ import { Label } from "@/components/ui/label";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Building2, Users, FileText, Key, TrendingUp, Shield, X, UserCog, Menu, Wallet, LayoutTemplate, LogIn, Image as ImageIcon } from "lucide-react";
-import { getDashboardStats, getAllTenants, getLicenses, getLicenseAudit, issueLicense, updateLicensePlan, renewLicense, revokeLicense, deleteLicense, deleteUser, deleteTenant, getAllUsers, assignLevel, grantHub, revokeHub, getAdminAudit, getAssetHealth, getBrokenAssets, deleteAsset, regenerateAsset, setLicenseTrial, type TenantSummary, type LicenseRecord, type LicenseAuditEntry, type AdminAuditEntry, type UserRecord, type BrokenAsset } from "./actions";
+import { Loader2, Building2, Users, FileText, Key, TrendingUp, Shield, X, UserCog, Menu, Wallet, LayoutTemplate, LogIn, Image as ImageIcon, HardDrive } from "lucide-react";
+import { getDashboardStats, getAllTenants, getLicenses, getLicenseAudit, issueLicense, updateLicensePlan, renewLicense, revokeLicense, deleteLicense, deleteUser, deleteTenant, getAllUsers, assignLevel, grantHub, revokeHub, getAdminAudit, getAssetHealth, getBrokenAssets, deleteAsset, regenerateAsset, setLicenseTrial, retryFailedDriveSyncs, type TenantSummary, type LicenseRecord, type LicenseAuditEntry, type AdminAuditEntry, type UserRecord, type BrokenAsset } from "./actions";
 import type { WorkspaceAssetHealth } from "@/lib/asset-health";
 import { formatBytes } from "@/lib/asset-health";
 import TokenBilling from "./token-billing";
@@ -107,6 +107,19 @@ export default function AdminDashboardPage() {
   const [expandedHealth, setExpandedHealth] = useState<string | null>(null);
   const [brokenAssets, setBrokenAssets] = useState<Record<string, BrokenAsset[]>>({});
   const [brokenLoading, setBrokenLoading] = useState<Record<string, boolean>>({});
+  const [retryingDrive, setRetryingDrive] = useState<string | null>(null);
+
+  const handleRetryDrive = (key: string) => {
+    if (!confirm(`Re-run the failed Google Drive mirrors for ${key === "(no workspace)" ? "unassigned assets" : `this workspace`}?`)) return;
+    setRetryingDrive(key);
+    retryFailedDriveSyncs(key === "(no workspace)" ? null : key).then((r) => {
+      setRetryingDrive(null);
+      setFeedback(r.success
+        ? { type: "success", message: `Drive retry: ${r.data?.attempted ?? 0} attempted, ${r.data?.saved ?? 0} saved, ${r.data?.failed ?? 0} still failed.` }
+        : { type: "error", message: r.error ?? "Drive retry failed." });
+      loadAssetHealth();
+    });
+  };
 
   const toggleHealthRow = (key: string) => {
     const next = expandedHealth === key ? null : key;
@@ -626,7 +639,8 @@ export default function AdminDashboardPage() {
             </Button>
           </CardTitle>
           <p className="text-sm text-muted-foreground">
-            Per-workspace smoke test of stored asset bytes (same magic-byte check the CI asset-integrity job runs).
+            Per-workspace smoke test of stored asset bytes (same magic-byte check the CI asset-integrity job runs),
+            plus Google Drive mirror status with one-click retry of failed syncs.
           </p>
         </CardHeader>
         <CardContent>
@@ -635,7 +649,7 @@ export default function AdminDashboardPage() {
           ) : assetHealth && assetHealth.length === 0 ? (
             <p className="text-sm text-muted-foreground">No media assets in any workspace yet.</p>
           ) : assetHealth ? (
-            <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b text-left"><th className="py-2 px-3 text-muted-foreground">Tenant</th><th className="py-2 px-3 text-muted-foreground">Workspace</th><th className="py-2 px-3 text-muted-foreground">Total</th><th className="py-2 px-3 text-muted-foreground">Healthy</th><th className="py-2 px-3 text-muted-foreground">Broken</th><th className="py-2 px-3 text-muted-foreground">Empty URL</th><th className="py-2 px-3 text-muted-foreground">Non-CDN</th><th className="py-2 px-3 text-muted-foreground">Storage</th><th className="py-2 px-3 text-muted-foreground">Checked</th></tr></thead><tbody>
+            <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b text-left"><th className="py-2 px-3 text-muted-foreground">Tenant</th><th className="py-2 px-3 text-muted-foreground">Workspace</th><th className="py-2 px-3 text-muted-foreground">Total</th><th className="py-2 px-3 text-muted-foreground">Healthy</th><th className="py-2 px-3 text-muted-foreground">Broken</th><th className="py-2 px-3 text-muted-foreground">Empty URL</th><th className="py-2 px-3 text-muted-foreground">Non-CDN</th><th className="py-2 px-3 text-muted-foreground">Storage</th><th className="py-2 px-3 text-muted-foreground">Drive</th><th className="py-2 px-3 text-muted-foreground">Checked</th></tr></thead><tbody>
               {assetHealth.map((h) => {
                 const key = h.workspaceId ?? "(no workspace)";
                 const issueCount = h.broken + h.emptyUrl + h.nonCdn;
@@ -656,6 +670,24 @@ export default function AdminDashboardPage() {
                       <td className="py-2 px-3">{h.emptyUrl > 0 ? <Badge className="bg-orange-100 text-orange-700">{h.emptyUrl}</Badge> : <span>0</span>}</td>
                       <td className="py-2 px-3">{h.nonCdn > 0 ? <Badge className="bg-yellow-100 text-yellow-700">{h.nonCdn}</Badge> : <span>0</span>}</td>
                       <td className="py-2 px-3 whitespace-nowrap" title={`${(h.storageBytes ?? 0).toLocaleString()} bytes`}>{formatBytes(h.storageBytes ?? 0)}</td>
+                      <td className="py-2 px-3 whitespace-nowrap">
+                        {h.driveSynced > 0 && <Badge className="bg-emerald-100 text-emerald-700 mr-1">{h.driveSynced} synced</Badge>}
+                        {h.driveFailed > 0 ? (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleRetryDrive(key); }}
+                            disabled={retryingDrive === key}
+                            className="inline-flex items-center gap-1 rounded-full bg-amber-100 text-amber-700 px-2 py-0.5 text-[10px] font-semibold hover:bg-amber-200 disabled:opacity-60"
+                            title={`${h.driveFailed} failed Drive mirrors — click to retry them all`}
+                          >
+                            {retryingDrive === key ? <Loader2 className="size-2.5 animate-spin" /> : <HardDrive className="size-2.5" />}
+                            {h.driveFailed} failed{retryingDrive === key ? " — retrying…" : " · retry"}
+                          </button>
+                        ) : h.driveSynced > 0 ? (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">no mirrors</span>
+                        )}
+                      </td>
                       <td className="py-2 px-3 text-muted-foreground text-xs">
                         {new Date(h.checkedAt).toLocaleTimeString()}
                         {hasIssues && <span className="ml-1 text-primary">{expanded ? "▲" : "▼"}</span>}
@@ -663,7 +695,7 @@ export default function AdminDashboardPage() {
                     </tr>
                     {expanded && (
                       <tr className="border-b last:border-0 bg-muted/20">
-                        <td colSpan={9} className="py-3 px-4">
+                        <td colSpan={10} className="py-3 px-4">
                           <div className="text-sm">
                             <p className="font-medium mb-2">Broken assets in “{h.workspaceName}”</p>
                             {brokenLoading[key] ? (

@@ -4,6 +4,7 @@ import { createClient } from "@supabase/supabase-js";
 import { getTenantId } from "@/lib/auth";
 import { extractDocumentText, mimeTypeForFilename } from "@/lib/media/docx-text";
 import { extractPdfText } from "@/lib/media/pdf-text";
+import { autoSaveKnowledgebaseFileToDrive } from "@/lib/drive-sync";
 
 function getAdminClient() {
   return createClient(
@@ -100,6 +101,17 @@ export async function uploadFile(
       .single();
 
     if (insertError) throw new Error(insertError.message);
+
+    // Fire-and-forget Drive mirror when the workspace has auto-save on. The
+    // toggle lives on the google_drive connection; failures never fail the
+    // upload (the per-item "save to Drive" button covers manual retries).
+    void autoSaveKnowledgebaseFileToDrive({
+      tenantId,
+      workspaceId,
+      storagePath,
+      name: file.name,
+      mime,
+    });
 
     return { success: true, item };
   } catch (err: any) {

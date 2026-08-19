@@ -1284,6 +1284,44 @@ export async function regenerateAsset(
   }
 }
 
+/**
+ * Re-run the Drive mirror for every asset in one workspace (or all
+ * workspaces when workspaceId is null) whose mirror failed and hasn't been
+ * retried — the admin-side "retry all" for the per-asset badge. Uses the
+ * same status-aware sync as the Asset Library so successes clear drive_error
+ * and failures refresh it with the fresh reason.
+ */
+export async function retryFailedDriveSyncs(
+  workspaceId: string | null
+): Promise<ActionResponse<{ attempted: number; saved: number; failed: number }>> {
+  try {
+    await requireSuperAdmin();
+    const supabase = await createServiceClient();
+
+    let q = supabase
+      .from("media_assets")
+      .select("id, tenant_id, workspace_id, type, prompt, url, drive_synced_at, drive_error")
+      .is("drive_synced_at", null)
+      .not("drive_error", "is", null);
+    q = workspaceId ? q.eq("workspace_id", workspaceId) : q;
+
+    const { data: rows, error } = await q;
+    if (error) throw new Error(error.message);
+
+    const { syncAssetToDrive } = await import("@/lib/drive-sync");
+    let saved = 0;
+    let failed = 0;
+    for (const row of rows ?? []) {
+      const r = await syncAssetToDrive(row);
+      if (r.saved) saved++;
+      else failed++;
+    }
+    return { success: true, data: { attempted: (rows ?? []).length, saved, failed } };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
 export async function getAllUsers(): Promise<ActionResponse<UserRecord[]>> {
   try {
     await requireSuperAdmin();

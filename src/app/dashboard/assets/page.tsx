@@ -335,8 +335,10 @@ export default function AssetsPage() {
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
         setNotice(`Saved to Google Drive: ${data.file?.name ?? "asset"}`);
+        await loadAssets(); // refresh the badge state (failed → Drive)
       } else {
         setError(data.error ?? "Failed to save to Google Drive");
+        if (data.error && asset.drive_error) await loadAssets(); // show the fresh error on the badge
       }
     } catch (err: any) {
       setError(err?.message ?? "Failed to save to Google Drive");
@@ -592,12 +594,19 @@ export default function AssetsPage() {
                         </span>
                       )}
                       {!asset.drive_synced_at && asset.drive_error && (
-                        <span
-                          className="absolute top-2 right-2 flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold bg-amber-500 text-white"
-                          title={`Drive sync failed: ${asset.drive_error}`}
+                        <button
+                          onClick={() => saveToDrive(asset)}
+                          disabled={savingDrive === asset.id}
+                          className="absolute top-2 right-2 flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-semibold bg-amber-500 text-white hover:bg-amber-600 disabled:opacity-70"
+                          title={`Drive sync failed: ${asset.drive_error} — click to retry the mirror`}
                         >
-                          <HardDrive className="size-2.5" /> Sync failed
-                        </span>
+                          {savingDrive === asset.id ? (
+                            <Loader2 className="size-2.5 animate-spin" />
+                          ) : (
+                            <HardDrive className="size-2.5" />
+                          )}
+                          {savingDrive === asset.id ? "Retrying…" : "Retry sync"}
+                        </button>
                       )}
                     </div>
                     <div className="p-2.5 space-y-1.5">

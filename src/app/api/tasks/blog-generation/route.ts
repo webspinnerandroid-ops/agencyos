@@ -42,20 +42,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // TODO: Send to Inngest
-    // await inngest.send({
-    //   name: "blog/generation.started",
-    //   data: { tenantId, ...body },
-    // });
-
-    return NextResponse.json({
-      success: true,
-      message:
-        "Task accepted. Blog generation will begin shortly. (Synchronous fallback available at POST /api/generate-content)",
-      ...(process.env.NODE_ENV === "development" && {
-        hint: "Use POST /api/generate-content for synchronous generation in MVP",
-      }),
-    });
+    // No async blog-generation Inngest function exists yet; the synchronous
+    // POST /api/generate-content route is the real implementation. Return an
+    // honest 501 instead of a fake "task accepted" acknowledgement.
+    return NextResponse.json(
+      {
+        error:
+          "Async blog generation is not available yet — use POST /api/generate-content for synchronous generation.",
+      },
+      { status: 501 }
+    );
   } catch (error) {
     console.error("[tasks/blog-generation] Error:", error);
     const message =

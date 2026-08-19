@@ -174,19 +174,49 @@ interface SendEmailParams {
 }
 
 export async function sendEmail(_params: SendEmailParams): Promise<void> {
-  console.log("\uD83D\uDCE7 [EMAIL NOTIFICATION]", {
-    to: _params.to,
-    subject: _params.subject,
-    htmlPreview: _params.html.slice(0, 120),
-  });
+  const { to, subject, html } = _params;
+
+  // Deliver over SMTP (nodemailer) when configured; otherwise log and skip so
+  // callers can safely fire-and-forget without crashing when mail is off.
+  if (!process.env.SMTP_HOST) {
+    console.log("\uD83D\uDCE7 [EMAIL NOTIFICATION] (SMTP_HOST not set — not sent)", {
+      to,
+      subject,
+      htmlPreview: html.slice(0, 120),
+    });
+    return;
+  }
+
+  try {
+    const nodemailer = (await import("nodemailer")).default;
+    const port = Number(process.env.SMTP_PORT || 587);
+    const transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port,
+      secure: port === 465,
+      auth: process.env.SMTP_USER
+        ? { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
+        : undefined,
+    });
+    await transporter.sendMail({
+      from: process.env.SMTP_FROM || process.env.SMTP_USER,
+      to,
+      subject,
+      html,
+    });
+  } catch (err) {
+    console.error("[EMAIL NOTIFICATION] send failed:", err instanceof Error ? err.message : err);
+  }
 }
 
 const HTML_ESCAPE_MAP: Record<string, string> = {
-  "&": "&",
-  "<": "<",
-  ">": ">",
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+  "'": "&#x27;",
 };
 
 function escapeHtml(text: string): string {
-  return text.replace(/[&<>]/g, (ch) => HTML_ESCAPE_MAP[ch]);
+  return text.replace(/[&<>"']/g, (ch) => HTML_ESCAPE_MAP[ch]);
 }

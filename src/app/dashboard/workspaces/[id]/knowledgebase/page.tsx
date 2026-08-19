@@ -60,7 +60,10 @@ export default function KnowledgebasePage() {
         else setFeedback({ type: "error", message: data.error ?? "Failed to save to Google Drive" });
       })
       .catch(() => setFeedback({ type: "error", message: "Failed to save to Google Drive" }))
-      .finally(() => setDriveSavingId(null));
+      .finally(() => {
+        setDriveSavingId(null);
+        load(); // refresh so the Drive badge / Retry sync state reflects the row
+      });
   };
 
   const load = useCallback(() => {
@@ -259,7 +262,28 @@ export default function KnowledgebasePage() {
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                   {isPublicUrl && <a href={isPublicUrl} target="_blank" rel="noopener noreferrer"><Button variant="ghost" size="icon" className="h-7 w-7"><Link2 className="size-3" /></Button></a>}
-                  {item.storage_path && (
+                  {item.storage_path && item.drive_synced_at && (
+                    <span
+                      className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-emerald-600 text-white"
+                      title={`Mirrored to Google Drive${item.drive_file_id ? ` (file ${item.drive_file_id.slice(0, 8)}…)` : ""} on ${new Date(item.drive_synced_at).toLocaleString()}`}
+                    >
+                      <HardDrive className="size-2.5" /> Drive
+                    </span>
+                  )}
+                  {item.storage_path && !item.drive_synced_at && item.drive_error && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 text-[11px] text-amber-600 hover:text-amber-700"
+                      onClick={() => saveToDrive(item)}
+                      disabled={isPending || driveSavingId === item.id}
+                      title={`Drive sync failed: ${item.drive_error} — click to retry the mirror`}
+                    >
+                      {driveSavingId === item.id ? <Loader2 className="size-3 animate-spin mr-1" /> : <HardDrive className="size-3 mr-1" />}
+                      {driveSavingId === item.id ? "Retrying…" : "Retry sync"}
+                    </Button>
+                  )}
+                  {item.storage_path && !item.drive_synced_at && !item.drive_error && (
                     <Button
                       variant="ghost"
                       size="icon"

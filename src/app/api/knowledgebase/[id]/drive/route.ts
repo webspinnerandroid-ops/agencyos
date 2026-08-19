@@ -2,12 +2,15 @@ import { NextRequest, NextResponse } from "next/server";
 import { getTenantId } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getCurrentWorkspaceId } from "@/lib/workspace";
-import { resolveWorkspaceDriveConnection, uploadBufferToDrive } from "@/lib/drive-sync";
+import { mirrorKnowledgebaseFileToDrive } from "@/lib/drive-sync";
 
 /**
  * POST /api/knowledgebase/[id]/drive
  * Uploads a knowledgebase file's original bytes (docx, pdf, image, etc.)
- * into the workspace's attached Google Drive folder.
+ * into the workspace's attached Google Drive folder, inside a per-client
+ * subfolder named after the workspace. Records the outcome on the item
+ * (drive_synced_at / drive_file_id / drive_error) so the UI can show a sync
+ * badge and offer a one-click retry.
  */
 export async function POST(
   request: NextRequest,
@@ -39,37 +42,24 @@ export async function POST(
       );
     }
 
-    const resolved = await resolveWorkspaceDriveConnection(
+    const result = await mirrorKnowledgebaseFileToDrive({
       tenantId,
-      item.workspace_id ?? workspaceId
-    );
-    if (!resolved.ok) {
-      return NextResponse.json({ error: resolved.error }, { status: 400 });
-    }
+      workspaceId: item.workspace_id ?? workspaceId,
+      itemId: item.id,
+      storagePath: item.storage_path,
+      name: item.original_filename || item.name || "knowledgebase-file",
+      mime: item.mime_type || "application/octet-stream",
+    });
 
-    const { data: blob, error: dlErr } = await supabase.storage
-      .from("tenant-assets")
-      .download(item.storage_path);
-    if (dlErr || !blob) {
+    if (!result.saved) {
+      const status = /could not read stored file/.test(result.skipped ?? "") ? 500 : 400;
       return NextResponse.json(
-        { error: `Could not read the stored file: ${dlErr?.message ?? "not found"}` },
-        { status: 500 }
+        { error: result.skipped ?? "Failed to save to Google Drive" },
+        { status }
       );
     }
 
-    const buffer = Buffer.from(await blob.arrayBuffer());
-    const name = item.original_filename || item.name || "knowledgebase-file";
-    const mime = item.mime_type || "application/octet-stream";
-
-    const file = await uploadBufferToDrive(
-      resolved.folderId,
-      resolved.accessToken,
-      buffer,
-      name,
-      mime
-    );
-
-    return NextResponse.json({ success: true, file });
+    return NextResponse.json({ success: true, file: result.file });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Internal server error";
     return NextResponse.json({ error: message }, { status: 500 });

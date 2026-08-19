@@ -42,6 +42,9 @@ export interface KbItem {
   extracted_metadata: Record<string, any>;
   status: "pending" | "scraping" | "extracting" | "ready" | "error";
   error_message: string | null;
+  drive_synced_at: string | null;
+  drive_file_id: string | null;
+  drive_error: string | null;
   created_at: string;
 }
 

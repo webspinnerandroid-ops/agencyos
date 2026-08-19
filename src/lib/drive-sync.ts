@@ -327,13 +327,93 @@ async function fetchWithRetry(url: string, retries: number): Promise<ArrayBuffer
 }
 
 /**
- * Mirror a knowledgebase item's stored file into the attached Drive folder
- * when the workspace's auto-save toggle is on. Fire-and-forget from the
- * upload path: never throws, missing connection/toggle just skips.
+ * Mirror a knowledgebase item's stored file into the attached Drive folder,
+ * inside a per-client subfolder named after the workspace. Both the auto-save
+ * path and the manual "save to Drive" action call this — it downloads the
+ * stored bytes, uploads into the resolved subfolder, and records the outcome
+ * on the knowledgebase_items row (drive_synced_at / drive_file_id /
+ * drive_error) so the UI can show a sync badge + one-click retry. Never throws.
+ */
+export async function mirrorKnowledgebaseFileToDrive(opts: {
+  tenantId: string;
+  workspaceId: string | null;
+  itemId: string;
+  storagePath: string;
+  name: string;
+  mime: string;
+}): Promise<{ saved: boolean; skipped?: string; file?: { id: string; name: string } }> {
+  try {
+    const resolved = await resolveWorkspaceDriveConnection(
+      opts.tenantId,
+      opts.workspaceId
+    );
+    if (!resolved.ok) {
+      await recordKbDriveFailure(opts.tenantId, opts.itemId, resolved.error);
+      return { saved: false, skipped: resolved.error };
+    }
+
+    const supabase = resolved.supabase;
+
+    // Keep each client's files in their own subfolder rather than dumping
+    // everything into the root of the attached Drive folder. Any subfolder
+    // hiccup falls back to the attached root so files still mirror.
+    const targetFolderId =
+      (await resolveDriveClientSubfolder(
+        supabase,
+        resolved.accessToken,
+        resolved.folderId,
+        opts.tenantId,
+        opts.workspaceId
+      )) ?? resolved.folderId;
+
+    const { data: blob, error: dlErr } = await supabase.storage
+      .from("tenant-assets")
+      .download(opts.storagePath);
+    if (dlErr || !blob) {
+      const msg = `could not read stored file: ${dlErr?.message ?? "not found"}`;
+      await recordKbDriveFailure(opts.tenantId, opts.itemId, msg);
+      return { saved: false, skipped: msg };
+    }
+    const buffer = Buffer.from(await blob.arrayBuffer());
+
+    const file = await uploadBufferToDrive(
+      targetFolderId,
+      resolved.accessToken,
+      buffer,
+      opts.name,
+      opts.mime
+    );
+
+    await supabase
+      .from("knowledgebase_items")
+      .update({
+        drive_synced_at: new Date().toISOString(),
+        drive_file_id: file.id,
+        drive_error: null,
+      })
+      .eq("id", opts.itemId)
+      .eq("tenant_id", opts.tenantId);
+    return { saved: true, file };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    try {
+      await recordKbDriveFailure(opts.tenantId, opts.itemId, msg);
+    } catch {
+      // status write is best-effort — the sync failure itself is the news
+    }
+    return { saved: false, skipped: msg };
+  }
+}
+
+/**
+ * Auto-save wrapper: mirrors a freshly uploaded knowledgebase file into Drive
+ * only when the workspace's auto-save toggle is on. Fire-and-forget from the
+ * upload path — a missing connection/toggle just skips (no error recorded).
  */
 export async function autoSaveKnowledgebaseFileToDrive(opts: {
   tenantId: string;
   workspaceId: string | null;
+  itemId: string;
   storagePath: string;
   name: string;
   mime: string;
@@ -356,26 +436,96 @@ export async function autoSaveKnowledgebaseFileToDrive(opts: {
     if (!(row as { auto_save_to_drive?: boolean } | null)?.auto_save_to_drive) {
       return { saved: false, skipped: "auto-save off" };
     }
-
-    const { data: blob, error: dlErr } = await supabase.storage
-      .from("tenant-assets")
-      .download(opts.storagePath);
-    if (dlErr || !blob) {
-      return { saved: false, skipped: `could not read stored file: ${dlErr?.message ?? "not found"}` };
-    }
-    const buffer = Buffer.from(await blob.arrayBuffer());
-
-    const file = await uploadBufferToDrive(
-      resolved.folderId,
-      resolved.accessToken,
-      buffer,
-      opts.name,
-      opts.mime
-    );
-    return { saved: true, file };
   } catch (err) {
     return { saved: false, skipped: err instanceof Error ? err.message : String(err) };
   }
+
+  return mirrorKnowledgebaseFileToDrive(opts);
+}
+
+/**
+ * Find-or-create a per-client subfolder (named after the workspace) inside the
+ * attached Drive folder. Returns null on any failure so callers fall back to
+ * the attached root instead of dropping the mirror.
+ */
+async function resolveDriveClientSubfolder(
+  supabase: Awaited<ReturnType<typeof createServiceClient>>,
+  accessToken: string,
+  rootFolderId: string,
+  tenantId: string,
+  workspaceId: string | null
+): Promise<string | null> {
+  if (!workspaceId) return null;
+  try {
+    const { data: ws } = await supabase
+      .from("workspaces")
+      .select("name")
+      .eq("id", workspaceId)
+      .eq("tenant_id", tenantId)
+      .maybeSingle();
+    const name = sanitizeDriveFolderName((ws as { name?: string } | null)?.name ?? "Workspace");
+
+    const q = encodeURIComponent(
+      `'${rootFolderId}' in parents and mimeType = 'application/vnd.google-apps.folder' and name = '${name.replace(/'/g, "\\'")}' and trashed = false`
+    );
+    const listRes = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q=${q}&fields=files(id,name)&pageSize=10`,
+      {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(20_000),
+      }
+    );
+    if (listRes.ok) {
+      const data = (await listRes.json().catch(() => ({}))) as {
+        files?: { id: string; name: string }[];
+      };
+      const existing = data.files?.find((f) => f.name === name);
+      if (existing?.id) return existing.id;
+    }
+
+    const createRes = await fetch("https://www.googleapis.com/drive/v3/files", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        name,
+        mimeType: "application/vnd.google-apps.folder",
+        parents: [rootFolderId],
+      }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!createRes.ok) return null;
+    const created = (await createRes.json().catch(() => ({}))) as { id?: string };
+    return created.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Drive folder names can't contain a slash; keep them single-line + bounded. */
+function sanitizeDriveFolderName(name: string): string {
+  return (
+    (name || "Workspace")
+      .replace(/[/\\]/g, "-")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 120) || "Workspace"
+  );
+}
+
+async function recordKbDriveFailure(
+  tenantId: string,
+  itemId: string,
+  message: string
+): Promise<void> {
+  const supabase = await createServiceClient();
+  await supabase
+    .from("knowledgebase_items")
+    .update({ drive_error: message.slice(0, 500), drive_synced_at: null })
+    .eq("id", itemId)
+    .eq("tenant_id", tenantId);
 }
 
 async function recordDriveFailure(

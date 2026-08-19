@@ -108,6 +108,7 @@ export async function uploadFile(
     void autoSaveKnowledgebaseFileToDrive({
       tenantId,
       workspaceId,
+      itemId: item.id,
       storagePath,
       name: file.name,
       mime,

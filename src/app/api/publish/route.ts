@@ -299,6 +299,10 @@ export async function POST(request: NextRequest) {
         (typeof content?.metaDescription === "string" && content.metaDescription.trim()) ||
         deriveExcerpt(body, title);
       const now = new Date().toISOString();
+      // "draft" mirrors the post into the site blog as a draft (super admin
+      // reviews in /dashboard/admin/blog before going live); publish/schedule
+      // go straight to published. Defaults to published for back-compat.
+      const asDraft = action === "draft";
       const { data: existing } = await supabase
         .from("site_blog_posts")
         .select("id")
@@ -309,8 +313,8 @@ export async function POST(request: NextRequest) {
         body,
         excerpt: excerpt.slice(0, 300),
         featured_image_url: featuredImage || null,
-        status: "published" as const,
-        published_at: now,
+        status: (asDraft ? "draft" : "published") as "draft" | "published",
+        published_at: asDraft ? null : now,
         updated_at: now,
       };
       if (existing) {

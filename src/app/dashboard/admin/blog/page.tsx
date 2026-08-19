@@ -16,6 +16,7 @@ import {
   EyeOff,
   Upload,
   ArrowLeft,
+  ImageIcon,
 } from "lucide-react";
 import { renderBlogBody } from "@/lib/blog-render";
 import { formatShortDate } from "@/lib/post-preview";
@@ -49,6 +50,11 @@ export default function SiteBlogAdminPage() {
   const [uploading, setUploading] = useState(false);
   const [editor, setEditor] = useState<Editor | null>(null);
   const [showPreview, setShowPreview] = useState(false);
+  // Asset-library picker for the featured image.
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [libraryAssets, setLibraryAssets] = useState<{ id: string; url: string; thumbnail_url: string | null; prompt: string | null }[]>([]);
+  const [libraryLoading, setLibraryLoading] = useState(false);
+  const [libraryError, setLibraryError] = useState<string | null>(null);
 
   const show = (type: "success" | "error", message: string) => setFeedback({ type, message });
 
@@ -181,6 +187,25 @@ export default function SiteBlogAdminPage() {
     await load();
   };
 
+  const openLibraryPicker = async () => {
+    setPickerOpen(true);
+    setLibraryError(null);
+    setLibraryLoading(true);
+    try {
+      const res = await fetch("/api/assets?type=image&limit=60", { credentials: "include" });
+      const data = await res.json();
+      if (!res.ok) {
+        setLibraryError(data.error ?? "Could not load the asset library.");
+        return;
+      }
+      setLibraryAssets(data.assets ?? []);
+    } catch {
+      setLibraryError("Could not load the asset library.");
+    } finally {
+      setLibraryLoading(false);
+    }
+  };
+
   const startEdit = (post: SiteBlogPost) => {
     setEditor({
       id: post.id,
@@ -277,6 +302,17 @@ export default function SiteBlogAdminPage() {
                   placeholder="https://… (or upload below)"
                   className="flex-1"
                 />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0"
+                  onClick={openLibraryPicker}
+                  title="Pick from the workspace asset library"
+                >
+                  <ImageIcon className="size-4" />
+                  Library
+                </Button>
                 <label className="shrink-0 inline-flex items-center gap-1 text-sm px-3 py-2 rounded-md border cursor-pointer hover:bg-muted">
                   {uploading ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
                   Upload
@@ -405,6 +441,59 @@ export default function SiteBlogAdminPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Asset-library picker modal for the featured image */}
+      {pickerOpen && (
+        <div
+          className="fixed inset-0 z-[60] flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setPickerOpen(false)}
+        >
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+          <div
+            className="relative w-full max-w-2xl p-4 rounded-lg border bg-card shadow-xl max-h-[85vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-sm font-semibold">Pick a featured image from your library</span>
+              <button onClick={() => setPickerOpen(false)} className="p-1 rounded hover:bg-muted text-muted-foreground" title="Close">
+                ✕
+              </button>
+            </div>
+            {libraryError && <p className="text-red-500 text-sm mb-3">{libraryError}</p>}
+            {libraryLoading ? (
+              <div className="flex items-center justify-center py-16 text-muted-foreground">
+                <Loader2 className="size-6 animate-spin mr-2" /> Loading assets…
+              </div>
+            ) : libraryAssets.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-16 text-center">
+                No images in this workspace&apos;s asset library yet. Generate some, or upload one directly above.
+              </p>
+            ) : (
+              <div className="grid grid-cols-3 sm:grid-cols-4 gap-3 overflow-y-auto pr-1">
+                {libraryAssets.map((asset) => (
+                  <button
+                    key={asset.id}
+                    type="button"
+                    onClick={() => {
+                      patchEditor({ featuredImageUrl: asset.thumbnail_url || asset.url });
+                      setPickerOpen(false);
+                      show("success", "Featured image set from the library.");
+                    }}
+                    className="group relative aspect-video rounded-md overflow-hidden border hover:border-primary focus:outline-none focus:ring-2 focus:ring-ring bg-muted"
+                    title={asset.prompt ?? asset.url}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={asset.thumbnail_url || asset.url} alt={asset.prompt ?? "Asset"} className="w-full h-full object-cover" />
+                    <span className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

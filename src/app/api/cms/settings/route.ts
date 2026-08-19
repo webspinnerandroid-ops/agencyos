@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getTenantId } from "@/lib/auth";
+import { getTenantId, requireRole } from "@/lib/auth";
 import { getCurrentWorkspaceId } from "@/lib/workspace";
 import { createServiceClient } from "@/lib/supabase/server";
 import { THEME_PRESETS, type CmsBlock } from "@/lib/cms";
@@ -76,6 +76,9 @@ export async function GET() {
 /** PUT /api/cms/settings — upsert sitewide settings for this tenant+workspace. */
 export async function PUT(request: NextRequest) {
   try {
+    // Agency staff only — site settings (incl. global_css) affect the public
+    // site, so a client-role user must not be able to change them.
+    await requireRole("agency_editor");
     const tenantId = await getTenantId();
     if (!tenantId) {
       return NextResponse.json({ error: "Authentication required" }, { status: 401 });

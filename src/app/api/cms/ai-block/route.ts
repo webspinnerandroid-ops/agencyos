@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getTenantId } from "@/lib/auth";
+import { getTenantId, requireRole } from "@/lib/auth";
 import { generateStructuredOutput } from "@/lib/ai/orchestrator";
 import { newBlockId, type CmsBlock } from "@/lib/cms";
 
@@ -15,6 +15,9 @@ import { newBlockId, type CmsBlock } from "@/lib/cms";
  */
 export async function POST(request: NextRequest) {
   try {
+    // Building AI blocks burns model tokens and produces page content —
+    // agency staff only.
+    await requireRole("agency_editor");
     const tenantId = await getTenantId();
     const body = (await request.json().catch(() => ({}))) as {
       prompt?: string;

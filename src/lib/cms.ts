@@ -213,8 +213,8 @@ const WIDTH_CLASSES: Record<string, string> = {
 function blockWrapper(block: CmsBlock): string {
   const s = block.style ?? {};
   const inline: string[] = [];
-  if (s.bg) inline.push(`background:${s.bg}`);
-  if (s.color) inline.push(`color:${s.color}`);
+  if (s.bg) inline.push(`background:${esc(s.bg)}`);
+  if (s.color) inline.push(`color:${esc(s.color)}`);
   const styleAttr = inline.length ? ` style="${inline.join(";")}"` : "";
   return `<div class="cms-block ${PADDING_CLASSES[s.padding ?? "none"]} ${WIDTH_CLASSES[s.width ?? "full"]} cms-align-${s.align ?? "left"}"${styleAttr}>`;
 }

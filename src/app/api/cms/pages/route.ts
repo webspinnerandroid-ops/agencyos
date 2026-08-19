@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getTenantId } from "@/lib/auth";
+import { getTenantId, requireRole } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getCurrentWorkspaceId } from "@/lib/workspace";
 import { slugify } from "@/lib/cms";
@@ -31,6 +31,9 @@ export async function GET() {
 
 export async function POST(request: NextRequest) {
   try {
+    // Only agency staff (admin or editor) may create pages — a client-role
+    // user reviewing content must not be able to add pages to the site.
+    await requireRole("agency_editor");
     const tenantId = await getTenantId();
     const supabase = await createServiceClient();
     const workspaceId = await getCurrentWorkspaceId();

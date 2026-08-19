@@ -35,22 +35,10 @@ const securityHeaders = [
     key: "Permissions-Policy",
     value: "camera=(), microphone=(), geolocation=(), interest-cohort=()",
   },
-  // Relaxed CSP, tested on staging before tightening further:
-  {
-    key: "Content-Security-Policy",
-    value: [
-      "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://*.supabase.co https://www.googletagmanager.com",
-      "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data: blob: https: https://*.google-analytics.com https://www.googletagmanager.com",
-      "media-src 'self' blob: https: https://*.b-cdn.net",
-      "font-src 'self' data: https://fonts.gstatic.com",
-      "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.deepseek.com https://api.openai.com https://generativelanguage.googleapis.com https://*.b-cdn.net",
-      "frame-src 'self'",
-      "base-uri 'self'",
-      "form-action 'self'",
-    ].join("; "),
-  },
+  // CSP is set per-request in src/proxy.ts with a nonce for the one inline
+  // script (gtag config), so it is NOT listed here — a static header here
+  // would either duplicate the nonce'd one (both must allow, breaking the
+  // inline script) or force 'unsafe-inline' back on. See proxy.ts buildCsp().
 ];
 
 const nextConfig: NextConfig = {

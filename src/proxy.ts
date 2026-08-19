@@ -1,7 +1,52 @@
 import { type NextRequest, NextResponse } from "next/server"
+import { randomBytes } from "crypto"
 import { createClient } from "@supabase/supabase-js"
 import { getTenantThemeSafe, encodeTenantTheme } from "@/lib/tenant"
 import { signAuthValue } from "@/lib/auth-signature"
+
+/**
+ * Build the strict Content-Security-Policy with a per-request nonce.
+ *
+ * Inline scripts (JSON-LD data blocks, the gtag config when NEXT_PUBLIC_GA_ID
+ * is set) are allowed ONLY via the nonce; Next.js automatically attaches the
+ * nonce to its own framework/RSC inline scripts when it sees this header.
+ * 'unsafe-eval' is kept in dev only (React needs it for debug stacks).
+ *
+ * style-src keeps 'unsafe-inline' because React inline style attributes are
+ * widely used; script-src is strict — that is the XSS backstop.
+ */
+function buildCspHeader(nonce: string): string {
+  const isDev = process.env.NODE_ENV === "development"
+  return [
+    "default-src 'self'",
+    `script-src 'self' 'nonce-${nonce}' https://*.supabase.co https://www.googletagmanager.com${isDev ? " 'unsafe-eval'" : ""}`,
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: https: https://*.google-analytics.com https://www.googletagmanager.com",
+    "media-src 'self' blob: https: https://*.b-cdn.net",
+    "font-src 'self' data: https://fonts.gstatic.com",
+    "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.deepseek.com https://api.openai.com https://generativelanguage.googleapis.com https://*.b-cdn.net",
+    "frame-src 'self'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "object-src 'none'",
+  ].join("; ")
+}
+
+/**
+ * Build the CSP-tagged pass-through response: the strict CSP header on the
+ * response, plus a request-header pass of the nonce so server components
+ * (layout.tsx) can tag inline scripts like the gtag config. This is the
+ * documented Next.js nonce pattern (see nextjs.org/docs/guides/csp).
+ */
+function nextWithCsp(request: NextRequest): NextResponse {
+  const nonce = randomBytes(16).toString("base64url")
+  const csp = buildCspHeader(nonce)
+  const requestHeaders = new Headers(request.headers)
+  requestHeaders.set("x-nonce", nonce)
+  const response = NextResponse.next({ request: { headers: requestHeaders } })
+  response.headers.set("Content-Security-Policy", csp)
+  return response
+}
 
 const PUBLIC_ROUTES = ["/login", "/register", "/forgot-password", "/reset-password", "/pending-approval", "/help", "/about", "/contact", "/privacy", "/data-deletion", "/export-data", "/terms", "/seo/proposal", "/audit", "/site", "/sign", "/p", "/blog", "/api/webhooks", "/api/auth/callback", "/api/auth/session", "/api/auth/dev-login", "/api/register", "/api/data-deletion", "/api/export-data", "/api/inngest", "/api/docusign/connect", "/api/seo/public-proposal", "/api/seo/public-audit", "/api/cms/forms", "/api/outreach/reply-webhook", "/api/sign", "/api/telegram/webhook", "/api/discord/webhook", "/api/version", "/_next", "/favicon.ico", "/robots.txt", "/sitemap.xml", "/og-image.png", "/"]
 
@@ -300,12 +345,20 @@ export default async function middleware(request: NextRequest) {
       const url = request.nextUrl.clone()
       url.pathname = `/site/${slug}${pathname === "/" ? "" : pathname}`
       url.search = request.nextUrl.search
-      return NextResponse.rewrite(url)
+      const nonce = randomBytes(16).toString("base64url")
+      const csp = buildCspHeader(nonce)
+      const requestHeaders = new Headers(request.headers)
+      requestHeaders.set("x-nonce", nonce)
+      const rewrite = NextResponse.rewrite(url, {
+        request: { headers: requestHeaders },
+      })
+      rewrite.headers.set("Content-Security-Policy", csp)
+      return rewrite
     }
   }
 
   if (isPublicRoute(pathname)) {
-    return NextResponse.next()
+    return nextWithCsp(request)
   }
 
   const accessToken = findSupabaseAccessToken(request)
@@ -420,7 +473,10 @@ export default async function middleware(request: NextRequest) {
     cacheSet(themeCache, auth.tenantId, encoded, THEME_TTL_MS)
   }
 
-  const response = NextResponse.next()
+  // Build the response with the nonce'd CSP BEFORE cookies are attached —
+  // the nonce must be in the request headers so Next.js tags its own inline
+  // framework scripts, and the response CSP header enforces it in the browser.
+  const response = nextWithCsp(request)
 
   // Pass auth context via cookies so route handlers can read them reliably.
   // Using request headers via NextResponse.next({ request: { headers } })

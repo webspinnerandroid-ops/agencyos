@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createVideoAsset, listMediaAssets } from "@/lib/media/flux";
 import { getTenantId, getRole } from "@/lib/auth";
+import { rateLimitRequest } from "@/lib/rate-limit";
 import { checkTrialContentLimit } from "@/lib/trial-limits";
 import { checkUsageLimit } from "@/lib/plan-limits";
 import { checkTokenBalance } from "@/lib/token-billing";
@@ -49,6 +50,18 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
+    // Rate limit (abuse protection — each generation runs a paid video model).
+    const rl = rateLimitRequest(request, "generate-video", 6);
+    if (!rl.allowed) {
+      return NextResponse.json(
+        { error: `Rate limit exceeded. Try again in ${rl.retryAfterSeconds}s.` },
+        {
+          status: 429,
+          headers: { "Retry-After": String(rl.retryAfterSeconds) },
+        }
+      );
+    }
+
     const tenantId = await getTenantId();
 
     // Trial tenants: one video per week. Paid plans: monthly per-tier cap.

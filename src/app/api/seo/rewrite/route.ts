@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getTenantId } from "@/lib/auth";
 import { getCurrentWorkspaceId } from "@/lib/workspace";
 import { createServiceClient } from "@/lib/supabase/server";
+import { rateLimitRequest } from "@/lib/rate-limit";
 import { rewriteToPassGate } from "@/lib/seo/rewriter";
 import { buildWpSeoMeta, schemaPreview } from "@/lib/seo/wp-seo-meta";
 
@@ -16,6 +17,18 @@ import { buildWpSeoMeta, schemaPreview } from "@/lib/seo/wp-seo-meta";
  */
 export async function POST(request: NextRequest) {
   try {
+    // Rate limit (abuse protection — each rewrite runs multiple LLM passes).
+    const rl = rateLimitRequest(request, "seo-rewrite", 10);
+    if (!rl.allowed) {
+      return NextResponse.json(
+        { error: `Rate limit exceeded. Try again in ${rl.retryAfterSeconds}s.` },
+        {
+          status: 429,
+          headers: { "Retry-After": String(rl.retryAfterSeconds) },
+        }
+      );
+    }
+
     const tenantId = await getTenantId();
     const workspaceId = await getCurrentWorkspaceId();
     const supabase = await createServiceClient();

@@ -116,12 +116,18 @@ const organizationJsonLd = {
   },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
   const gaId = process.env.NEXT_PUBLIC_GA_ID;
+
+  // The proxy generates a fresh nonce per request (strict CSP). Reading it
+  // here lets Next.js auto-tag its framework scripts and lets the gtag config
+  // script below match the same nonce — no 'unsafe-inline' needed.
+  const { headers } = await import("next/headers");
+  const nonce = (await headers()).get("x-nonce") ?? undefined;
 
   return (
     <html
@@ -134,14 +140,20 @@ export default function RootLayout({
         <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="mobile-web-app-capable" content="yes" />
+        {/* JSON-LD is a non-executable data block — exempt from script-src. */}
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(organizationJsonLd) }}
         />
         {gaId && (
           <>
-            <script async src={`https://www.googletagmanager.com/gtag/js?id=${gaId}`} />
             <script
+              async
+              src={`https://www.googletagmanager.com/gtag/js?id=${gaId}`}
+              nonce={nonce}
+            />
+            <script
+              nonce={nonce}
               dangerouslySetInnerHTML={{
                 __html: `
                   window.dataLayer = window.dataLayer || [];

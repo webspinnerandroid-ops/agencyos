@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getTenantId } from "@/lib/auth";
+import { getTenantId, requireRole } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import { slugify, type CmsBlock } from "@/lib/cms";
 
@@ -28,6 +28,8 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
+    // Agency staff only — a client-role user must not edit/publish site pages.
+    await requireRole("agency_editor");
     const { id } = await params;
     const tenantId = await getTenantId();
     const supabase = await createServiceClient();
@@ -66,6 +68,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
 export async function DELETE(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
+    await requireRole("agency_editor");
     const { id } = await params;
     const tenantId = await getTenantId();
     const supabase = await createServiceClient();

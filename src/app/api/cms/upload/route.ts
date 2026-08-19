@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getTenantId } from "@/lib/auth";
+import { getTenantId, requireRole } from "@/lib/auth";
 import { uploadStoredFile } from "@/lib/media/storage";
 
 /**
@@ -9,6 +9,8 @@ import { uploadStoredFile } from "@/lib/media/storage";
  */
 export async function POST(request: NextRequest) {
   try {
+    // Agency staff only — clients reviewing content must not upload to the site.
+    await requireRole("agency_editor");
     const tenantId = await getTenantId();
     if (!tenantId) {
       return NextResponse.json({ error: "Authentication required" }, { status: 401 });

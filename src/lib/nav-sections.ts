@@ -1,49 +1,69 @@
 import type { NavSection } from "@/components/NavDropdown";
 
 /**
- * The dashboard navigation, grouped into logical sections and ordered by
- * workflow: Work = what you create and publish today; Plan = strategy,
- * campaigns and outreach; Manage = setup, account and administration.
+ * The dashboard navigation, grouped into logical hubs and ordered by
+ * workflow:
+ *   Create   — everything you produce (AI team, content, images, videos)
+ *   Manage   — clients and day-to-day content operations (posts, calendar)
+ *   SEO      — the full SEO pipeline: audits, sites, campaigns, outreach
+ *   Grow     — measurement and growth tooling (analytics, assets)
+ *   Platform — account, configuration and help
+ *   Admin    — super-admin-only platform controls
  * Shared by the dashboard layout and the Help page header (so a logged-in
- * user can jump straight back to wherever they were).
+ * user can jump straight back to wherever they were). Tenants can override
+ * this default entirely via the Menu Builder (nav_config).
  */
 export function buildNavSections(isSuperAdmin: boolean): NavSection[] {
   return [
     {
-      label: "Work",
+      label: "Create",
       items: [
         { href: "/dashboard", label: "Home" },
         { href: "/dashboard/ai-team", label: "AI Team" },
         { href: "/dashboard/generate", label: "Generate" },
         { href: "/dashboard/generate-images", label: "Images" },
-        { href: "/dashboard/brand-design", label: "Brand Design" },
         { href: "/dashboard/generate-videos", label: "Videos" },
-        { href: "/dashboard/assets", label: "Asset Library" },
-        { href: "/dashboard/posts", label: "Posts" },
-        { href: "/dashboard/calendar", label: "Calendar" },
-        { href: "/dashboard/analytics", label: "Analytics" },
-      ],
-    },
-    {
-      label: "Plan",
-      items: [
-        { href: "/dashboard/seo", label: "SEO Audits" },
-        { href: "/dashboard/seo/campaigns", label: "Campaigns" },
-        { href: "/dashboard/seo/audit-links", label: "Audit Share Links" },
-        { href: "/dashboard/cms", label: "Website" },
-        { href: "/dashboard/seo/outreach", label: "Outreach" },
-        { href: "/dashboard/seo/opportunities", label: "Opportunities" },
+        { href: "/dashboard/brand-design", label: "Brand Design" },
       ],
     },
     {
       label: "Manage",
       items: [
+        { href: "/dashboard/clients", label: "Clients" },
+        { href: "/dashboard/posts", label: "Posts" },
+        { href: "/dashboard/calendar", label: "Calendar" },
         { href: "/dashboard/workspaces", label: "Workspaces" },
+        { href: "/dashboard/cms", label: "Website" },
+      ],
+    },
+    {
+      label: "SEO",
+      items: [
+        { href: "/dashboard/seo", label: "SEO Audits" },
+        { href: "/dashboard/seo/sites", label: "Sites" },
+        { href: "/dashboard/seo/analyzer", label: "Analyzer" },
+        { href: "/dashboard/seo/audit-links", label: "Audit Share Links" },
+        { href: "/dashboard/seo/campaigns", label: "Campaigns" },
+        { href: "/dashboard/seo/rewriter", label: "Rewriter" },
+        { href: "/dashboard/seo/opportunities", label: "Opportunities" },
+        { href: "/dashboard/seo/outreach", label: "Outreach" },
+      ],
+    },
+    {
+      label: "Grow",
+      items: [
+        { href: "/dashboard/analytics", label: "Analytics" },
+        { href: "/dashboard/assets", label: "Asset Library" },
         { href: "/dashboard/connections", label: "Connections" },
+      ],
+    },
+    {
+      label: "Platform",
+      items: [
         { href: "/dashboard/profile", label: "Profile & Usage" },
+        { href: "/dashboard/billing", label: "Billing" },
         { href: "/dashboard/settings/ai", label: "AI" },
         { href: "/dashboard/settings", label: "Settings" },
-        { href: "/dashboard/billing", label: "Billing" },
         { href: "/help", label: "Help" },
       ],
     },

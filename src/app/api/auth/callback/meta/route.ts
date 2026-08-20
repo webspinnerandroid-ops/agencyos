@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { createServiceClient } from "@/lib/supabase/server";
+import { fetchWithTimeout } from "@/lib/fetch-with-timeout";
 
 export async function GET(request: NextRequest) {
   const url = new URL(request.url);
@@ -11,11 +12,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(new URL("/dashboard/connections?error=oauth_denied", request.url));
   }
 
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { autoRefreshToken: false, persistSession: false } }
-  );
+  const supabase = await createServiceClient();
 
   // Validate OAuth state
   const { data: stateRow, error: stateErr } = await supabase
@@ -34,7 +31,7 @@ export async function GET(request: NextRequest) {
   const redirectUri = `${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/api/auth/callback/meta`;
 
   try {
-    const tokenRes = await fetch(
+    const tokenRes = await fetchWithTimeout(
       `https://graph.facebook.com/v21.0/oauth/access_token?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&client_secret=${appSecret}&code=${code}`
     );
     const tokenData = await tokenRes.json();
@@ -45,7 +42,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Get user info
-    const meRes = await fetch(`https://graph.facebook.com/me?access_token=${tokenData.access_token}`);
+    const meRes = await fetchWithTimeout(`https://graph.facebook.com/me?access_token=${tokenData.access_token}`);
     const meData = await meRes.json();
 
     const accountName = meData.name ?? "Facebook Page";

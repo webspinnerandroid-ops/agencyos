@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantId, getUserId } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
+import { fetchWithTimeout } from "@/lib/fetch-with-timeout";
 
 /**
  * Super-admin model registry.
@@ -73,7 +74,7 @@ export async function POST(request: NextRequest) {
         .eq("provider.name", "fal.ai");
       const checked: { model_identifier: string; exists: boolean }[] = [];
       for (const m of (data ?? []) as any[]) {
-        const res = await fetch(`https://fal.ai/models/${m.model_identifier}`, { method: "HEAD" });
+        const res = await fetchWithTimeout(`https://fal.ai/models/${m.model_identifier}`, { method: "HEAD" }, 10_000);
         const exists = res.status === 200;
         await supabase
           .from("ai_models")

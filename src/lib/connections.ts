@@ -10,6 +10,7 @@
  * stored refresh token when needed.
  */
 import { decrypt, encrypt } from "@/lib/encryption";
+import { fetchWithTimeout } from "@/lib/fetch-with-timeout";
 
 export type ConnectionProvider =
   | "google_analytics"
@@ -100,7 +101,7 @@ export function decodeTokenBundle(encrypted: string): TokenBundle {
 }
 
 async function tokenExchange(body: URLSearchParams): Promise<TokenBundle> {
-  const res = await fetch("https://oauth2.googleapis.com/token", {
+  const res = await fetchWithTimeout("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,

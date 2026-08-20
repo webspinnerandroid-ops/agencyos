@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { createServiceClient } from "@/lib/supabase/server";
+import { fetchWithTimeout } from "@/lib/fetch-with-timeout";
 
 export async function GET(request: NextRequest) {
   const url = new URL(request.url);
@@ -11,11 +12,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(new URL("/dashboard/connections?error=oauth_denied", request.url));
   }
 
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { autoRefreshToken: false, persistSession: false } }
-  );
+  const supabase = await createServiceClient();
 
   const { data: stateRow, error: stateErr } = await supabase
     .from("oauth_states")
@@ -32,7 +29,7 @@ export async function GET(request: NextRequest) {
     const clientSecret = process.env.TWITTER_CLIENT_SECRET!;
     const redirectUri = `${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/api/auth/callback/twitter`;
 
-    const tokenRes = await fetch("https://api.twitter.com/2/oauth2/token", {
+    const tokenRes = await fetchWithTimeout("https://api.twitter.com/2/oauth2/token", {
       method: "POST",
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
@@ -54,7 +51,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Get user info
-    const meRes = await fetch("https://api.twitter.com/2/users/me", {
+    const meRes = await fetchWithTimeout("https://api.twitter.com/2/users/me", {
       headers: { Authorization: `Bearer ${tokenData.access_token}` },
     });
     const meData = await meRes.json();

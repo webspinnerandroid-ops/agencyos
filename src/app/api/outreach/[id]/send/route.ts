@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantId } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
+import { fetchWithTimeout } from "@/lib/fetch-with-timeout";
 
 /**
  * POST /api/outreach/[id]/send
@@ -57,7 +58,7 @@ export async function POST(
     const body = target.pitch.replace(/^Subject:\s*.+$/im, "").trim();
 
     const fromEmail = process.env.RESEND_FROM_EMAIL ?? "agency@updates.yourdomain.com";
-    const res = await fetch("https://api.resend.com/emails", {
+    const res = await fetchWithTimeout("https://api.resend.com/emails", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

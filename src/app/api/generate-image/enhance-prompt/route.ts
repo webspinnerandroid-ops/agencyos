@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantId } from "@/lib/auth";
+import { fetchWithTimeout } from "@/lib/fetch-with-timeout";
 
 /**
  * POST /api/generate-image/enhance-prompt
@@ -37,7 +38,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Call DeepSeek chat completions API
-    const deepseekRes = await fetch("https://api.deepseek.com/chat/completions", {
+    const deepseekRes = await fetchWithTimeout("https://api.deepseek.com/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

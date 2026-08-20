@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { rateLimitRequest } from "@/lib/rate-limit";
 import { isDisposableEmail } from "@/lib/disposable-email";
+import { fetchWithTimeout } from "@/lib/fetch-with-timeout";
 
 /**
  * POST /api/auth/resend-confirmation
@@ -65,7 +66,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Email delivery is not configured yet." }, { status: 500 });
     }
     const fromEmail = process.env.RESEND_FROM_EMAIL ?? "agency@updates.yourdomain.com";
-    await fetch("https://api.resend.com/emails", {
+    await fetchWithTimeout("https://api.resend.com/emails", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
       body: JSON.stringify({

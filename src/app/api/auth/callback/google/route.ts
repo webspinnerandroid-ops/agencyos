@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { createServiceClient } from "@/lib/supabase/server";
+import { fetchWithTimeout } from "@/lib/fetch-with-timeout";
 import {
   exchangeGoogleCode,
   encodeTokenBundle,
@@ -17,11 +18,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(`${siteUrl()}/dashboard/connections?error=oauth_denied`);
   }
 
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { autoRefreshToken: false, persistSession: false } }
-  );
+  const supabase = await createServiceClient();
 
   const { data: stateRow, error: stateErr } = await supabase
     .from("oauth_states")
@@ -40,7 +37,7 @@ export async function GET(request: NextRequest) {
     // call fails so a connection is never blocked on it).
     let meData: { name?: string; email?: string } = {};
     try {
-      const meRes = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+      const meRes = await fetchWithTimeout("https://www.googleapis.com/oauth2/v2/userinfo", {
         headers: { Authorization: `Bearer ${tokens.access_token}` },
       });
       if (meRes.ok) meData = (await meRes.json()) as { name?: string; email?: string };

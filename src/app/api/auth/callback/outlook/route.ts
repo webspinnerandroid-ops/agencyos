@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { createServiceClient } from "@/lib/supabase/server";
+import { fetchWithTimeout } from "@/lib/fetch-with-timeout";
 
 export async function GET(request: NextRequest) {
   const url = new URL(request.url);
@@ -13,11 +14,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { autoRefreshToken: false, persistSession: false } }
-  );
+  const supabase = await createServiceClient();
 
   const { data: stateRow, error: stateErr } = await supabase
     .from("oauth_states")
@@ -40,7 +37,7 @@ export async function GET(request: NextRequest) {
       throw new Error("Missing OUTLOOK_CLIENT_ID or OUTLOOK_CLIENT_SECRET environment variables");
     }
 
-    const tokenRes = await fetch(
+    const tokenRes = await fetchWithTimeout(
       "https://login.microsoftonline.com/common/oauth2/v2.0/token",
       {
         method: "POST",
@@ -65,7 +62,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Get user info from Microsoft Graph
-    const meRes = await fetch("https://graph.microsoft.com/v1.0/me", {
+    const meRes = await fetchWithTimeout("https://graph.microsoft.com/v1.0/me", {
       headers: { Authorization: `Bearer ${tokenData.access_token}` },
     });
     const meData = await meRes.json();

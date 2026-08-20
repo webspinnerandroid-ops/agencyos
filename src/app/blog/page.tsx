@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { createClient } from "@supabase/supabase-js";
 import PublicHeader from "@/components/PublicHeader";
+import { fetchWithTimeout } from "@/lib/supabase/server";
 import { formatShortDate } from "@/lib/post-preview";
 import {
   siteScoreBadgeClass,
@@ -20,7 +21,10 @@ export default async function BlogArchivePage() {
     const db = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!,
-      { auth: { autoRefreshToken: false, persistSession: false } }
+      {
+        auth: { autoRefreshToken: false, persistSession: false },
+        global: { fetch: fetchWithTimeout },
+      }
     );
     const { data } = await db
       .from("site_blog_posts")

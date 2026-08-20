@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { getTenantId } from "@/lib/auth";
+import { fetchWithTimeout } from "@/lib/supabase/server";
 import { getCurrentWorkspaceId } from "@/lib/workspace";
 import { UsageBanner } from "./usage-banner";
 import { DashboardRecents } from "./dashboard-recents";
@@ -23,7 +24,10 @@ export default async function DashboardPage({ searchParams }: { searchParams?: P
   const db = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { autoRefreshToken: false, persistSession: false } }
+    {
+      auth: { autoRefreshToken: false, persistSession: false },
+      global: { fetch: fetchWithTimeout },
+    }
   );
 
   const clientsQuery = tenantId

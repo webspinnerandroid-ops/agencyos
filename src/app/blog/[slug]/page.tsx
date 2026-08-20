@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
 import PublicHeader from "@/components/PublicHeader";
+import { fetchWithTimeout } from "@/lib/supabase/server";
 import { renderBlogBody } from "@/lib/blog-render";
 import { formatShortDate } from "@/lib/post-preview";
 import {
@@ -26,7 +27,10 @@ export default async function BlogPostPage({
     const db = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!,
-      { auth: { autoRefreshToken: false, persistSession: false } }
+      {
+        auth: { autoRefreshToken: false, persistSession: false },
+        global: { fetch: fetchWithTimeout },
+      }
     );
     const { data } = await db
       .from("site_blog_posts")

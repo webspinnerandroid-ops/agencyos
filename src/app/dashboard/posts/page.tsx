@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { getTenantId } from "@/lib/auth";
+import { fetchWithTimeout } from "@/lib/supabase/server";
 import PostsList from "./posts-list";
 import type { PostRow } from "@/lib/post-preview";
 
@@ -11,7 +12,10 @@ export default async function AllPostsPage() {
   const db = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { autoRefreshToken: false, persistSession: false } }
+    {
+      auth: { autoRefreshToken: false, persistSession: false },
+      global: { fetch: fetchWithTimeout },
+    }
   );
 
   // Lightweight query — only real columns, never JSON-path projections into

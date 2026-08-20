@@ -442,24 +442,13 @@ export default async function middleware(request: NextRequest) {
     // (user_id, tenant_id)). Resolve the active team: prefer the tenant
     // already stored in the x-tenant-id cookie when the user still has a role
     // there (multi-team users stay in their chosen team across requests), and
-    // otherwise fall back to the most recently added role.
-    let { data: userRoles } = await dbClient
+    // otherwise fall back to the first role. No ordering dependency here so
+    // auth works whether or not the migration has landed.
+    const { data: userRoles } = await dbClient
       .from("user_roles")
       .select("tenant_id, role, client_id")
       .eq("user_id", userId)
-      .order("created_at", { ascending: false })
       .limit(50)
-    if (!userRoles) {
-      // Migration 093 (user_roles.created_at) may not be applied yet — the
-      // ordered query then errors. Fall back to an unordered fetch so auth
-      // still resolves before the migration lands.
-      const fb = await dbClient
-        .from("user_roles")
-        .select("tenant_id, role, client_id")
-        .eq("user_id", userId)
-        .limit(50)
-      userRoles = fb.data
-    }
 
     if (!userRoles || userRoles.length === 0) {
       cacheSet(authCache, accessToken, null, AUTH_TTL_MS)

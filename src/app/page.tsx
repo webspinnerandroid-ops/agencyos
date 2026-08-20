@@ -1,8 +1,7 @@
 import Link from "next/link";
 import { createClient } from "@supabase/supabase-js";
 import { Button } from "@/components/ui/button";
-import MobileNav from "@/components/MobileNav";
-import ThemeToggle from "@/components/ThemeToggle";
+import PublicHeader from "@/components/PublicHeader";
 import InstallPromptBanner from "@/components/InstallPromptBanner";
 import ScreenshotSlideshow from "@/components/ScreenshotSlideshow";
 import { Check, ArrowRight, Zap, Users, Globe, Shield, Brain, Calendar } from "lucide-react";
@@ -77,18 +76,6 @@ const productSlides = [
   },
 ];
 
-const landingNavSections = [
-  {
-    label: "Menu",
-    items: [
-      { href: "#features", label: "Features" },
-      { href: "#how-it-works", label: "How it works" },
-      { href: "#pricing", label: "Pricing" },
-      { href: "#faq", label: "FAQ" },
-    ],
-  },
-];
-
 // Icons for the features grid — cycled when the super admin adds more than six.
 const featureIcons = [Brain, Globe, Calendar, Shield, Zap, Users];
 
@@ -96,55 +83,10 @@ export default async function LandingPage() {
   const hero = await getHeroMedia();
   const content = await getLandingContent();
 
-  const navSections = content.navLinks.length
-    ? [
-        ...landingNavSections,
-        { label: "Pages", items: content.navLinks.map((l) => ({ href: l.href, label: l.label })) },
-      ]
-    : landingNavSections;
-
   return (
     <div className="min-h-screen bg-background">
       <InstallPromptBanner />
-      {/* Nav */}
-      <header className="border-b">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex items-center justify-between h-16">
-          <div className="flex items-center gap-2 min-w-0">
-            {process.env.NEXT_PUBLIC_BRAND_LOGO_URL ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={process.env.NEXT_PUBLIC_BRAND_LOGO_URL}
-                alt="Agency OS"
-                className="h-9 w-auto object-contain"
-              />
-            ) : (
-              <>
-                <Brain className="size-6 text-primary shrink-0" />
-                <span className="text-xl font-bold tracking-tight whitespace-nowrap">Agency OS</span>
-              </>
-            )}
-          </div>
-          <div className="hidden sm:flex items-center gap-4">
-            <a href="#features" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Features</a>
-            <a href="#how-it-works" className="text-sm text-muted-foreground hover:text-foreground transition-colors">How it works</a>
-            <a href="#pricing" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Pricing</a>
-            <a href="#faq" className="text-sm text-muted-foreground hover:text-foreground transition-colors">FAQ</a>
-            {content.navLinks.map((l) => (
-              <a key={l.href} href={l.href} className="text-sm text-muted-foreground hover:text-foreground transition-colors">{l.label}</a>
-            ))}
-          </div>
-          <div className="flex items-center gap-2 sm:gap-4">
-            <div className="sm:hidden">
-              <MobileNav sections={navSections} breakpointClass="sm:hidden" />
-            </div>
-            <ThemeToggle />
-            <Link href="/login"><Button variant="ghost" size="sm">Sign In</Button></Link>
-            {/* Get Started stays in the hero on mobile — hiding it here keeps
-                the header to one line so the menu button stays tappable. */}
-            <Link href="/register" className="hidden sm:inline-flex"><Button size="sm">Get Started <ArrowRight className="size-4 ml-2" /></Button></Link>
-          </div>
-        </div>
-      </header>
+      <PublicHeader />
 
       {/* Hero */}
       <section className="py-20 lg:py-32">

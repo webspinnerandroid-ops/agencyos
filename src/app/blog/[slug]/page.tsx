@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { createClient } from "@supabase/supabase-js";
+import PublicHeader from "@/components/PublicHeader";
 import { renderBlogBody } from "@/lib/blog-render";
 import { formatShortDate } from "@/lib/post-preview";
 import {
@@ -41,16 +42,7 @@ export default async function BlogPostPage({
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="border-b">
-        <div className="max-w-3xl mx-auto px-4 py-4 flex items-center gap-4">
-          <Link href="/" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-            ← Back to home
-          </Link>
-          <Link href="/blog" className="text-sm text-muted-foreground hover:text-foreground transition-colors ml-auto">
-            All posts
-          </Link>
-        </div>
-      </header>
+      <PublicHeader />
       <main className="max-w-3xl mx-auto px-4 py-12">
         <div className="flex items-center gap-3 mb-3">
           <div className="text-sm text-muted-foreground">

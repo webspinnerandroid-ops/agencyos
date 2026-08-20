@@ -7,10 +7,11 @@ import { randomBytes } from "crypto";
 
 /**
  * Team-member invitation lives in its own module because it performs an
- * admin-wide cross-tenant check: it reads user_roles by primary key (user_id)
- * to refuse hijacking a user who already belongs to another team. That lookup
- * is intentionally outside the actor's tenant scope (super_admin / agency_admin
- * manage the whole team), so this file is allowlisted in
+ * admin-wide cross-tenant lookup: it reads auth users and user_roles outside
+ * the actor's tenant scope (super_admin / agency_admin manage the whole
+ * team). Users may belong to multiple teams (user_roles PK is
+ * (user_id, tenant_id)), so inviting someone who already has a role elsewhere
+ * simply grants an additional role here. This file is allowlisted in
  * scripts/audit-tenant-scope.cjs rather than weakening the per-tenant guard.
  */
 
@@ -97,21 +98,16 @@ export async function inviteTeamMember(
       userId = created.user.id;
     }
 
-    // A user belongs to exactly one tenant (user_roles.user_id is the PK).
-    // This by-PK lookup is intentionally cross-tenant: it refuses to move a
-    // user who already belongs to a different team.
-    const { data: existingRole } = await supabase
-      .from("user_roles")
-      .select("tenant_id")
-      .eq("user_id", userId)
-      .maybeSingle();
-    if (existingRole && existingRole.tenant_id !== tenantId) {
-      throw new Error("That user already belongs to another team.");
-    }
-
+    // Users may belong to several teams (user_roles PK is (user_id, tenant_id)),
+    // so a person who already has a role elsewhere is simply granted a role
+    // here too — never refused, never moved. Their other team memberships stay
+    // untouched.
     const { error: roleErr } = await supabase
       .from("user_roles")
-      .upsert({ user_id: userId, tenant_id: tenantId, role }, { onConflict: "user_id" });
+      .upsert(
+        { user_id: userId, tenant_id: tenantId, role },
+        { onConflict: "user_id,tenant_id" }
+      );
     if (roleErr) throw new Error(roleErr.message);
 
     const actorId = await getUserId();

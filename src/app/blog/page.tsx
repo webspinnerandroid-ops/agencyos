@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { createClient } from "@supabase/supabase-js";
+import PublicHeader from "@/components/PublicHeader";
 import { formatShortDate } from "@/lib/post-preview";
 import {
   siteScoreBadgeClass,
@@ -33,14 +34,7 @@ export default async function BlogArchivePage() {
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="border-b">
-        <div className="max-w-5xl mx-auto px-4 py-4 flex items-center gap-4">
-          <Link href="/" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-            ← Back to home
-          </Link>
-          <span className="text-sm font-semibold ml-auto">Blog</span>
-        </div>
-      </header>
+      <PublicHeader />
       <main className="max-w-5xl mx-auto px-4 py-12">
         <h1 className="text-3xl font-bold tracking-tight mb-2">Blog</h1>
         <p className="text-muted-foreground mb-10">

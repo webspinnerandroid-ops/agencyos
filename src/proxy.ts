@@ -2,7 +2,7 @@ import { type NextRequest, NextResponse } from "next/server"
 import { randomBytes } from "crypto"
 import { createClient } from "@supabase/supabase-js"
 import { getTenantThemeSafe, encodeTenantTheme } from "@/lib/tenant"
-import { signAuthValue } from "@/lib/auth-signature"
+import { signAuthValue, verifyAuthValue } from "@/lib/auth-signature"
 
 /**
  * Build the strict Content-Security-Policy with a per-request nonce.
@@ -438,17 +438,43 @@ export default async function middleware(request: NextRequest) {
       )
     }
 
-    const { data: userRole } = await dbClient
+    // A user may belong to several teams now (user_roles PK is
+    // (user_id, tenant_id)). Resolve the active team: prefer the tenant
+    // already stored in the x-tenant-id cookie when the user still has a role
+    // there (multi-team users stay in their chosen team across requests), and
+    // otherwise fall back to the most recently added role.
+    let { data: userRoles } = await dbClient
       .from("user_roles")
       .select("tenant_id, role, client_id")
       .eq("user_id", userId)
-      .single()
+      .order("created_at", { ascending: false })
+      .limit(50)
+    if (!userRoles) {
+      // Migration 093 (user_roles.created_at) may not be applied yet — the
+      // ordered query then errors. Fall back to an unordered fetch so auth
+      // still resolves before the migration lands.
+      const fb = await dbClient
+        .from("user_roles")
+        .select("tenant_id, role, client_id")
+        .eq("user_id", userId)
+        .limit(50)
+      userRoles = fb.data
+    }
 
-    if (!userRole) {
+    if (!userRoles || userRoles.length === 0) {
       cacheSet(authCache, accessToken, null, AUTH_TTL_MS)
       const pendingUrl = request.nextUrl.clone()
       pendingUrl.pathname = "/pending-approval"
       return NextResponse.redirect(pendingUrl)
+    }
+
+    let userRole = userRoles[0]
+    if (userRoles.length > 1) {
+      const cookieTenant = verifyAuthValue(
+        request.cookies.get("x-tenant-id")?.value ?? ""
+      )
+      const match = userRoles.find((r) => r.tenant_id === cookieTenant)
+      if (match) userRole = match
     }
 
     auth = {

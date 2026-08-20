@@ -119,4 +119,14 @@
   body {
     @apply bg-background text-foreground;
   }
+  /* Theme the <html> element itself so there is never a white flash behind
+     the body while a page loads or between navigations. --background flips
+     with the .dark class; the pre-paint script in layout.tsx applies it. */
+  html {
+    background-color: var(--background);
+    color-scheme: light;
+  }
+  html.dark {
+    color-scheme: dark;
+  }
 }

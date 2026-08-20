@@ -113,14 +113,26 @@ export async function GET(request: NextRequest) {
     // so they stop shadowing the current session.
     // Also resolve the caller's role (best-effort) so client components can
     // gate super-admin-only options (e.g. the Site Blog publish target).
+    // A user may belong to several teams; surface the highest-privilege role
+    // so client-side super-admin gating (e.g. the Site Blog publish target)
+    // still works for someone who is a super admin in any team.
     let role: string | null = null;
     try {
-      const { data: userRole } = await supabaseAdmin
+      const { data: userRoles } = await supabaseAdmin
         .from("user_roles")
         .select("role")
         .eq("user_id", user.id)
-        .maybeSingle();
-      role = userRole?.role ?? null;
+        .limit(50);
+      const roles = new Set((userRoles ?? []).map((r) => r.role));
+      role = roles.has("super_admin")
+        ? "super_admin"
+        : roles.has("agency_admin")
+          ? "agency_admin"
+          : roles.has("agency_editor")
+            ? "agency_editor"
+            : roles.has("client")
+              ? "client"
+              : null;
     } catch {
       role = null;
     }

@@ -130,8 +130,13 @@ export default async function RootLayout({
   const nonce = (await headers()).get("x-nonce") ?? undefined;
 
   return (
+    // suppressHydrationWarning: the pre-paint theme script toggles .dark on
+    // <html> before React hydrates, so the class always differs from the
+    // server-rendered value for dark-mode users. That difference is
+    // intentional and cosmetic — see next-themes for the same pattern.
     <html
       lang="en"
+      suppressHydrationWarning
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased overflow-x-clip`}
     >
       <head>
@@ -145,6 +150,16 @@ export default async function RootLayout({
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(organizationJsonLd) }}
         />
+        {/* Apply the persisted theme BEFORE first paint so navigating between
+            pages never flashes white — the ThemeInit effect runs after paint.
+            Mirrors ThemeInit: localStorage, else system preference. */}
+        <script
+          nonce={nonce}
+          suppressHydrationWarning
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var t=localStorage.getItem("theme");var d=t?t==="dark":window.matchMedia("(prefers-color-scheme: dark)").matches;document.documentElement.classList.toggle("dark",d);}catch(e){}})();`,
+          }}
+        />
         {gaId && (
           <>
             <script
@@ -154,6 +169,7 @@ export default async function RootLayout({
             />
             <script
               nonce={nonce}
+              suppressHydrationWarning
               dangerouslySetInnerHTML={{
                 __html: `
                   window.dataLayer = window.dataLayer || [];

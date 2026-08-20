@@ -7,6 +7,7 @@ import InstallPromptBanner from "@/components/InstallPromptBanner";
 import ScreenshotSlideshow from "@/components/ScreenshotSlideshow";
 import { Check, ArrowRight, Zap, Users, Globe, Shield, Brain, Calendar } from "lucide-react";
 import { getLandingContent } from "@/lib/landing-content-server";
+import { fetchWithTimeout } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
@@ -19,7 +20,10 @@ async function getHeroMedia(): Promise<{ mode: string; videoUrl: string }> {
     const db = createClient(
       process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.SUPABASE_SERVICE_ROLE_KEY!,
-      { auth: { autoRefreshToken: false, persistSession: false } }
+      {
+        auth: { autoRefreshToken: false, persistSession: false },
+        global: { fetch: fetchWithTimeout },
+      }
     );
     const { data } = await db
       .from("site_settings")

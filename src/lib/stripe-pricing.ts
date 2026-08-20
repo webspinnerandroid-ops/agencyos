@@ -19,7 +19,13 @@ let _stripe: Stripe | null | undefined;
 function getStripe(): Stripe | null {
   if (_stripe === undefined) {
     _stripe = process.env.STRIPE_SECRET_KEY
-      ? new Stripe(process.env.STRIPE_SECRET_KEY)
+      ? new Stripe(process.env.STRIPE_SECRET_KEY, {
+          // Hard cap so a flaky outbound link can't stall the public landing
+          // page for the SDK's default 80s per call — fall back to the stored
+          // display price instead. 5s is plenty for a normal API round-trip.
+          timeout: 5000,
+          maxNetworkRetries: 0,
+        })
       : null;
   }
   return _stripe;

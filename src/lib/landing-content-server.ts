@@ -13,8 +13,28 @@ import { withLivePrices } from "@/lib/stripe-pricing";
  * Lives in its own module so the client-safe landing-content.ts (imported by
  * the page-builder client component) never pulls in the server-only Supabase
  * client.
+ *
+ * The public page is force-dynamic, so without a cache every visit would hit
+ * Stripe's live API. A short-TTL module cache serves the last-known content
+ * (prices included) instantly between refreshes, and keeps the page render
+ * fast even while Stripe is briefly unreachable — the 5s Stripe timeout only
+ * fires once per TTL window instead of once per request.
  */
+const CONTENT_TTL_MS = 60_000;
+
+let cached: { at: number; content: LandingContent } | null = null;
+
+/** Drop the cached landing content (called after the builder saves). */
+export function bustLandingContentCache(): void {
+  cached = null;
+}
+
 export async function getLandingContent(): Promise<LandingContent> {
+  if (cached && Date.now() - cached.at < CONTENT_TTL_MS) {
+    return cached.content;
+  }
+
+  let content: LandingContent;
   try {
     const supabase = await createServiceClient();
     const { data } = await supabase
@@ -27,11 +47,14 @@ export async function getLandingContent(): Promise<LandingContent> {
     // never drift from what checkout actually charges. Falls back to the
     // stored copy when Stripe is unreachable or a product is missing.
     try {
-      return await withLivePrices(merged);
+      content = await withLivePrices(merged);
     } catch {
-      return merged;
+      content = merged;
     }
   } catch {
-    return DEFAULT_LANDING_CONTENT;
+    content = DEFAULT_LANDING_CONTENT;
   }
+
+  cached = { at: Date.now(), content };
+  return content;
 }

@@ -6,6 +6,7 @@ import {
   mergeLandingContent,
   type LandingContent,
 } from "@/lib/landing-content";
+import { bustLandingContentCache } from "@/lib/landing-content-server";
 import {
   bustPricingCache,
   formatCentsAsDollars,
@@ -194,6 +195,7 @@ export async function POST(request: NextRequest) {
     if (error) throw new Error(error.message);
 
     bustPricingCache();
+    bustLandingContentCache();
     const [enriched, pricing] = await Promise.all([
       withLivePrices(next),
       getPricingStatus(next),

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getRole } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import { mergeLandingContent } from "@/lib/landing-content";
+import { bustLandingContentCache } from "@/lib/landing-content-server";
 import { getPricingStatus, withLivePrices } from "@/lib/stripe-pricing";
 
 /**
@@ -89,6 +90,10 @@ export async function PUT(request: NextRequest) {
       })
       .eq("id", 1);
     if (error) throw new Error(error.message);
+
+    // The public page caches content for 60s — drop it so the save is visible
+    // immediately.
+    bustLandingContentCache();
 
     return NextResponse.json({ success: true, content: safe });
   } catch (err) {

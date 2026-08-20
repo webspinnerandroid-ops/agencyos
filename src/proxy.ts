@@ -5,6 +5,24 @@ import { getTenantThemeSafe, encodeTenantTheme } from "@/lib/tenant"
 import { signAuthValue, verifyAuthValue } from "@/lib/auth-signature"
 
 /**
+ * Bound fetch for the middleware's own Supabase calls. The middleware runs on
+ * every request (auth verification, tenant resolution), and an untimed fetch
+ * during one of the VPS's outbound blips hangs the whole request pipeline for
+ * the OS TCP timeout (~2 min) — which is what made the app appear wedged
+ * while idle. 10s is generous for a normal Supabase round-trip.
+ */
+function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init?: RequestInit
+): Promise<Response> {
+  const timeout = AbortSignal.timeout(10_000);
+  const signal = init?.signal
+    ? AbortSignal.any([init.signal, timeout])
+    : timeout;
+  return fetch(input, { ...init, signal });
+}
+
+/**
  * Build the strict Content-Security-Policy with a per-request nonce.
  *
  * Inline scripts (JSON-LD data blocks, the gtag config when NEXT_PUBLIC_GA_ID
@@ -331,7 +349,7 @@ export default async function middleware(request: NextRequest) {
       const adminClient = createClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
         process.env.SUPABASE_SERVICE_ROLE_KEY!,
-        { auth: { autoRefreshToken: false, persistSession: false } }
+        { auth: { autoRefreshToken: false, persistSession: false }, global: { fetch: fetchWithTimeout } }
       )
       const { data: mapped } = await adminClient
         .from("site_domains")
@@ -370,7 +388,7 @@ export default async function middleware(request: NextRequest) {
   const supabaseAdmin = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { auth: { autoRefreshToken: false, persistSession: false } }
+    { auth: { autoRefreshToken: false, persistSession: false }, global: { fetch: fetchWithTimeout } }
   )
 
   // Extract the access + refresh tokens from the cookie. Supabase may store
@@ -434,7 +452,7 @@ export default async function middleware(request: NextRequest) {
       dbClient = createClient(
         process.env.NEXT_PUBLIC_SUPABASE_URL!,
         process.env.SUPABASE_SERVICE_ROLE_KEY!,
-        { auth: { autoRefreshToken: false, persistSession: false } }
+        { auth: { autoRefreshToken: false, persistSession: false }, global: { fetch: fetchWithTimeout } }
       )
     }
 

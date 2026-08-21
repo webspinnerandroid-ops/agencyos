@@ -6,6 +6,8 @@ import NavDropdown, { type NavSection } from "@/components/NavDropdown";
 import { getNavSections } from "@/lib/nav-config";
 import ThemeToggle from "@/components/ThemeToggle";
 import NotificationBell from "@/components/NotificationBell";
+import PageBreadcrumbs from "@/components/PageBreadcrumbs";
+import CommandPalette from "@/components/CommandPalette";
 import { getRole, getTenantId, getUserEmail } from "@/lib/auth";
 
 /**
@@ -87,7 +89,11 @@ export default async function DashboardLayout({
           </div>
         </div>
       </header>
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6">{children}</main>
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+        <PageBreadcrumbs />
+        {children}
+      </main>
+      <CommandPalette sections={navSections} />
     </div>
   );
 }

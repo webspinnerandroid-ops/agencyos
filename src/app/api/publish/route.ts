@@ -3,6 +3,7 @@ import { getTenantId, getRole } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import { publishToWordPress } from "@/lib/publishing/wordpressPublisher";
 import { publishPost as publishToSocial } from "@/lib/publishing/socialPublisher";
+import { normalizeScheduledAt } from "@/lib/scheduling";
 import { scoreAeoGeo } from "@/lib/aeo-geo";
 import { getScoreGate } from "@/lib/score-gate";
 import { newBlockId, slugify } from "@/lib/cms";
@@ -57,10 +58,26 @@ export async function POST(request: NextRequest) {
   try {
     const tenantId = await getTenantId();
     const body = await request.json();
-    const { postId, platform, action, scheduledAt, categoryId, force } = body;
+    const { postId, platform, action, scheduledAt, categoryId, force, tzOffsetMinutes } = body;
 
     if (!postId) {
       return NextResponse.json({ error: "postId required" }, { status: 400 });
+    }
+
+    // Normalize a naive datetime-local value ("2026-08-10T14:30") into the
+    // correct UTC instant using the browser's timezone offset. This keeps the
+    // DB row, the calendar, and the Inngest cron (which fires against UTC) in
+    // agreement — previously the server's local time leaked in and scheduled
+    // posts fired hours early/late.
+    const normalizedScheduledAt = normalizeScheduledAt(
+      scheduledAt,
+      typeof tzOffsetMinutes === "number" ? tzOffsetMinutes : null
+    );
+    if (action === "schedule" && !normalizedScheduledAt) {
+      return NextResponse.json(
+        { error: "A valid schedule date is required." },
+        { status: 400 }
+      );
     }
 
     // ---- Score gate (publish/schedule only; drafts are always fine) ----
@@ -300,9 +317,11 @@ export async function POST(request: NextRequest) {
         deriveExcerpt(body, title);
       const now = new Date().toISOString();
       // "draft" mirrors the post into the site blog as a draft (super admin
-      // reviews in /dashboard/admin/blog before going live); publish/schedule
-      // go straight to published. Defaults to published for back-compat.
-      const asDraft = action === "draft";
+      // reviews in /dashboard/admin/blog before going live). "schedule" for
+      // the site blog stages the same way — the site blog has no background
+      // publisher, so a scheduled post is saved as a draft and the message
+      // tells the admin exactly that (no silent immediate publish).
+      const asDraft = action === "draft" || action === "schedule";
       const { data: existing } = await supabase
         .from("site_blog_posts")
         .select("id")
@@ -336,27 +355,66 @@ export async function POST(request: NextRequest) {
         platform: "site_blog",
         success: true,
         url: `/blog/${slug}`,
+        message:
+          action === "schedule"
+            ? "The site blog has no background publisher — saved as a draft. Publish it from Site Blog admin when you're ready."
+            : undefined,
       });
     } else if (platform === "wordpress" || platform === "blog") {
-      const wpResult = await publishToWordPress(postId, tenantId, action || "publish", scheduledAt, categoryId);
+      const wpResult = await publishToWordPress(postId, tenantId, action || "publish", normalizedScheduledAt ?? undefined, categoryId);
       results.push(...wpResult.results);
       allSucceeded = wpResult.allSucceeded;
     } else if (["instagram", "twitter", "linkedin", "facebook", "tiktok", "threads"].includes(platform)) {
-      const socialResult = await publishToSocial(postId, tenantId);
-      results.push(...socialResult.results);
-      allSucceeded = socialResult.allSucceeded;
+      if (action === "schedule") {
+        // Social platforms publish through the Inngest cron
+        // (publishScheduledPosts, every 5 min) once the scheduled instant
+        // arrives — the same path the AI team uses. Previously this silently
+        // did nothing while the UI showed "Scheduled".
+        const supabase = await createServiceClient();
+        const { error } = await supabase
+          .from("posts")
+          .update({ status: "scheduled", scheduled_at: normalizedScheduledAt })
+          .eq("id", postId)
+          .eq("tenant_id", tenantId);
+        if (error) throw error;
+        results.push({
+          platform,
+          success: true,
+          message: `Scheduled for ${normalizedScheduledAt}`,
+        });
+      } else {
+        const socialResult = await publishToSocial(postId, tenantId);
+        results.push(...socialResult.results);
+        allSucceeded = socialResult.allSucceeded;
+      }
     } else if (platform === "all") {
-      // Publish to all connected platforms
-      const [wpResult, socialResult] = await Promise.all([
-        publishToWordPress(postId, tenantId, action || "publish", scheduledAt, categoryId).catch(() => ({ allSucceeded: false, results: [] })),
-        // Social publishers don't support scheduling yet — skip them for
-        // schedule actions so we don't publish immediately by accident.
-        action === "schedule"
-          ? Promise.resolve({ allSucceeded: true, results: [] })
-          : publishToSocial(postId, tenantId).catch(() => ({ allSucceeded: false, results: [] })),
+      // Publish to all connected platforms. For schedules, WordPress gets its
+      // "future" status via its API and every social target is queued for the
+      // cron — one consistent scheduled_at across the board.
+      const wpAction = action === "schedule" ? "schedule" : action || "publish";
+      const [wpResult] = await Promise.all([
+        publishToWordPress(postId, tenantId, wpAction, normalizedScheduledAt ?? undefined, categoryId).catch(() => ({ allSucceeded: false, results: [] })),
       ]);
-      results.push(...wpResult.results, ...socialResult.results);
-      allSucceeded = wpResult.allSucceeded && socialResult.allSucceeded;
+      results.push(...wpResult.results);
+      if (action === "schedule") {
+        const supabase = await createServiceClient();
+        const { error } = await supabase
+          .from("posts")
+          .update({ status: "scheduled", scheduled_at: normalizedScheduledAt })
+          .eq("id", postId)
+          .eq("tenant_id", tenantId);
+        if (error) throw error;
+        results.push({
+          platform: "social",
+          success: true,
+          message: `Social platforms scheduled for ${normalizedScheduledAt} (cron)`,
+        });
+        allSucceeded = allSucceeded && true;
+      } else {
+        const socialResult = await publishToSocial(postId, tenantId).catch(() => ({ allSucceeded: false, results: [] }));
+        results.push(...socialResult.results);
+        allSucceeded = wpResult.allSucceeded && socialResult.allSucceeded;
+      }
     } else {
       return NextResponse.json({ error: `Unknown platform: ${platform}` }, { status: 400 });
     }

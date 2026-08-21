@@ -38,11 +38,19 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       title?: string;
       blocks?: CmsBlock[];
       is_published?: boolean;
+      tokens?: { accent?: string; font?: string; radius?: string };
     };
 
-    const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
-    if (typeof body.title === "string") patch.title = body.title.trim() || "Untitled Page";
-    if (Array.isArray(body.blocks)) patch.blocks = body.blocks;
+const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+if (typeof body.title === "string") patch.title = body.title.trim() || "Untitled Page";
+if (Array.isArray(body.blocks)) patch.blocks = body.blocks;
+if (body.tokens && typeof body.tokens === "object") {
+  const tokens: Record<string, unknown> = {};
+  if (typeof body.tokens.accent === "string" && body.tokens.accent.trim()) tokens.accent = body.tokens.accent.trim().slice(0, 50);
+  if (typeof body.tokens.font === "string" && body.tokens.font.trim()) tokens.font = body.tokens.font.trim().slice(0, 200);
+  if (typeof body.tokens.radius === "string" && body.tokens.radius.trim()) tokens.radius = body.tokens.radius.trim().slice(0, 20);
+  patch.tokens = tokens;
+}
     if (typeof body.is_published === "boolean") {
       patch.is_published = body.is_published;
       patch.published_at = body.is_published ? new Date().toISOString() : null;

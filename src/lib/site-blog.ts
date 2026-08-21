@@ -72,7 +72,7 @@ export function firstImageUrl(body: string): string | null {
 
 /** Validate + normalize a slug for the public URL. */
 export function sanitizePostSlug(slug: string): string | null {
-  const s = slug.trim().toLowerCase();
+  const s = (slug ?? "").trim().toLowerCase();
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(s)) return null;
   return s;
 }

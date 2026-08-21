@@ -52,9 +52,13 @@ export default function AccountMenu({ email }: AccountMenuProps) {
         className="flex items-center gap-1.5 rounded-md border border-input bg-background px-2 py-1.5 text-xs sm:text-sm hover:bg-muted transition-colors"
         aria-haspopup="menu"
         aria-expanded={open}
+        aria-label="Account menu"
+        title="Account"
       >
         <User className="size-4 shrink-0" />
-        <span className="max-w-[120px] truncate hidden sm:inline">{email}</span>
+        {/* The email only appears once the menu is opened — the bar stays
+            clean with an icon-only trigger. */}
+        <span className={`max-w-[120px] truncate ${open ? "inline sm:inline" : "hidden"}`}>{email}</span>
         <ChevronDown className="size-3.5 shrink-0 opacity-60" />
       </button>
 

@@ -8,6 +8,8 @@
 
 import { createServiceClient } from "@/lib/supabase/server";
 import { notifyPostReadyForApproval } from "@/lib/notifications";
+import { slugify } from "@/lib/cms";
+import { announceCampaignDeployed } from "@/lib/client-lifecycle";
 
 // ============================================================================
 // Types
@@ -229,6 +231,48 @@ export async function deployCampaign(
   const campaignJson = campaign.campaign_json as CampaignJson;
   const clientId = campaign.client_id as string;
 
+  // Resolve (or create) the client's workspace so deployed posts are not
+  // orphaned with workspace_id = NULL. Previously posts deployed with no
+  // workspace never surfaced in workspace-scoped views (Recent Content,
+  // calendar, AI team chat) and campaign work lived outside the client's
+  // workspace entirely.
+  let workspaceId: string | null = null;
+  try {
+    if (clientId) {
+      const { data: client } = await supabase
+        .from("clients")
+        .select("workspace_id, name")
+        .eq("id", clientId)
+        .eq("tenant_id", tenantId)
+        .maybeSingle();
+      workspaceId = client?.workspace_id ?? null;
+      if (!workspaceId && client) {
+        // No workspace yet — create a dedicated one for this client.
+        const base = slugify(client.name || "Client").slice(0, 40);
+        const { data: ws, error: wsError } = await supabase
+          .from("workspaces")
+          .insert({
+            tenant_id: tenantId,
+            name: client.name || "Client Workspace",
+            slug: `${base}-${crypto.randomUUID().slice(0, 8)}`,
+            is_default: false,
+          })
+          .select("id")
+          .single();
+        if (!wsError && ws) {
+          workspaceId = ws.id;
+          await supabase
+            .from("clients")
+            .update({ workspace_id: ws.id })
+            .eq("id", clientId)
+            .eq("tenant_id", tenantId);
+        }
+      }
+    }
+  } catch (wsError) {
+    errors.push(`Could not resolve workspace: ${(wsError as Error).message}`);
+  }
+
   // 3. Extract content pieces from all months
   const contentPieces: { piece: ContentPiece; month: number }[] = [];
 
@@ -276,6 +320,7 @@ export async function deployCampaign(
       .insert({
         tenant_id: tenantId,
         client_id: clientId,
+        workspace_id: workspaceId,
         content: postContent,
         status: "draft",
         scheduled_at: scheduledAt,
@@ -312,18 +357,18 @@ export async function deployCampaign(
   }
 
   // 7. Send notification to agency
-  // Try to get the user who created the campaign for notification
+  // Try to get the user who created the campaign for notification. NOTE: the
+  // old code queried a nonexistent `users` table (PGRST202 crash); auth users
+  // live in Supabase Auth, so resolve via the admin API instead.
   if (campaign.created_by) {
     try {
-      const { data: userData } = await supabase
-        .from("users")
-        .select("email")
-        .eq("id", campaign.created_by)
-        .single();
-
-      if (userData?.email) {
+      const { data: authUser } = await supabase.auth.admin.getUserById(
+        campaign.created_by as string
+      );
+      const email = authUser?.user?.email ?? null;
+      if (email) {
         await notifyPostReadyForApproval(
-          { email: userData.email, name: "Agency User" },
+          { email, name: "Agency User" },
           {
             postId: campaignId,
             postContent: `Campaign "${campaignJson.tierName}" has been deployed with ${createdPosts.length} posts.`,
@@ -338,6 +383,21 @@ export async function deployCampaign(
         notifyError
       );
     }
+  }
+
+  // 8. Announce the kickoff to the Team Room (Malory) so the AI team picks up
+  // the deployed campaign. Best-effort — a missing chat must never fail the
+  // deployment.
+  try {
+    await announceCampaignDeployed(
+      tenantId,
+      workspaceId,
+      clientId,
+      campaignJson.tierName,
+      createdPosts.length
+    );
+  } catch (announceError) {
+    console.warn("[deployCampaign] Team Room announcement skipped:", announceError);
   }
 
   return {

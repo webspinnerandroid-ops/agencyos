@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { createServiceClient } from "@/lib/supabase/server";
 import {
   renderBlockHtml,
+  renderTokenStyles,
   CMS_STYLES,
   CMS_HEADER_FOOTER_STYLES,
   THEME_PRESETS,
@@ -32,7 +33,7 @@ export default async function SitePage({
 
   const { data: page, error } = await supabase
     .from("site_pages")
-    .select("id, title, blocks, is_published, preview_token, tenant_id, kind, category")
+    .select("id, title, blocks, is_published, preview_token, tenant_id, kind, category, tokens")
     .eq("slug", slug)
     .maybeSingle();
 
@@ -95,7 +96,7 @@ export default async function SitePage({
       <head>
         <title>{page.title} — {siteName}</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <style dangerouslySetInnerHTML={{ __html: `${CMS_STYLES}\n${CMS_HEADER_FOOTER_STYLES}\n${presetCss}\n${globalCss}` }} />
+        <style dangerouslySetInnerHTML={{ __html: `${CMS_STYLES}\n${CMS_HEADER_FOOTER_STYLES}\n${presetCss}\n${globalCss}\n${renderTokenStyles(page.tokens)}` }} />
       </head>
       <body style={{ margin: 0, background: "#fff" }}>
         {/* Sitewide header */}

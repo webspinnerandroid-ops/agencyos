@@ -19,6 +19,9 @@ export default function PublishButton({ postId, postType, onPublished }: Publish
   const [action, setAction] = useState<"publish" | "draft" | "schedule">("publish");
   const [scheduledDate, setScheduledDate] = useState("");
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [results, setResults] = useState<
+    { platform: string; success: boolean; url?: string; message?: string; errorMessage?: string }[]
+  >([]);
   const [isPending, startTransition] = useTransition();
   // Super admin can publish to the marketing site's blog (/blog/<slug>).
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
@@ -95,12 +98,19 @@ export default function PublishButton({ postId, postType, onPublished }: Publish
             platform,
             action,
             scheduledAt: action === "schedule" ? scheduledDate : undefined,
+            // The datetime-local value is naive local wall time — tell the
+            // server how far off UTC this browser is so the scheduled time
+            // is stored as the correct UTC instant (the Inngest cron
+            // publishes against UTC).
+            tzOffsetMinutes:
+              action === "schedule" ? new Date().getTimezoneOffset() : undefined,
             categoryId:
               platform === "wordpress" && wpCategoryId ? Number(wpCategoryId) : undefined,
           }),
         });
 
         const data = await res.json();
+        setResults(data.results ?? []);
         if (data.success) {
           const urlResult = (data.results ?? []).find((r: any) => r.url);
           if (urlResult?.url) {
@@ -115,12 +125,20 @@ export default function PublishButton({ postId, postType, onPublished }: Publish
           }
           onPublished?.();
         } else {
-          // Surface per-platform failures so the user can see which one broke
+          // Surface the API's real error (the API sends `error`, not
+          // `message` — reading the wrong field used to show a useless
+          // "Unknown error" for every failure). Score-gate responses carry
+          // the full explanation (gate vs score, auto-rewrite status).
+          const apiError =
+            (data as { error?: string }).error ??
+            (data as { message?: string }).message ??
+            "Publish failed";
+          // Per-platform failures add detail on top of the API error.
           const failures = (data.results ?? [])
             .filter((r: any) => !r.success)
             .map((r: any) => `${r.platform ?? "wordpress"}: ${r.errorMessage ?? "unknown error"}`);
           const detail = failures.length > 0 ? ` (${failures.join("; ")})` : "";
-          setFeedback(`Failed: ${data.message || "Unknown error"}${detail}`);
+          setFeedback(`Failed: ${apiError}${detail}`);
         }
       } catch (err: any) {
         setFeedback(err?.message || "Publish failed");
@@ -269,6 +287,10 @@ export default function PublishButton({ postId, postType, onPublished }: Publish
                 onChange={(e) => setScheduledDate(e.target.value)}
                 className="h-8 text-xs"
               />
+              <p className="text-[10px] text-muted-foreground">
+                Shown in your local time — the post publishes at this instant
+                wherever your audience is.
+              </p>
             </div>
           )}
 
@@ -286,6 +308,34 @@ export default function PublishButton({ postId, postType, onPublished }: Publish
             <p className={`text-xs ${feedback.startsWith("Published") ? "text-green-600" : "text-red-600"}`}>
               {feedback}
             </p>
+          )}
+
+          {results.length > 0 && (
+            <div className="space-y-1 border-t pt-2">
+              {results.map((r) => (
+                <div key={r.platform} className="flex items-center justify-between text-xs">
+                  <span className="capitalize text-muted-foreground">{r.platform.replace("_", " ")}</span>
+                  {r.success ? (
+                    r.url ? (
+                      <a
+                        href={r.url.startsWith("/") || r.url.startsWith("http") ? r.url : `https://${r.url}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-green-600 hover:underline flex items-center gap-1"
+                      >
+                        Live link ↗
+                      </a>
+                    ) : (
+                      <span className="text-green-600">{r.message ?? "OK"}</span>
+                    )
+                  ) : (
+                    <span className="text-red-600 truncate max-w-[220px]" title={r.errorMessage ?? ""}>
+                      {r.errorMessage ?? "Failed"}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
           )}
           </div>
         </div>

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { Menu, X } from "lucide-react";
 import type { NavSection } from "./NavDropdown";
+import WorkspaceSelector from "./WorkspaceSelector";
 
 interface MobileNavProps {
   sections: NavSection[];
@@ -94,6 +95,9 @@ export default function MobileNav({
                 >
                   <X className="size-4" />
                 </button>
+              </div>
+              <div className="border-b px-3 py-2.5">
+                <WorkspaceSelector />
               </div>
               <div className="p-2">
                 {sections.map((section) => (

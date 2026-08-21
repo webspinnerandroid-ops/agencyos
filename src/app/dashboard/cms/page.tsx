@@ -25,13 +25,31 @@ import {
   Eye,
   Link2,
   Upload,
+  MousePointerClick,
+  Minus,
+  Code2,
+  Copy,
+  ClipboardPaste,
+  Undo2,
+  Redo2,
+  Monitor,
+  Tablet,
+  Smartphone,
+  FolderTree,
+  MousePointer2,
+  Star,
+  Play,
+  ChevronsDownUp,
+  Grid3X3,
 } from "lucide-react";
 import {
   newBlockId,
   slugify,
   renderBlockHtml,
+  renderTokenStyles,
   CMS_STYLES,
   THEME_PRESETS,
+  ICON_NAMES,
   type CmsBlock,
   type CmsBlockStyle,
   type CmsPage,
@@ -64,6 +82,13 @@ export default function CmsPage() {
   const [pages, setPages] = useState<CmsPage[]>([]);
   const [loading, setLoading] = useState(true);
   const [active, setActive] = useState<CmsPage | null>(null);
+  // Selection + edit history (undo/redo over every builder mutation).
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [historyPast, setHistoryPast] = useState<CmsBlock[][]>([]);
+  const [historyFuture, setHistoryFuture] = useState<CmsBlock[][]>([]);
+  // Preview viewport (desktop / tablet / mobile) + layer sidebar.
+  const [previewWidth, setPreviewWidth] = useState<"desktop" | "tablet" | "mobile">("desktop");
+  const [layerOpen, setLayerOpen] = useState(false);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const [saving, setSaving] = useState(false);
   const [newTitle, setNewTitle] = useState("");
@@ -231,6 +256,9 @@ export default function CmsPage() {
     if (!active) return;
     const next = { ...active, blocks };
     setActive(next);
+    // History: every mutation is pushed so Ctrl/Cmd+Z can step back.
+    setHistoryPast((prev) => [...prev.slice(-49), active.blocks]);
+    setHistoryFuture([]);
     setSaving(true);
     try {
       const res = await fetch(`/api/cms/pages/${active.id}`, {
@@ -269,6 +297,206 @@ export default function CmsPage() {
   const addColumns = (cols: number) => {
     const block: CmsBlock = { id: newBlockId(), kind: "columns", cols, children: [] };
     updateBlocks([...(active?.blocks ?? []), block]);
+  };
+
+  // --- Essential block types ------------------------------------------
+  const addButton = () => {
+    const block: CmsBlock = { id: newBlockId(), kind: "button", config: { label: "Get Started", href: "#", variant: "solid", size: "md" } };
+    updateBlocks([...(active?.blocks ?? []), block]);
+  };
+  const addSpacer = () => {
+    const block: CmsBlock = { id: newBlockId(), kind: "spacer", config: { height: 48 } };
+    updateBlocks([...(active?.blocks ?? []), block]);
+  };
+  const addDivider = () => {
+    const block: CmsBlock = { id: newBlockId(), kind: "divider", config: { style: "solid" } };
+    updateBlocks([...(active?.blocks ?? []), block]);
+  };
+  const addEmbed = () => {
+    const block: CmsBlock = { id: newBlockId(), kind: "embed", config: { html: "<!-- Paste HTML: scripts, widgets, shortcodes -->\n<p>Embedded content</p>" } };
+    updateBlocks([...(active?.blocks ?? []), block]);
+  };
+  const addIcon = () => {
+    const block: CmsBlock = { id: newBlockId(), kind: "icon", config: { name: "check", size: 24, color: "" }, style: { align: "center" } };
+    updateBlocks([...(active?.blocks ?? []), block]);
+  };
+  const addVideo = () => {
+    const block: CmsBlock = { id: newBlockId(), kind: "video", config: { url: "" } };
+    updateBlocks([...(active?.blocks ?? []), block]);
+  };
+  const addAccordion = () => {
+    const block: CmsBlock = {
+      id: newBlockId(),
+      kind: "accordion",
+      config: { items: [{ title: "Question one?", body: "**Answer:** write the response here." }, { title: "Question two?", body: "**Answer:** write the response here." }] },
+    };
+    updateBlocks([...(active?.blocks ?? []), block]);
+  };
+  const addCards = () => {
+    const block: CmsBlock = {
+      id: newBlockId(),
+      kind: "cards",
+      config: { items: [{ title: "Card one", text: "Describe the value here.", buttonLabel: "Learn more", buttonHref: "#" }, { title: "Card two", text: "Describe the value here.", buttonLabel: "Learn more", buttonHref: "#" }, { title: "Card three", text: "Describe the value here.", buttonLabel: "Learn more", buttonHref: "#" }] },
+    };
+    updateBlocks([...(active?.blocks ?? []), block]);
+  };
+
+  // --- Undo / redo ----------------------------------------------------
+  const undoBlocks = () => {
+    if (!active || historyPast.length === 0) return;
+    setHistoryFuture((prev) => [active.blocks, ...prev]);
+    const prevBlocks = historyPast[historyPast.length - 1];
+    setHistoryPast((prev) => prev.slice(0, -1));
+    void updateBlocks(prevBlocks);
+  };
+  const redoBlocks = () => {
+    if (!active || historyFuture.length === 0) return;
+    setHistoryPast((prev) => [...prev, active.blocks]);
+    const nextBlocks = historyFuture[0];
+    setHistoryFuture((prev) => prev.slice(1));
+    void updateBlocks(nextBlocks);
+  };
+
+  // Keyboard: Cmd/Ctrl+Z undo, Cmd/Ctrl+Shift+Z redo.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!active) return;
+      const target = e.target as HTMLElement | null;
+      const typing = target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
+      if (!(e.metaKey || e.ctrlKey)) return;
+      const key = e.key.toLowerCase();
+      if (key === "z" && !e.shiftKey && !typing) { e.preventDefault(); undoBlocks(); }
+      else if (key === "z" && e.shiftKey && !typing) { e.preventDefault(); redoBlocks(); }
+      else if (key === "y" && !typing) { e.preventDefault(); redoBlocks(); }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, historyPast, historyFuture]);
+
+  // --- Copy / paste block ---------------------------------------------
+  const copyBlock = async (b: CmsBlock) => {
+    try {
+      await navigator.clipboard.writeText(JSON.stringify({ type: "cms-block", block: b }));
+      show("success", "Block copied — click Paste to insert a copy.");
+    } catch {
+      show("error", "Clipboard unavailable — select the block and copy again.");
+    }
+  };
+  const pasteBlock = async () => {
+    try {
+      const raw = await navigator.clipboard.readText();
+      const parsed = JSON.parse(raw);
+      if (parsed?.type !== "cms-block" || !parsed.block?.kind) {
+        show("error", "Clipboard has no copied block.");
+        return;
+      }
+      const copy: CmsBlock = { ...(parsed.block as CmsBlock), id: newBlockId() };
+      if (copy.children?.length) copy.children = copy.children.map((c) => ({ ...c, id: newBlockId() }));
+      updateBlocks([...(active?.blocks ?? []), copy]);
+      setSelectedId(copy.id);
+    } catch {
+      show("error", "Clipboard unavailable or not a block.");
+    }
+  };
+  const duplicateBlock = (b: CmsBlock) => {
+    const copy: CmsBlock = { ...b, id: newBlockId() };
+    if (copy.children?.length) copy.children = copy.children.map((c) => ({ ...c, id: newBlockId() }));
+    updateBlocks([...(active?.blocks ?? []), copy]);
+    setSelectedId(copy.id);
+  };
+
+  // --- Insertable section templates ------------------------------------
+  const TEMPLATES: { label: string; build: () => CmsBlock[] }[] = [
+    {
+      label: "Hero (headline + CTA)",
+      build: () => [
+        { id: newBlockId(), kind: "section", style: { padding: "lg", align: "center" }, children: [
+          { id: newBlockId(), kind: "text", content: "# Your headline here\n\nA short supporting sentence that explains the value in one breath." },
+          { id: newBlockId(), kind: "button", config: { label: "Get Started", href: "#", variant: "solid", size: "lg" } },
+        ] },
+      ],
+    },
+    {
+      label: "Feature grid",
+      build: () => [
+        { id: newBlockId(), kind: "section", style: { padding: "md" }, children: [
+          { id: newBlockId(), kind: "text", content: "## Why choose us" },
+          { id: newBlockId(), kind: "cards", config: { items: [
+            { title: "Fast", text: "Time to first value measured in minutes.", buttonLabel: "", buttonHref: "" },
+            { title: "Simple", text: "No training required — everything just works.", buttonLabel: "", buttonHref: "" },
+            { title: "Reliable", text: "Built for the long haul with support behind it.", buttonLabel: "", buttonHref: "" },
+          ] } },
+        ] },
+      ],
+    },
+    {
+      label: "Pricing table",
+      build: () => [
+        { id: newBlockId(), kind: "section", style: { padding: "md", align: "center" }, children: [
+          { id: newBlockId(), kind: "text", content: "## Pricing" },
+          { id: newBlockId(), kind: "cards", config: { items: [
+            { title: "Starter", text: "**$29**/mo — everything to begin.", buttonLabel: "Start", buttonHref: "#" },
+            { title: "Pro", text: "**$79**/mo — most popular.", buttonLabel: "Go Pro", buttonHref: "#" },
+            { title: "Agency", text: "**$199**/mo — for teams.", buttonLabel: "Contact", buttonHref: "#" },
+          ] } },
+        ] },
+      ],
+    },
+    {
+      label: "CTA band",
+      build: () => [
+        { id: newBlockId(), kind: "section", style: { padding: "lg", align: "center", bg: "#1e293b", color: "#f8fafc" }, children: [
+          { id: newBlockId(), kind: "text", content: "## Ready to start?\n\nJoin hundreds of teams shipping faster today." },
+          { id: newBlockId(), kind: "button", config: { label: "Book a demo", href: "#", variant: "solid", size: "lg" } },
+        ] },
+      ],
+    },
+    {
+      label: "FAQ accordion",
+      build: () => [
+        { id: newBlockId(), kind: "section", style: { padding: "md" }, children: [
+          { id: newBlockId(), kind: "text", content: "## Frequently asked questions" },
+          { id: newBlockId(), kind: "accordion", config: { items: [
+            { title: "How fast is delivery?", body: "Most projects are live within a week." },
+            { title: "Can I cancel anytime?", body: "Yes — no lock-in contracts." },
+            { title: "Do you provide support?", body: "24/7 support is included on every plan." },
+          ] } },
+        ] },
+      ],
+    },
+  ];
+  const insertTemplate = (build: () => CmsBlock[]) => {
+    updateBlocks([...(active?.blocks ?? []), ...build()]);
+  };
+
+  // --- Layer tree -------------------------------------------------------
+  const blockLayerRows = (list: CmsBlock[], depth: number): React.ReactNode[] =>
+    list.map((b) => [
+      <button
+        key={b.id}
+        onClick={() => {
+          setSelectedId(b.id);
+          document.getElementById(`cms-block-${b.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+        }}
+        className={`w-full flex items-center gap-1.5 px-2 py-1 rounded text-left text-[11px] transition-colors ${selectedId === b.id ? "bg-primary/10 text-primary" : "hover:bg-muted"}`}
+        style={{ paddingLeft: 8 + depth * 14 }}
+      >
+        {b.kind === "text" ? <Text className="size-3 shrink-0" /> : b.kind === "image" ? <Image className="size-3 shrink-0" /> : b.kind === "section" ? <Layers className="size-3 shrink-0" /> : b.kind === "columns" ? <LayoutGrid className="size-3 shrink-0" /> : b.kind === "button" ? <MousePointerClick className="size-3 shrink-0" /> : b.kind === "spacer" ? <Minus className="size-3 shrink-0" /> : b.kind === "divider" ? <Minus className="size-3 shrink-0" /> : b.kind === "embed" ? <Code2 className="size-3 shrink-0" /> : b.kind === "icon" ? <Star className="size-3 shrink-0" /> : b.kind === "video" ? <Play className="size-3 shrink-0" /> : b.kind === "accordion" ? <ChevronsDownUp className="size-3 shrink-0" /> : b.kind === "cards" ? <Grid3X3 className="size-3 shrink-0" /> : <Wand2 className="size-3 shrink-0" />}
+        <span className="truncate">{blockTypeLabel(b)}</span>
+      </button>,
+      ...((b.kind === "section" || b.kind === "columns") && b.children?.length ? blockLayerRows(b.children, depth + 1) : []),
+    ]);
+
+  const updateConfig = (id: string, patch: Record<string, unknown>) => {
+    if (!active) return;
+    const mapBlocks = (list: CmsBlock[]): CmsBlock[] =>
+      list.map((b) => {
+        if (b.id === id) return { ...b, config: { ...(b.config ?? {}), ...patch } };
+        if ((b.kind === "section" || b.kind === "columns") && b.children?.length) return { ...b, children: mapBlocks(b.children) };
+        return b;
+      });
+    updateBlocks(mapBlocks(active.blocks));
   };
 
   const updateBlock = (id: string, patch: Partial<CmsBlock>) => {
@@ -418,14 +646,16 @@ export default function CmsPage() {
   // Live preview iframe (builds HTML from blocks, same renderer as public).
   const refreshPreview = (page: CmsPage) => {
     const html = page.blocks.map((b) => renderBlockHtml(b, page.id)).join("\n");
-    const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${CMS_STYLES}</style></head><body><div class="cms-shell">${html}</div></body></html>`;
+    const tokens = page.tokens ? renderTokenStyles(page.tokens) : "";
+    const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${CMS_STYLES}${tokens}</style></head><body><div class="cms-shell">${html}</div></body></html>`;
     if (iframeRef.current) iframeRef.current.srcdoc = doc;
   };
 
   useEffect(() => {
     if (active && iframeRef.current) {
       const html = active.blocks.map((b) => renderBlockHtml(b, active.id)).join("\n");
-      iframeRef.current.srcdoc = `<!DOCTYPE html><html><head><style>${CMS_STYLES}</style></head><body><div class="cms-shell">${html}</div></body></html>`;
+      const tokens = active.tokens ? renderTokenStyles(active.tokens) : "";
+      iframeRef.current.srcdoc = `<!DOCTYPE html><html><head><style>${CMS_STYLES}${tokens}</style></head><body><div class="cms-shell">${html}</div></body></html>`;
     }
   }, [active?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -523,10 +753,33 @@ export default function CmsPage() {
   // Block editor bits
   // ------------------------------------------------------------------
   const blockTypeIcon = (b: CmsBlock) =>
-    b.kind === "text" ? <Text className="size-3" /> : b.kind === "image" ? <Image className="size-3" /> : b.kind === "section" ? <Layers className="size-3" /> : <Wand2 className="size-3" />;
+    b.kind === "text" ? <Text className="size-3" />
+    : b.kind === "image" ? <Image className="size-3" />
+    : b.kind === "section" ? <Layers className="size-3" />
+    : b.kind === "columns" ? <LayoutGrid className="size-3" />
+    : b.kind === "button" ? <MousePointerClick className="size-3" />
+    : b.kind === "spacer" || b.kind === "divider" ? <Minus className="size-3" />
+    : b.kind === "embed" ? <Code2 className="size-3" />
+    : b.kind === "icon" ? <Star className="size-3" />
+    : b.kind === "video" ? <Play className="size-3" />
+    : b.kind === "accordion" ? <ChevronsDownUp className="size-3" />
+    : b.kind === "cards" ? <Grid3X3 className="size-3" />
+    : <Wand2 className="size-3" />;
 
   const blockTypeLabel = (b: CmsBlock) =>
-    b.kind === "text" ? "Text" : b.kind === "image" ? "Image" : b.kind === "section" ? "Section" : `Widget: ${b.content ?? "AI"}`;
+    b.kind === "text" ? "Text"
+    : b.kind === "image" ? "Image"
+    : b.kind === "section" ? "Section"
+    : b.kind === "columns" ? `Columns (${b.cols ?? 2})`
+    : b.kind === "button" ? "Button"
+    : b.kind === "spacer" ? "Spacer"
+    : b.kind === "divider" ? "Divider"
+    : b.kind === "embed" ? "Embed HTML"
+    : b.kind === "icon" ? `Icon: ${String(b.config?.name ?? "check")}`
+    : b.kind === "video" ? "Video"
+    : b.kind === "accordion" ? `Accordion (${Array.isArray(b.config?.items) ? b.config.items.length : 0})`
+    : b.kind === "cards" ? `Cards (${Array.isArray(b.config?.items) ? b.config.items.length : 0})`
+    : `Widget: ${b.content ?? "AI"}`;
 
   const styleControls = (b: CmsBlock) => (
     <div className="mt-2 space-y-2 border-t pt-2">
@@ -571,6 +824,21 @@ export default function CmsPage() {
             Clear colors
           </button>
         )}
+      </div>
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground w-14">Hide on</span>
+        {[
+          { v: null as CmsBlockStyle["hideOn"], label: "Never" },
+          { v: "mobile" as const, label: "Mobile" },
+          { v: "tablet" as const, label: "Tablet" },
+          { v: "desktop" as const, label: "Desktop" },
+        ].map((o) => (
+          <button key={String(o.v)} onClick={() => updateBlock(b.id, { style: { ...b.style, hideOn: o.v } })}
+            className={`px-1.5 py-0.5 rounded text-[11px] border ${(b.style?.hideOn ?? null) === o.v ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
+            {o.label}
+          </button>
+        ))}
       </div>
 
       {b.kind === "image" && (
@@ -772,23 +1040,200 @@ export default function CmsPage() {
         <textarea value={String(b.config?.content ?? "")} onChange={(e) => updateBlock(b.id, { config: { ...b.config, content: e.target.value } })}
           rows={3} placeholder="Block summary / note" className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm" />
       )}
+
+      {/* --- Essential block types --- */}
+      {b.kind === "button" && (
+        <div className="space-y-2">
+          <div className="grid grid-cols-2 gap-2">
+            <Input placeholder="Label" defaultValue={String(b.config?.label ?? "")} onBlur={(e) => updateConfig(b.id, { label: e.target.value })} />
+            <Input placeholder="Link (https://… or #)" defaultValue={String(b.config?.href ?? "")} onBlur={(e) => updateConfig(b.id, { href: e.target.value })} />
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            {["solid", "outline", "ghost"].map((v) => (
+              <button key={v} onClick={() => updateConfig(b.id, { variant: v })}
+                className={`px-1.5 py-0.5 rounded text-[11px] border capitalize ${b.config?.variant === v ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
+                {v}
+              </button>
+            ))}
+            {["sm", "md", "lg"].map((v) => (
+              <button key={v} onClick={() => updateConfig(b.id, { size: v })}
+                className={`px-1.5 py-0.5 rounded text-[11px] border uppercase ${b.config?.size === v ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
+                {v}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+      {b.kind === "spacer" && (
+        <div className="space-y-2">
+          <label className="flex items-center gap-2 text-[11px] text-muted-foreground">
+            Height (px)
+            <input type="number" min={0} max={500} value={Number(b.config?.height ?? 48)}
+              onChange={(e) => updateConfig(b.id, { height: Number(e.target.value) })}
+              className="w-20 rounded border border-input bg-background px-2 py-1 text-xs" />
+          </label>
+        </div>
+      )}
+      {b.kind === "divider" && (
+        <div className="flex items-center gap-2 flex-wrap">
+          {["solid", "dashed", "dotted"].map((v) => (
+            <button key={v} onClick={() => updateConfig(b.id, { style: v })}
+              className={`px-1.5 py-0.5 rounded text-[11px] border capitalize ${b.config?.style === v ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
+              {v}
+            </button>
+          ))}
+          <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground ml-2">
+            Color
+            <input type="color" value={String(b.config?.color ?? "#d1d5db")} onChange={(e) => updateConfig(b.id, { color: e.target.value })} className="size-6 rounded border cursor-pointer" />
+          </label>
+        </div>
+      )}
+      {b.kind === "embed" && (
+        <div className="space-y-1.5">
+          <textarea
+            value={String(b.config?.html ?? "")}
+            onChange={(e) => updateConfig(b.id, { html: e.target.value })}
+            rows={6}
+            placeholder="Paste raw HTML — scripts, widgets, shortcodes, third-party embeds…"
+            className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm font-mono"
+          />
+          <p className="text-[11px] text-muted-foreground">
+            Rendered as-is on the public site (tenant-authorized, like WordPress shortcodes).
+          </p>
+        </div>
+      )}
+      {b.kind === "icon" && (
+        <div className="space-y-2">
+          <div className="flex flex-wrap gap-1">
+            {ICON_NAMES.map((n) => (
+              <button key={n} onClick={() => updateConfig(b.id, { name: n })}
+                className={`px-1.5 py-0.5 rounded text-[10px] border ${b.config?.name === n ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}>
+                {n}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              Size
+              <input type="number" min={12} max={96} value={Number(b.config?.size ?? 24)}
+                onChange={(e) => updateConfig(b.id, { size: Number(e.target.value) })}
+                className="w-16 rounded border border-input bg-background px-2 py-1 text-xs" />
+            </label>
+            <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+              Color
+              <input type="color" value={String(b.config?.color ?? "#2563eb")} onChange={(e) => updateConfig(b.id, { color: e.target.value })} className="size-6 rounded border cursor-pointer" />
+            </label>
+          </div>
+        </div>
+      )}
+      {b.kind === "video" && (
+        <div className="space-y-1.5">
+          <Input placeholder="YouTube, Vimeo, or direct .mp4/.webm URL" defaultValue={String(b.config?.url ?? "")}
+            onBlur={(e) => updateConfig(b.id, { url: e.target.value })} />
+          <p className="text-[11px] text-muted-foreground">Auto-detected: YouTube / Vimeo embeds, or self-hosted video players.</p>
+        </div>
+      )}
+      {b.kind === "accordion" && (
+        <div className="space-y-2">
+          {Array.isArray(b.config?.items) &&
+            (b.config.items as { title?: string; body?: string }[]).map((item, i) => (
+              <div key={i} className="space-y-1 rounded border border-border p-2">
+                <Input placeholder="Question" value={item.title ?? ""}
+                  onChange={(e) => {
+                    const items = [...(b.config?.items as { title?: string; body?: string }[])];
+                    items[i] = { ...items[i], title: e.target.value };
+                    updateConfig(b.id, { items });
+                  }} />
+                <textarea placeholder="Answer (markdown supported)" rows={2} value={item.body ?? ""}
+                  onChange={(e) => {
+                    const items = [...(b.config?.items as { title?: string; body?: string }[])];
+                    items[i] = { ...items[i], body: e.target.value };
+                    updateConfig(b.id, { items });
+                  }}
+                  className="w-full rounded-md border border-input bg-background px-2 py-1 text-xs" />
+                <button onClick={() => updateConfig(b.id, { items: (b.config?.items as unknown[]).filter((_, x) => x !== i) })}
+                  className="text-[10px] text-red-500 underline">
+                  Remove item
+                </button>
+              </div>
+            ))}
+          <Button variant="ghost" size="sm" onClick={() => updateConfig(b.id, { items: [...(Array.isArray(b.config?.items) ? (b.config.items as { title?: string; body?: string }[]) : []), { title: "New question?", body: "Answer here." }] })}>
+            <Plus className="size-3 mr-1" /> Add item
+          </Button>
+        </div>
+      )}
+      {b.kind === "cards" && (
+        <div className="space-y-2">
+          {Array.isArray(b.config?.items) &&
+            (b.config.items as { title?: string; text?: string; buttonLabel?: string; buttonHref?: string; image?: string }[]).map((item, i) => (
+              <div key={i} className="space-y-1 rounded border border-border p-2">
+                <div className="grid grid-cols-2 gap-1.5">
+                  <Input placeholder="Title" value={item.title ?? ""}
+                    onChange={(e) => {
+                      const items = [...(b.config?.items as typeof item[])];
+                      items[i] = { ...items[i], title: e.target.value };
+                      updateConfig(b.id, { items });
+                    }} />
+                  <Input placeholder="Image URL (optional)" value={item.image ?? ""}
+                    onChange={(e) => {
+                      const items = [...(b.config?.items as typeof item[])];
+                      items[i] = { ...items[i], image: e.target.value };
+                      updateConfig(b.id, { items });
+                    }} />
+                </div>
+                <textarea placeholder="Description" rows={2} value={item.text ?? ""}
+                  onChange={(e) => {
+                    const items = [...(b.config?.items as typeof item[])];
+                    items[i] = { ...items[i], text: e.target.value };
+                    updateConfig(b.id, { items });
+                  }}
+                  className="w-full rounded-md border border-input bg-background px-2 py-1 text-xs" />
+                <div className="grid grid-cols-2 gap-1.5">
+                  <Input placeholder="Button label" value={item.buttonLabel ?? ""}
+                    onChange={(e) => {
+                      const items = [...(b.config?.items as typeof item[])];
+                      items[i] = { ...items[i], buttonLabel: e.target.value };
+                      updateConfig(b.id, { items });
+                    }} />
+                  <Input placeholder="Button link" value={item.buttonHref ?? ""}
+                    onChange={(e) => {
+                      const items = [...(b.config?.items as typeof item[])];
+                      items[i] = { ...items[i], buttonHref: e.target.value };
+                      updateConfig(b.id, { items });
+                    }} />
+                </div>
+                <button onClick={() => updateConfig(b.id, { items: (b.config?.items as unknown[]).filter((_, x) => x !== i) })}
+                  className="text-[10px] text-red-500 underline">
+                  Remove card
+                </button>
+              </div>
+            ))}
+          <Button variant="ghost" size="sm" onClick={() => updateConfig(b.id, { items: [...(Array.isArray(b.config?.items) ? (b.config.items as unknown[]) : []), { title: "New card", text: "Describe the value.", buttonLabel: "Learn more", buttonHref: "#" }] })}>
+            <Plus className="size-3 mr-1" /> Add card
+          </Button>
+        </div>
+      )}
     </>
   );
 
   // Single card for a non-section block (root or inside a section).
   const blockCard = (b: CmsBlock, index: number, listLength: number, sectionId?: string, moveFn?: (dir: -1 | 1) => void) => (
     <Card key={b.id}
+      id={`cms-block-${b.id}`}
       draggable
+      onClick={() => setSelectedId(b.id)}
       onDragStart={(e) => { setDragId(b.id); e.dataTransfer.effectAllowed = "move"; }}
       onDragOver={(e) => { e.preventDefault(); setDragOverId(b.id); }}
       onDragLeave={() => setDragOverId((cur) => (cur === b.id ? null : cur))}
       onDrop={(e) => { e.preventDefault(); e.stopPropagation(); handleDrop(sectionId ? { kind: "section", sectionId, index } : { kind: "root", index }); }}
-      className={`p-3 cursor-grab active:cursor-grabbing ${dragOverId === b.id && dragId !== b.id ? "ring-2 ring-primary" : ""}`}>
+      className={`p-3 cursor-grab active:cursor-grabbing ${dragOverId === b.id && dragId !== b.id ? "ring-2 ring-primary" : selectedId === b.id ? "ring-2 ring-primary/60" : ""}`}>
       <div className="flex items-center justify-between mb-2">
         <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
           <GripVertical className="size-3.5" /> {blockTypeIcon(b)} {blockTypeLabel(b)}
         </span>
         <div className="flex items-center gap-0.5">
+          <button onClick={() => copyBlock(b)} className="p-1 rounded hover:bg-muted" title="Copy block (styles + content)"><Copy className="size-3.5" /></button>
+          <button onClick={() => duplicateBlock(b)} className="p-1 rounded hover:bg-muted" title="Duplicate block"><Plus className="size-3.5" /></button>
           <button onClick={() => (moveFn ? moveFn(-1) : moveBlock(index, -1))} disabled={index === 0} className="p-1 rounded hover:bg-muted disabled:opacity-30" title="Move up"><ChevronUp className="size-3.5" /></button>
           <button onClick={() => (moveFn ? moveFn(1) : moveBlock(index, 1))} disabled={index === listLength - 1} className="p-1 rounded hover:bg-muted disabled:opacity-30" title="Move down"><ChevronDown className="size-3.5" /></button>
           <button onClick={() => setStyleOpen(styleOpen === b.id ? null : b.id)} className={`p-1 rounded hover:bg-muted ${styleOpen === b.id ? "bg-muted" : ""}`} title="Style"><Palette className="size-3.5" /></button>
@@ -1094,20 +1539,143 @@ export default function CmsPage() {
             </Card>
 
             {/* Add-block toolbar */}
-            <div className="flex gap-2 flex-wrap">
-              <Button variant="outline" size="sm" onClick={addTextBlock}><Text className="size-3.5 mr-1" /> Text</Button>
-              <Button variant="outline" size="sm" onClick={addImageBlock}><Image className="size-3.5 mr-1" /> Image</Button>
-              <Button variant="outline" size="sm" onClick={addSection}><Layers className="size-3.5 mr-1" /> Section</Button>
-              <Button variant="outline" size="sm" onClick={() => addColumns(2)} title="2, 3 or 4 columns — switch with the Columns buttons"><LayoutGrid className="size-3.5 mr-1" /> Columns</Button>
-              <div className="flex-1 min-w-[220px] flex gap-2">
-                <Input placeholder="Ask AI to build a block — e.g. 'a contact form', 'an interactive map', 'a YouTube embedder', 'an Instagram gallery embedder'"
-                  value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && buildAiBlock()} />
-                <Button size="sm" onClick={buildAiBlock} disabled={aiBuilding || !aiPrompt.trim()} title="Build this block with AI">
-                  {aiBuilding ? <Loader2 className="size-4 animate-spin" /> : <Wand2 className="size-4" />}
+            <div className="space-y-2">
+              <div className="flex gap-2 flex-wrap items-center">
+                <Button variant="outline" size="sm" onClick={addTextBlock}><Text className="size-3.5 mr-1" /> Text</Button>
+                <Button variant="outline" size="sm" onClick={addImageBlock}><Image className="size-3.5 mr-1" /> Image</Button>
+                <Button variant="outline" size="sm" onClick={addSection}><Layers className="size-3.5 mr-1" /> Section</Button>
+                <Button variant="outline" size="sm" onClick={() => addColumns(2)} title="2, 3 or 4 columns — switch with the Columns buttons"><LayoutGrid className="size-3.5 mr-1" /> Columns</Button>
+                <Button variant="outline" size="sm" onClick={addButton}><MousePointerClick className="size-3.5 mr-1" /> Button</Button>
+                <Button variant="outline" size="sm" onClick={addCards}><Grid3X3 className="size-3.5 mr-1" /> Cards</Button>
+                <Button variant="outline" size="sm" onClick={addVideo}><Play className="size-3.5 mr-1" /> Video</Button>
+                <Button variant="outline" size="sm" onClick={addAccordion}><ChevronsDownUp className="size-3.5 mr-1" /> Accordion</Button>
+                <Button variant="outline" size="sm" onClick={addIcon}><Star className="size-3.5 mr-1" /> Icon</Button>
+                <Button variant="outline" size="sm" onClick={addSpacer}><Minus className="size-3.5 mr-1" /> Spacer</Button>
+                <Button variant="outline" size="sm" onClick={addDivider}><Minus className="size-3.5 mr-1" /> Divider</Button>
+                <Button variant="outline" size="sm" onClick={addEmbed}><Code2 className="size-3.5 mr-1" /> Embed HTML</Button>
+              </div>
+              <div className="flex gap-2 flex-wrap items-center">
+                <select
+                  value=""
+                  onChange={(e) => {
+                    const t = TEMPLATES.find((x) => x.label === e.target.value);
+                    if (t) insertTemplate(t.build);
+                  }}
+                  className="rounded-md border border-input bg-background px-2 py-1.5 text-xs h-8"
+                  title="Insert a pre-built section template"
+                >
+                  <option value="">Insert template…</option>
+                  {TEMPLATES.map((t) => (
+                    <option key={t.label} value={t.label}>{t.label}</option>
+                  ))}
+                </select>
+                <Button variant="ghost" size="sm" onClick={undoBlocks} disabled={historyPast.length === 0} title="Undo (Ctrl+Z)"><Undo2 className="size-3.5" /></Button>
+                <Button variant="ghost" size="sm" onClick={redoBlocks} disabled={historyFuture.length === 0} title="Redo (Ctrl+Shift+Z)"><Redo2 className="size-3.5" /></Button>
+                <Button variant="ghost" size="sm" onClick={pasteBlock} title="Paste a copied block"><ClipboardPaste className="size-3.5" /></Button>
+                <Button variant={layerOpen ? "default" : "outline"} size="sm" onClick={() => setLayerOpen((v) => !v)} title="Layer manager (tree view)">
+                  <FolderTree className="size-3.5 mr-1" /> Layers
                 </Button>
+                <div className="flex items-center gap-0.5 border rounded-md px-1 py-0.5 ml-auto">
+                  {([["desktop", <Monitor key="d" className="size-3.5" />], ["tablet", <Tablet key="t" className="size-3.5" />], ["mobile", <Smartphone key="m" className="size-3.5" />]] as const).map(([w, icon]) => (
+                    <button key={w} onClick={() => setPreviewWidth(w)}
+                      className={`p-1 rounded ${previewWidth === w ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground"}`}
+                      title={`Preview: ${w}`}>
+                      {icon}
+                    </button>
+                  ))}
+                </div>
+                <div className="flex-1 min-w-[220px] flex gap-2">
+                  <Input placeholder="Ask AI to build a block — e.g. 'a contact form', 'an interactive map', 'a YouTube embedder', 'an Instagram gallery embedder'"
+                    value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && buildAiBlock()} />
+                  <Button size="sm" onClick={buildAiBlock} disabled={aiBuilding || !aiPrompt.trim()} title="Build this block with AI">
+                    {aiBuilding ? <Loader2 className="size-4 animate-spin" /> : <Wand2 className="size-4" />}
+                  </Button>
+                </div>
+              </div>
+
+              {/* Design tokens */}
+              <div className="flex items-center gap-3 flex-wrap rounded-md border border-dashed px-3 py-2">
+                <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Design tokens</span>
+                <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  Accent
+                  <input type="color" value={active.tokens?.accent ?? "#2563eb"}
+                    onChange={(e) => {
+                      setActive({ ...active, tokens: { ...(active.tokens ?? {}), accent: e.target.value } });
+                      refreshPreview({ ...active, tokens: { ...(active.tokens ?? {}), accent: e.target.value } });
+                    }}
+                    onBlur={async () => {
+                      if (!active) return;
+                      await fetch(`/api/cms/pages/${active.id}`, {
+                        method: "PATCH", credentials: "include",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ tokens: active.tokens ?? {} }),
+                      });
+                    }}
+                    className="size-6 rounded border cursor-pointer" />
+                </label>
+                <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  Font
+                  <select
+                    value={active.tokens?.font ?? ""}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setActive({ ...active, tokens: { ...(active.tokens ?? {}), font: v } });
+                      refreshPreview({ ...active, tokens: { ...(active.tokens ?? {}), font: v } });
+                    }}
+                    onBlur={async () => {
+                      if (!active) return;
+                      await fetch(`/api/cms/pages/${active.id}`, {
+                        method: "PATCH", credentials: "include",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ tokens: active.tokens ?? {} }),
+                      });
+                    }}
+                    className="rounded border border-input bg-background px-2 py-1 text-xs"
+                  >
+                    <option value="">System default</option>
+                    <option value="Georgia, serif">Serif (Georgia)</option>
+                    <option value="'Times New Roman', serif">Times</option>
+                    <option value="'Courier New', monospace">Monospace</option>
+                    <option value="'Segoe UI', system-ui, sans-serif">Segoe UI</option>
+                    <option value="'Trebuchet MS', sans-serif">Trebuchet</option>
+                  </select>
+                </label>
+                <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  Radius
+                  <input type="number" min={0} max={32} value={Number(active.tokens?.radius ?? 8)}
+                    onChange={(e) => {
+                      const v = `${Number(e.target.value)}px`;
+                      setActive({ ...active, tokens: { ...(active.tokens ?? {}), radius: v } });
+                      refreshPreview({ ...active, tokens: { ...(active.tokens ?? {}), radius: v } });
+                    }}
+                    onBlur={async () => {
+                      if (!active) return;
+                      await fetch(`/api/cms/pages/${active.id}`, {
+                        method: "PATCH", credentials: "include",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ tokens: active.tokens ?? {} }),
+                      });
+                    }}
+                    className="w-16 rounded border border-input bg-background px-2 py-1 text-xs" />
+                </label>
+                <span className="text-[10px] text-muted-foreground">Sync across buttons, links &amp; dividers</span>
               </div>
             </div>
+
+            {/* Layer manager (tree view) */}
+            {layerOpen && (
+              <div className="rounded-lg border bg-muted/30 p-2 max-h-52 overflow-y-auto">
+                <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground px-2 pb-1">
+                  Layers — click to select &amp; jump
+                </p>
+                {active.blocks.length === 0 ? (
+                  <p className="text-[11px] text-muted-foreground px-2 py-1">No blocks yet.</p>
+                ) : (
+                  <div className="space-y-0.5">{blockLayerRows(active.blocks, 0)}</div>
+                )}
+              </div>
+            )}
 
             {/* Blocks canvas */}
             {active.blocks.length === 0 ? (
@@ -1139,7 +1707,8 @@ export default function CmsPage() {
               <span className="text-sm font-semibold">Live Preview</span>
               <span className="text-xs text-muted-foreground">Same renderer as the public site</span>
             </div>
-            <div className="rounded-xl border bg-white overflow-hidden">
+            <div className="rounded-xl border bg-white overflow-hidden flex justify-center"
+              style={{ width: previewWidth === "mobile" ? 390 : previewWidth === "tablet" ? 768 : "100%" }}>
               <iframe ref={iframeRef} title="Page preview" className="w-full h-[70vh]" sandbox="allow-scripts allow-forms" />
             </div>
           </div>

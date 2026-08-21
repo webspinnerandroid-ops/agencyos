@@ -12,7 +12,20 @@
  *              produces the CONFIG, never raw HTML.
  */
 
-export type CmsBlockKind = "text" | "image" | "custom" | "section" | "columns";
+export type CmsBlockKind =
+  | "text"
+  | "image"
+  | "custom"
+  | "section"
+  | "columns"
+  | "button"
+  | "spacer"
+  | "divider"
+  | "embed"
+  | "icon"
+  | "video"
+  | "accordion"
+  | "cards";
 
 /** Per-block styling — kept small and declarative, applied via inline styles
  * and a few utility classes (no per-block CSS bloat). */
@@ -29,6 +42,8 @@ export interface CmsBlockStyle {
   boxed?: boolean;
   /** Float an image block so neighboring text wraps around it. */
   float?: "none" | "left" | "right";
+  /** Responsive visibility: hide this block on a breakpoint. */
+  hideOn?: "mobile" | "tablet" | "desktop" | null;
 }
 
 export interface CmsBlock {
@@ -70,6 +85,8 @@ export interface CmsPage {
   kind?: "page" | "blog_archive" | "blog_post";
   /** Grouping label, e.g. 'services' for pages, 'company news' for posts. */
   category?: string | null;
+  /** Global design tokens for this page (accent color, font, radius). */
+  tokens?: { accent?: string; font?: string; radius?: string } | null;
 }
 
 const BLOCK_ID_PREFIX = "blk_";
@@ -216,7 +233,75 @@ function blockWrapper(block: CmsBlock): string {
   if (s.bg) inline.push(`background:${esc(s.bg)}`);
   if (s.color) inline.push(`color:${esc(s.color)}`);
   const styleAttr = inline.length ? ` style="${inline.join(";")}"` : "";
-  return `<div class="cms-block ${PADDING_CLASSES[s.padding ?? "none"]} ${WIDTH_CLASSES[s.width ?? "full"]} cms-align-${s.align ?? "left"}"${styleAttr}>`;
+  const hideClass =
+    s.hideOn === "mobile"
+      ? " cms-hide-mobile"
+      : s.hideOn === "tablet"
+        ? " cms-hide-tablet"
+        : s.hideOn === "desktop"
+          ? " cms-hide-desktop"
+          : "";
+  return `<div class="cms-block ${PADDING_CLASSES[s.padding ?? "none"]} ${WIDTH_CLASSES[s.width ?? "full"]} cms-align-${s.align ?? "left"}${hideClass}"${styleAttr}>`;
+}
+
+// ----------------------------------------------------------------------------
+// New block renderers: button, spacer, divider, embed, icon, video, accordion,
+// cards. All output is escaped except the explicit raw-HTML embed block
+// (tenant-authored by design — WordPress-style shortcodes/scripts).
+// ----------------------------------------------------------------------------
+
+/** Small inline SVG icon set (name → inner SVG markup). */
+const ICON_PATHS: Record<string, string> = {
+  check: '<path d="M20 6L9 17l-5-5" />',
+  star: '<path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />',
+  "arrow-right": '<path d="M5 12h14M12 5l7 7-7 7" />',
+  mail: '<path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" /><path d="M22 6l-10 7L2 6" />',
+  phone: '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z" />',
+  "map-pin": '<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" /><circle cx="12" cy="10" r="3" />',
+  heart: '<path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />',
+  bolt: '<path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />',
+  users: '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />',
+  sparkles: '<path d="M12 3l1.9 5.8a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3L12 3z" />',
+  calendar: '<rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" />',
+};
+
+export const ICON_NAMES = Object.keys(ICON_PATHS);
+
+function iconSvg(name: string, size: number, color: string): string {
+  const path = ICON_PATHS[name] ?? ICON_PATHS.check;
+  const px = Number.isFinite(size) && size > 0 ? size : 24;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${px}" height="${px}" viewBox="0 0 24 24" fill="none" stroke="${esc(color || "currentColor")}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="cms-icon" aria-hidden="true">${path}</svg>`;
+}
+
+/** Auto-detect YouTube / Vimeo / self-hosted video from a URL. */
+function videoEmbed(url: string): string {
+  const u = String(url ?? "").trim();
+  if (!u) return "";
+  if (/^https?:\/\//.test(u)) {
+    const yt = u.match(/(?:youtube\.com\/(?:watch\?v=|embed\/|shorts\/)|youtu\.be\/)([\w-]{6,})/);
+    if (yt) {
+      return `<div class="cms-embed cms-youtube"><iframe src="https://www.youtube-nocookie.com/embed/${esc(yt[1])}" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen loading="lazy"></iframe></div>`;
+    }
+    const vm = u.match(/vimeo\.com\/(\d+)/);
+    if (vm) {
+      return `<div class="cms-embed cms-vimeo"><iframe src="https://player.vimeo.com/video/${esc(vm[1])}" title="Vimeo video player" frameborder="0" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen loading="lazy"></iframe></div>`;
+    }
+    if (/\.(mp4|webm|ogg)(\?|$)/i.test(u)) {
+      return `<div class="cms-video"><video src="${esc(u)}" controls preload="metadata" playsinline></video></div>`;
+    }
+  }
+  return `<p class="cms-block-error">Video URL not recognized — use a YouTube, Vimeo, or direct .mp4/.webm link.</p>`;
+}
+
+/** CSS variable overrides from a page's design tokens (accent/font/radius). */
+export function renderTokenStyles(tokens: CmsPage["tokens"]): string {
+  if (!tokens) return "";
+  const vars: string[] = [];
+  if (tokens.accent) vars.push(`--cms-accent:${esc(tokens.accent)}`);
+  if (tokens.font) vars.push(`--cms-font:${esc(tokens.font)}`);
+  if (tokens.radius) vars.push(`--cms-radius:${esc(tokens.radius)}`);
+  if (vars.length === 0) return "";
+  return `<style>.cms-shell{${vars.join(";")}} .cms-btn{background:var(--cms-accent,#2563eb);border-radius:var(--cms-radius,8px)} .cms-text a{color:var(--cms-accent,#2563eb)} .cms-divider{border-color:var(--cms-accent,#d1d5db)}</style>`;
 }
 
 /**
@@ -285,6 +370,79 @@ export function renderBlockHtml(block: CmsBlock, pageId?: string): string {
         default:
           return `<div class="cms-text"><p>${esc(cfg.note ?? cfg.content ?? "AI-built block")}</p></div>`;
       }
+    }
+    case "button": {
+      const cfg = block.config ?? {};
+      const label = esc(cfg.label ?? "Button");
+      const href = esc(cfg.href ?? "#");
+      const variant = cfg.variant === "outline" || cfg.variant === "ghost" ? cfg.variant : "solid";
+      const size = cfg.size === "sm" || cfg.size === "lg" ? cfg.size : "md";
+      return `${blockWrapper(block)}<a class="cms-btn cms-btn-${variant} cms-btn-${size}" href="${href}" ${href !== "#" ? 'target="_blank" rel="noopener"' : ""}>${label}</a></div>`;
+    }
+    case "spacer": {
+      const h = Number(block.config?.height ?? 48);
+      const px = Number.isFinite(h) && h >= 0 ? h : 48;
+      return `<div class="cms-spacer" style="height:${px}px" aria-hidden="true"></div>`;
+    }
+    case "divider": {
+      const cfg = block.config ?? {};
+      const style = cfg.style === "dashed" || cfg.style === "dotted" ? cfg.style : "solid";
+      const color = esc(cfg.color ?? "");
+      const colorAttr = color ? ` style="border-color:${color}"` : "";
+      return `<div class="cms-divider-wrap"><hr class="cms-divider cms-divider-${style}"${colorAttr} /></div>`;
+    }
+    case "embed": {
+      // Raw HTML — intentionally unsanitized (tenant-authored by design, like
+      // WordPress shortcodes). Only tenant editors can add these blocks.
+      const html = String(block.config?.html ?? "");
+      return html
+        ? `<div class="cms-embed-raw">${html}</div>`
+        : `<p class="cms-block-error">Paste HTML to embed (scripts, widgets, shortcodes).</p>`;
+    }
+    case "icon": {
+      const cfg = block.config ?? {};
+      const name = String(cfg.name ?? "check");
+      const size = Number(cfg.size ?? 24);
+      const color = String(cfg.color ?? "");
+      return `${blockWrapper(block)}<span class="cms-icon-wrap">${iconSvg(name, size, color)}</span></div>`;
+    }
+    case "video":
+      return `<div class="cms-video-block">${videoEmbed(String(block.config?.url ?? ""))}</div>`;
+    case "accordion": {
+      const items = Array.isArray(block.config?.items)
+        ? (block.config.items as { title?: string; body?: string }[])
+        : [];
+      if (items.length === 0) {
+        return `<p class="cms-block-error">Add items to the accordion (e.g. FAQ entries).</p>`;
+      }
+      const inner = items
+        .map(
+          (it, i) =>
+            `<details class="cms-acc-item"${i === 0 ? " open" : ""}><summary>${esc(it.title ?? "Item")}</summary><div class="cms-acc-body">${markdownToHtml(it.body ?? "")}</div></details>`
+        )
+        .join("\n");
+      return `${blockWrapper(block)}<div class="cms-accordion">${inner}</div></div>`;
+    }
+    case "cards": {
+      const items = Array.isArray(block.config?.items)
+        ? (block.config.items as { title?: string; text?: string; buttonLabel?: string; buttonHref?: string; image?: string }[])
+        : [];
+      if (items.length === 0) {
+        return `<p class="cms-block-error">Add cards to this grid (feature grid, pricing, team…).</p>`;
+      }
+      const inner = items
+        .map((it) => {
+          const img = it.image
+            ? `<img src="${esc(it.image)}" alt="${esc(it.title ?? "")}" loading="lazy" class="cms-card-img" />`
+            : "";
+          const btn =
+            it.buttonLabel && it.buttonHref
+              ? `<a class="cms-btn cms-btn-sm" href="${esc(it.buttonHref)}" ${it.buttonHref !== "#" ? 'target="_blank" rel="noopener"' : ""}>${esc(it.buttonLabel)}</a>`
+              : "";
+          return `<div class="cms-card"><div class="cms-card-body">${img}<h3>${esc(it.title ?? "")}</h3><p>${esc(it.text ?? "")}</p>${btn}</div></div>`;
+        })
+        .join("\n");
+      return `${blockWrapper(block)}<div class="cms-cards">${inner}</div></div>`;
     }
     default:
       return "";
@@ -408,6 +566,47 @@ export const CMS_STYLES = `
 .cms-columns-2{grid-template-columns:repeat(2,1fr)}
 .cms-columns-3{grid-template-columns:repeat(3,1fr)}
 .cms-columns-4{grid-template-columns:repeat(4,1fr)}
-@media(max-width:720px){.cms-columns-2,.cms-columns-3,.cms-columns-4{grid-template-columns:1fr}}
+/* Buttons & CTAs */
+.cms-btn{display:inline-flex;align-items:center;justify-content:center;gap:.4rem;padding:.65rem 1.2rem;border-radius:8px;background:#2563eb;color:#fff;font-weight:600;text-decoration:none;border:1px solid transparent;cursor:pointer;line-height:1.2}
+.cms-btn:hover{filter:brightness(1.08)}
+.cms-btn-outline{background:transparent;color:#2563eb;border-color:#2563eb}
+.cms-btn-ghost{background:transparent;color:#2563eb;border-color:transparent}
+.cms-btn-sm{padding:.4rem .8rem;font-size:.85rem}
+.cms-btn-lg{padding:.85rem 1.6rem;font-size:1.05rem}
+/* Spacer & Divider */
+.cms-spacer{width:100%}
+.cms-divider-wrap{padding:.4rem 0}
+.cms-divider{border:0;border-top:1px solid #d1d5db;margin:0}
+.cms-divider-dashed{border-top-style:dashed}
+.cms-divider-dotted{border-top-style:dotted}
+/* Raw embed */
+.cms-embed-raw{margin:1rem 0}
+.cms-embed-raw iframe{max-width:100%}
+/* Icon */
+.cms-icon-wrap{display:inline-flex;line-height:0}
+.cms-icon{display:inline-block}
+/* Video */
+.cms-video-block{margin:1.2rem 0}
+.cms-video video{width:100%;max-height:480px;border-radius:10px;background:#000}
+/* Accordion */
+.cms-accordion{display:grid;gap:.6rem}
+.cms-acc-item{border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;background:#fff}
+.cms-acc-item summary{cursor:pointer;padding:.85rem 1rem;font-weight:600;list-style:none;display:flex;align-items:center;justify-content:space-between}
+.cms-acc-item summary::after{content:"+";font-weight:400;color:#6b7280}
+.cms-acc-item[open] summary::after{content:"–"}
+.cms-acc-body{padding:0 1rem 1rem;font-size:.95rem;color:#4b5563}
+/* Cards */
+.cms-cards{display:grid;gap:1.2rem;grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+.cms-card{border:1px solid #e5e7eb;border-radius:12px;overflow:hidden;background:#fff;display:flex}
+.cms-card-body{padding:1.2rem;display:flex;flex-direction:column;gap:.5rem;flex:1}
+.cms-card-body h3{margin:0;font-size:1.1rem}
+.cms-card-body p{margin:0;font-size:.92rem;color:#4b5563;flex:1}
+.cms-card-img{width:100%;height:160px;object-fit:cover}
+.cms-card .cms-btn{align-self:flex-start}
+/* Responsive visibility (set per block in the builder) */
+.cms-hide-mobile{display:block}.cms-hide-tablet{display:block}.cms-hide-desktop{display:block}
+@media(max-width:720px){.cms-hide-mobile{display:none!important}.cms-columns-2,.cms-columns-3,.cms-columns-4{grid-template-columns:1fr}}
+@media(min-width:721px) and (max-width:1024px){.cms-hide-tablet{display:none!important}}
+@media(min-width:1025px){.cms-hide-desktop{display:none!important}}
 @media(max-width:640px){.cms-w-wide,.cms-w-half,.cms-w-third{width:100%}.cms-float-left,.cms-float-right{float:none;width:100%;margin:.8rem 0}}
 `;

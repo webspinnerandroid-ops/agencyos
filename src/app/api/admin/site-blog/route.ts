@@ -94,6 +94,8 @@ export async function POST(request: NextRequest) {
         updated_at: now,
         category: typeof body.category === "string" && body.category.trim() ? body.category.trim() : null,
         tags: Array.isArray(body.tags) ? body.tags.filter((t: string) => typeof t === "string" && t.trim()) : [],
+        seo_score: typeof body.seoScore === "number" ? body.seoScore : null,
+        aeo_geo_score: typeof body.aeoGeoScore === "number" ? body.aeoGeoScore : null,
       })
       .select()
       .single();

@@ -123,6 +123,102 @@ function useCopy() {
 }
 
 // ------------------------------------------------------------------
+// Publish-to-Site-Blog button (super admin only)
+// ------------------------------------------------------------------
+
+function PublishToSiteBlogButton({
+  title,
+  slug,
+  body,
+  excerpt,
+  featuredImageUrl,
+  seoScore,
+  aeoGeoScore,
+}: {
+  title: string;
+  slug: string;
+  body: string;
+  excerpt: string;
+  featuredImageUrl: string;
+  seoScore: number | null;
+  aeoGeoScore: number | null;
+}) {
+  const [publishing, setPublishing] = useState(false);
+  const [published, setPublished] = useState(false);
+  const [publishError, setPublishError] = useState<string | null>(null);
+
+  const handlePublish = async () => {
+    setPublishing(true);
+    setPublishError(null);
+    try {
+      const res = await fetch("/api/admin/site-blog", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title,
+          slug,
+          body,
+          excerpt: excerpt || undefined,
+          featuredImageUrl: featuredImageUrl || undefined,
+          status: "published",
+          seoScore,
+          aeoGeoScore,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setPublishError(data.error ?? "Failed to publish");
+      } else {
+        setPublished(true);
+      }
+    } catch {
+      setPublishError("Network error");
+    } finally {
+      setPublishing(false);
+    }
+  };
+
+  if (published) {
+    return (
+      <div className="flex items-center gap-2">
+        <Check className="size-4 text-green-600" />
+        <span className="text-sm text-green-700">Published to site blog</span>
+        <a
+          href={`/blog/${slug}`}
+          target="_blank"
+          rel="noreferrer"
+          className="text-sm text-primary hover:underline"
+        >
+          View →
+        </a>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={handlePublish}
+        disabled={publishing}
+      >
+        {publishing ? (
+          <Loader2 className="size-3.5 animate-spin mr-1.5" />
+        ) : (
+          <FileText className="size-3.5 mr-1.5" />
+        )}
+        Publish to Site Blog
+      </Button>
+      {publishError && (
+        <span className="text-xs text-destructive">{publishError}</span>
+      )}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------
 // Page Component
 // ------------------------------------------------------------------
 
@@ -902,6 +998,19 @@ export default function GeneratePage() {
                   </p>
                 </div>
               ) : null}
+
+              {/* Publish to Site Blog */}
+              <div className="flex items-center gap-3 pt-3 border-t">
+                <PublishToSiteBlogButton
+                  title={result.blogPost.title}
+                  slug={result.blogPost.slug}
+                  body={result.blogPost.body}
+                  excerpt={result.blogPost.metaDescription ?? ""}
+                  featuredImageUrl={result.blogPost.images?.[0]?.url ?? ""}
+                  seoScore={result.blogPost.seo?.score ?? null}
+                  aeoGeoScore={result.blogPost.seo?.checks ? Math.round(result.blogPost.seo.checks.reduce((s: number, c: any) => s + (c.passed ? 1 : 0), 0) / result.blogPost.seo.checks.length * 100) : null}
+                />
+              </div>
             </CardContent>
           </Card>
 

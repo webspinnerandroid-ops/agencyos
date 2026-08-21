@@ -7,6 +7,7 @@ import {
   siteScoreBadgeClass,
   type SiteBlogPost,
 } from "@/lib/site-blog";
+import { Rss } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -40,7 +41,17 @@ export default async function BlogArchivePage() {
     <div className="min-h-screen bg-background">
       <PublicHeader />
       <main className="max-w-5xl mx-auto px-4 py-12">
-        <h1 className="text-3xl font-bold tracking-tight mb-2">Blog</h1>
+        <div className="flex items-center justify-between mb-2">
+          <h1 className="text-3xl font-bold tracking-tight">Blog</h1>
+          <a
+            href="/blog/feed.xml"
+            className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-primary transition-colors"
+            title="RSS Feed"
+          >
+            <Rss className="size-4" />
+            RSS
+          </a>
+        </div>
         <p className="text-muted-foreground mb-10">
           News, guides, and updates from the team.
         </p>
@@ -69,10 +80,15 @@ export default async function BlogArchivePage() {
                   </div>
                 )}
                 <div className="p-5 flex-1 flex flex-col">
-                  <div className="flex items-center gap-2 mb-2">
+                  <div className="flex items-center gap-2 mb-2 flex-wrap">
                     <div className="text-xs text-muted-foreground">
                       {post.published_at ? formatShortDate(post.published_at) : ""}
                     </div>
+                    {post.category && (
+                      <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-primary/10 text-primary">
+                        {post.category}
+                      </span>
+                    )}
                     {(post.seo_score != null || post.aeo_geo_score != null) && (
                       <div className="ml-auto flex items-center gap-1">
                         {post.seo_score != null && (

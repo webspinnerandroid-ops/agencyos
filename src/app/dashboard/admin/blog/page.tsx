@@ -36,6 +36,8 @@ type Editor = {
   body: string;
   featuredImageUrl: string;
   status: "draft" | "published";
+  category: string;
+  tags: string;
 };
 
 const EMPTY_EDITOR: Editor = {
@@ -46,6 +48,8 @@ const EMPTY_EDITOR: Editor = {
   body: "",
   featuredImageUrl: "",
   status: "draft",
+  category: "",
+  tags: "",
 };
 
 export default function SiteBlogAdminPage() {
@@ -133,6 +137,11 @@ export default function SiteBlogAdminPage() {
         body: editor.body,
         featuredImageUrl: editor.featuredImageUrl.trim(),
         status: editor.status,
+        category: editor.category.trim() || null,
+        tags: editor.tags
+          .split(",")
+          .map((t) => t.trim())
+          .filter(Boolean),
       };
       const url = editor.id
         ? `/api/admin/site-blog/${editor.id}`
@@ -221,6 +230,8 @@ export default function SiteBlogAdminPage() {
       body: post.body,
       featuredImageUrl: post.featured_image_url ?? "",
       status: post.status,
+      category: post.category ?? "",
+      tags: (post.tags ?? []).join(", "),
     });
     setShowPreview(false);
     setFeedback(null);
@@ -340,6 +351,27 @@ export default function SiteBlogAdminPage() {
                   <img src={editor.featuredImageUrl} alt="Featured preview" className="w-full h-auto" />
                 </div>
               )}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>Category</Label>
+                <Input
+                  value={editor.category}
+                  onChange={(e) => patchEditor({ category: e.target.value })}
+                  placeholder="e.g. SEO, Marketing, Tutorial"
+                />
+                <p className="text-xs text-muted-foreground">Groups posts on the /blog archive. Leave blank for uncategorized.</p>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Tags</Label>
+                <Input
+                  value={editor.tags}
+                  onChange={(e) => patchEditor({ tags: e.target.value })}
+                  placeholder="Comma-separated, e.g. seo, tips, 2026"
+                />
+                <p className="text-xs text-muted-foreground">Comma-separated tags for filtering.</p>
+              </div>
             </div>
 
             <div className="space-y-1.5">

@@ -1,10 +1,11 @@
 /**
- * Social Publisher Abstraction
+ * Social Publisher — Ayrshare integration.
  *
  * Resolves tenant-specific social tokens and publishes content to the
- * configured social platforms. Currently uses a mock implementation;
- * swap in the Ayrshare API (or any other provider) by replacing the
- * `publishToPlatform` function body.
+ * configured social platforms via the Ayrshare API.
+ *
+ * Requires AYRSHARE_API_KEY in .env.local. Tenant platform tokens are
+ * passed via platformOptions for cross-posting to the tenant's own accounts.
  *
  * Ayrshare API reference: https://docs.ayrshare.com/reference/post
  */

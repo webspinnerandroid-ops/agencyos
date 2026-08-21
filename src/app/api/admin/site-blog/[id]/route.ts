@@ -70,6 +70,12 @@ export async function PATCH(
       patch.status = nextStatus;
       patch.published_at = nextStatus === "published" ? new Date().toISOString() : null;
     }
+    if (body.category !== undefined) {
+      patch.category = typeof body.category === "string" && body.category.trim() ? body.category.trim() : null;
+    }
+    if (body.tags !== undefined) {
+      patch.tags = Array.isArray(body.tags) ? body.tags.filter((t: string) => typeof t === "string" && t.trim()) : [];
+    }
     patch.updated_at = new Date().toISOString();
 
     // Slug uniqueness check (excluding this row).

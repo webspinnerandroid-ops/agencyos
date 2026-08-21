@@ -20,6 +20,10 @@ export interface SiteBlogPost {
    * content is published to the site blog; null for manual posts. */
   seo_score?: number | null;
   aeo_geo_score?: number | null;
+  /** Category for blog archive filtering (migration 095). */
+  category?: string | null;
+  /** Tags for blog archive filtering (migration 095). */
+  tags?: string[];
 }
 
 /** Tailwind classes for a score chip by value (matches post lists). */

@@ -92,6 +92,8 @@ export async function POST(request: NextRequest) {
         published_at: body.status === "published" ? now : null,
         created_at: now,
         updated_at: now,
+        category: typeof body.category === "string" && body.category.trim() ? body.category.trim() : null,
+        tags: Array.isArray(body.tags) ? body.tags.filter((t: string) => typeof t === "string" && t.trim()) : [],
       })
       .select()
       .single();

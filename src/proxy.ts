@@ -469,7 +469,9 @@ export default async function middleware(request: NextRequest) {
       .limit(50)
 
     if (!userRoles || userRoles.length === 0) {
-      cacheSet(authCache, accessToken, null, AUTH_TTL_MS)
+      // Don't cache null — the role row may not exist yet (registration race)
+      // or may have been deleted. Re-query on every request so recovery is
+      // instant once the role is created, instead of bouncing for 60s.
       const pendingUrl = request.nextUrl.clone()
       pendingUrl.pathname = "/pending-approval"
       return NextResponse.redirect(pendingUrl)
@@ -493,6 +495,9 @@ export default async function middleware(request: NextRequest) {
     }
     cacheSet(authCache, accessToken, auth, AUTH_TTL_MS)
   } else if (auth === null) {
+    // Stale negative cache — the role may have been created since. Don't
+    // keep bouncing; clear the entry and let the next request re-query.
+    authCache.delete(accessToken)
     const pendingUrl = request.nextUrl.clone()
     pendingUrl.pathname = "/pending-approval"
     return NextResponse.redirect(pendingUrl)

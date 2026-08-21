@@ -116,8 +116,13 @@
   * {
     @apply border-border outline-ring/50;
   }
+  html {
+    overflow-x: hidden;
+  }
   body {
     @apply bg-background text-foreground;
+    overflow-x: hidden;
+    min-height: 100dvh;
   }
   /* Theme the <html> element itself so there is never a white flash behind
      the body while a page loads or between navigations. --background flips

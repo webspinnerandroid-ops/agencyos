@@ -89,7 +89,7 @@ export default async function DashboardLayout({
           </div>
         </div>
       </header>
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 overflow-x-hidden">
         <PageBreadcrumbs />
         {children}
       </main>

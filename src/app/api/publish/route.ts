@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantId, getRole } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
-import { publishToWordPress } from "@/lib/publishing/wordpressPublisher";
+import {
+  buildSavedPostPublishPayload,
+  publishGeneratedContentToSites,
+  publishToWordPress,
+} from "@/lib/publishing/wordpressPublisher";
 import { publishPost as publishToSocial } from "@/lib/publishing/socialPublisher";
 import { normalizeScheduledAt } from "@/lib/scheduling";
 import { scoreAeoGeo } from "@/lib/aeo-geo";
@@ -360,6 +364,42 @@ export async function POST(request: NextRequest) {
             ? "The site blog has no background publisher — saved as a draft. Publish it from Site Blog admin when you're ready."
             : undefined,
       });
+    } else if (platform === "connected_sites") {
+      // Publish a SAVED post to the connected WordPress sites with the full
+      // create-new OR overwrite-existing (posts/pages) flow, including image
+      // upload/replacement. The content is rebuilt from the stored post — the
+      // client only sends the per-site targets.
+      const targets = body?.targets;
+      if (!Array.isArray(targets) || targets.length === 0) {
+        return NextResponse.json(
+          { error: "Select at least one connected site to publish to." },
+          { status: 400 }
+        );
+      }
+      const supabase = await createServiceClient();
+      const { data: post } = await supabase
+        .from("posts")
+        .select("title, content, media_urls")
+        .eq("id", postId)
+        .eq("tenant_id", tenantId)
+        .maybeSingle();
+      if (!post) {
+        return NextResponse.json({ error: "Post not found" }, { status: 404 });
+      }
+      const built = buildSavedPostPublishPayload(post);
+      if (!built) {
+        return NextResponse.json(
+          { error: "This post has no body content to publish." },
+          { status: 400 }
+        );
+      }
+      const wpResult = await publishGeneratedContentToSites(
+        tenantId,
+        targets,
+        built.content
+      );
+      results.push(...wpResult.results);
+      allSucceeded = wpResult.allSucceeded;
     } else if (platform === "wordpress" || platform === "blog") {
       const wpResult = await publishToWordPress(postId, tenantId, action || "publish", normalizedScheduledAt ?? undefined, categoryId);
       results.push(...wpResult.results);

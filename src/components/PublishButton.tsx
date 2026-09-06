@@ -5,7 +5,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Loader2, Send, Calendar, FolderTree } from "lucide-react";
+import { Loader2, Send, Calendar, FolderTree, Globe } from "lucide-react";
+import ConnectedSitesPublishDialog, {
+  type PublishablePost,
+  type SitePublishTarget,
+} from "@/components/publish/ConnectedSitesPublishDialog";
 
 interface PublishButtonProps {
   postId: string;
@@ -23,6 +27,10 @@ export default function PublishButton({ postId, postType, onPublished }: Publish
     { platform: string; success: boolean; url?: string; message?: string; errorMessage?: string }[]
   >([]);
   const [isPending, startTransition] = useTransition();
+  // Connected-sites publisher (create new OR overwrite existing post/page,
+  // images included) — opened from a dedicated platform option for blog posts.
+  const [connectedOpen, setConnectedOpen] = useState(false);
+  const [connectedPost, setConnectedPost] = useState<PublishablePost | null>(null);
   // Super admin can publish to the marketing site's blog (/blog/<slug>).
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
 
@@ -86,6 +94,30 @@ export default function PublishButton({ postId, postType, onPublished }: Publish
   }, [showOptions, postType]);
 
   const activeWpSite = wpSites.find((s) => s.blogPlatformId === wpSiteId);
+
+  // Open the connected-sites publisher for this saved post: load its title +
+  // images (the full content is rebuilt server-side by /api/publish), then
+  // swap the small publish dialog for the shared connected-sites dialog.
+  const openConnectedSites = async () => {
+    try {
+      const res = await fetch(`/api/posts/${postId}/publish-info`, {
+        credentials: "include",
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error ?? "Could not load post data");
+      }
+      setConnectedPost({
+        title: data.title ?? "Untitled Post",
+        body: "",
+        images: Array.isArray(data.images) ? data.images : [],
+      });
+      setShowOptions(false);
+      setConnectedOpen(true);
+    } catch (err: any) {
+      setFeedback(err?.message ?? "Could not load post data");
+    }
+  };
 
   const handlePublish = () => {
     startTransition(async () => {
@@ -153,6 +185,7 @@ export default function PublishButton({ postId, postType, onPublished }: Publish
           ? [{ id: "site_blog", name: "Site Blog (/blog)" }]
           : []),
         { id: "wordpress", name: "WordPress" },
+        { id: "connected_sites", name: "Connected Sites (create / overwrite)" },
         { id: "all", name: "All Connected" },
       ]
     : [
@@ -210,6 +243,24 @@ export default function PublishButton({ postId, postType, onPublished }: Publish
             </Select>
           </div>
 
+          {platform === "connected_sites" ? (
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">
+                Create a new post or overwrite an existing post/page on one or
+                more connected WordPress sites — content and images replaced
+                when selected.
+              </p>
+              <Button
+                size="sm"
+                className="w-full"
+                onClick={openConnectedSites}
+                disabled={isPending}
+              >
+                <Globe className="size-3 mr-1" /> Choose sites &amp; publish
+              </Button>
+            </div>
+          ) : (
+            <>
           {platform === "wordpress" && wpSites.length > 0 && (
             <div className="space-y-2">
               <Label className="text-xs">
@@ -292,6 +343,8 @@ export default function PublishButton({ postId, postType, onPublished }: Publish
                 wherever your audience is.
               </p>
             </div>
+            )}
+            </>
           )}
 
           <div className="flex items-center gap-2 pt-1">
@@ -339,6 +392,37 @@ export default function PublishButton({ postId, postType, onPublished }: Publish
           )}
           </div>
         </div>
+      )}
+      {connectedPost && connectedOpen && (
+        <ConnectedSitesPublishDialog
+          post={connectedPost}
+          onClose={() => {
+            setConnectedOpen(false);
+            setConnectedPost(null);
+          }}
+          onPublish={async (targets: SitePublishTarget[]) => {
+            const res = await fetch("/api/publish", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                postId,
+                platform: "connected_sites",
+                targets,
+              }),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+              throw new Error(
+                (data as { error?: string })?.error ?? "Publish failed"
+              );
+            }
+            return {
+              results: (data.results ?? []) as any[],
+              message: data.message as string | undefined,
+            };
+          }}
+          onPublished={() => onPublished?.()}
+        />
       )}
     </div>
   );

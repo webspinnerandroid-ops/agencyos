@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState, type ChangeEvent } from "react";
+import { useCallback, useEffect, useState, type ChangeEvent } from "react";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { generateContentSchema, type GenerateContentInput } from "@/lib/validations";
@@ -24,10 +24,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Loader2, Copy, Check, Sparkles, FileText, Search, AlertTriangle, Upload, X, ImagePlus } from "lucide-react";
+import { Loader2, Copy, Check, Sparkles, FileText, Search, AlertTriangle, Upload, X, ImagePlus, Globe } from "lucide-react";
 import PostContent from "@/components/BlogContent";
 import ScoreBadge from "@/components/ScoreBadge";
 import { type SchemaType } from "@/lib/seo/wp-seo-meta";
+import ConnectedSitesPublishDialog, {
+  type PublishResultRow,
+} from "@/components/publish/ConnectedSitesPublishDialog";
 
 // ------------------------------------------------------------------
 // Types
@@ -56,6 +59,7 @@ interface BlogPost {
   wordCount?: number;
   suggestedImagePrompt?: string;
   images?: BlogImage[];
+  seoMeta?: Record<string, string | string[]>;
   status: string;
 }
 
@@ -219,6 +223,56 @@ function PublishToSiteBlogButton({
 }
 
 // ------------------------------------------------------------------
+// Publish-to-connected-sites dialog (create new OR overwrite existing)
+// ------------------------------------------------------------------
+
+function PublishToConnectedSitesButton({ post }: { post: BlogPost }) {
+  const [open, setOpen] = useState(false);
+  const publishImages = (post.images ?? []).map((img) => ({
+    url: img.url,
+    alt: img.description || img.sectionTitle || "",
+    placement: img.placement,
+    description: img.description,
+  }));
+  const publishPost = {
+    title: post.title,
+    body: post.body,
+    slug: post.slug,
+    metaDescription: post.metaDescription,
+    seoMeta: post.seoMeta ?? undefined,
+    images: publishImages,
+  };
+  return (
+    <>
+      <Button variant="outline" size="sm" onClick={() => setOpen(true)}>
+        <Globe className="size-3.5 mr-1.5" />
+        Publish to Connected Sites
+      </Button>
+      {open && (
+        <ConnectedSitesPublishDialog
+          post={publishPost}
+          onClose={() => setOpen(false)}
+          onPublish={async (targets) => {
+            const res = await fetch("/api/publish/generated", {
+              method: "POST",
+              credentials: "include",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ targets, content: publishPost }),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+              throw new Error(data.error ?? "Publish failed");
+            }
+            return {
+              results: (data.results ?? []) as PublishResultRow[],
+              message: data.message as string | undefined,
+            };
+          }}
+        />
+      )}
+    </>
+  );
+}
 // Page Component
 // ------------------------------------------------------------------
 
@@ -999,8 +1053,9 @@ export default function GeneratePage() {
                 </div>
               ) : null}
 
-              {/* Publish to Site Blog */}
-              <div className="flex items-center gap-3 pt-3 border-t">
+              {/* Publish to connected sites / site blog */}
+              <div className="flex items-center gap-3 pt-3 border-t flex-wrap">
+                <PublishToConnectedSitesButton post={result.blogPost} />
                 <PublishToSiteBlogButton
                   title={result.blogPost.title}
                   slug={result.blogPost.slug}

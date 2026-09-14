@@ -1,0 +1,19 @@
+service: web_build
+description: >
+  Client website built on FreeCMS (file-based Next.js): scaffolded from the
+  freecms-client-site template repo, content imported from the SEO tool via
+  the SeoToolExport contract, deployed from the client's own Gitea repo.
+required_fields: [legal_name, domain, brand_assets_url, contact_email]
+repo_template: freecms-client-site
+provision_subsystems:
+  - agency_os_workspace
+  - freecms_repo
+  - docusign
+  - stripe
+workflow: onboard_client
+documents:
+  - service_agreement
+  - invoice
+pricing_defaults:
+  build_fee_usd: 2500
+  hosting_monthly_usd: 45

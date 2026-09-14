@@ -1,0 +1,18 @@
+service: seo_campaign
+description: >
+  Monthly SEO campaign delivered through the agency-os platform: audit,
+  campaign plan, content pipeline, monthly reporting. Signed in-house via the
+  public signing page; billed through Stripe.
+required_fields: [legal_name, domain, target_keywords, competitors, contact_email]
+repo_template: null
+provision_subsystems:
+  - agency_os_workspace
+  - agency_os_seo
+  - docusign
+  - stripe
+workflow: onboard_client
+documents:
+  - service_agreement
+  - invoice
+pricing_defaults:
+  monthly_retainer_usd: 750

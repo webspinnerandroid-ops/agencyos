@@ -606,9 +606,9 @@ export default function ConnectedSitesPublishDialog({
 
         {results.length > 0 && (
           <div className="space-y-1.5 border-t pt-2">
-            {results.map((r) => (
+            {results.map((r, i) => (
               <div
-                key={r.blogPlatformId ?? r.siteName ?? Math.random()}
+                key={r.blogPlatformId ?? r.siteName ?? `result-${i}`}
                 className="flex items-center justify-between text-xs"
               >
                 <span className="font-medium truncate mr-2">

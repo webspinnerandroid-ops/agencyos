@@ -22,6 +22,7 @@ import { classifySyncedEmails } from "@/lib/inngest/functions/classifyEmails";
 import { processAutoPublishHolds } from "@/lib/inngest/functions/processAutoPublishHolds";
 import { processPublishRetries } from "@/lib/inngest/functions/processPublishRetries";
 import { publishingHealthWeeklyEmail } from "@/lib/inngest/functions/publishingHealthWeeklyEmail";
+import { refreshModelCatalog } from "@/lib/inngest/functions/refreshModelCatalog";
 
 /**
  * Inngest API handler — serves all registered functions.
@@ -33,5 +34,5 @@ import { publishingHealthWeeklyEmail } from "@/lib/inngest/functions/publishingH
  */
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [publishScheduledPosts, monthlyBillingReset, syncInboxes, syncSocialInbox, processSequences, teamChatTask, weeklyOpportunityScan, autoRewritePost, syncSiteMetrics, scoreCompetitors, refreshCompetitorBenchmarks, checkProviderBalances, autoAuditMonitoredSites, assetHealthWeeklyEmail, syncGbpReviews, reputationDigestEmail, onboardClient, reconcileWorkflows, classifySyncedEmails, processAutoPublishHolds, processPublishRetries, publishingHealthWeeklyEmail],
+  functions: [publishScheduledPosts, monthlyBillingReset, syncInboxes, syncSocialInbox, processSequences, teamChatTask, weeklyOpportunityScan, autoRewritePost, syncSiteMetrics, scoreCompetitors, refreshCompetitorBenchmarks, checkProviderBalances, autoAuditMonitoredSites, assetHealthWeeklyEmail, syncGbpReviews, reputationDigestEmail, onboardClient, reconcileWorkflows, classifySyncedEmails, processAutoPublishHolds, processPublishRetries, publishingHealthWeeklyEmail, refreshModelCatalog],
 });

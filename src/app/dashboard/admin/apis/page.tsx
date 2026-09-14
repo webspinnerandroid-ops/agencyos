@@ -38,6 +38,8 @@ export default function AdminApisPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [verifying, setVerifying] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [catalogSyncedAt, setCatalogSyncedAt] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -64,6 +66,7 @@ export default function AdminApisPage() {
       if (res.ok) {
         const data = await res.json();
         setModels(data.models ?? []);
+        setCatalogSyncedAt(data.catalogSyncedAt ?? null);
       }
     } catch {
       // ignore
@@ -120,6 +123,37 @@ export default function AdminApisPage() {
       body: JSON.stringify({ thresholds: { [providerId]: value } }),
     });
     load();
+  };
+
+  const syncCatalogs = async () => {
+    setSyncing(true);
+    setMessage(null);
+    try {
+      const res = await fetch("/api/admin/models", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sync: true }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setMessage(data.error ?? "Catalog sync failed");
+        return;
+      }
+      setCatalogSyncedAt(data.syncedAt ?? null);
+      const parts = [
+        `${data.providersSynced} provider(s) synced`,
+        `${data.modelsUpserted} model(s) up to date`,
+      ];
+      if (data.modelsDeprecated > 0) parts.push(`${data.modelsDeprecated} retired`);
+      if (data.providersFailed > 0) parts.push(`${data.providersFailed} failed (no key or provider error)`);
+      setMessage(parts.join(" · "));
+      await loadModels();
+    } catch {
+      setMessage("Network error during catalog sync");
+    } finally {
+      setSyncing(false);
+    }
   };
 
   const verifyFalModels = async () => {
@@ -262,13 +296,18 @@ export default function AdminApisPage() {
 
       {tab === "models" && (
         <>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button variant="outline" size="sm" onClick={syncCatalogs} disabled={syncing}>
+              {syncing ? <Loader2 className="size-4 animate-spin mr-1" /> : <RefreshCw className="size-4 mr-1" />}
+              Sync model catalogs
+            </Button>
             <Button variant="outline" size="sm" onClick={verifyFalModels} disabled={verifying}>
-              {verifying ? <Loader2 className="size-4 animate-spin mr-1" /> : <RefreshCw className="size-4 mr-1" />}
+              {verifying ? <Loader2 className="size-4 animate-spin mr-1" /> : <ShieldAlert className="size-4 mr-1" />}
               Verify fal.ai availability
             </Button>
             <span className="text-xs text-muted-foreground">
-              Fetches each fal.ai model page — retired models are flagged and hidden from selectors.
+              Sync pulls each provider's live model list (runs automatically twice daily).
+              {catalogSyncedAt && ` Last synced ${new Date(catalogSyncedAt).toLocaleString()}.`}
             </span>
           </div>
 

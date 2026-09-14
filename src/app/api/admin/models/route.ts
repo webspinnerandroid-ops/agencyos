@@ -37,7 +37,16 @@ export async function GET() {
       .select("id, model_identifier, supported_tasks, is_deprecated, last_verified_at, provider:ai_providers(id, name)")
       .order("model_identifier");
     if (error) throw error;
-    return NextResponse.json({ models: data ?? [] });
+
+    // Freshness for the admin panel: the most recent catalog sync across all
+    // rows (the twice-daily cron and the manual button stamp the same field).
+    const allModels = (data ?? []) as any[];
+    const catalogSyncedAt = allModels.reduce<string | null>((max, m) => {
+      const t = (m.last_verified_at as string | null) ?? null;
+      return t && (!max || t > max) ? t : max;
+    }, null);
+
+    return NextResponse.json({ models: data ?? [], catalogSyncedAt });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? "Internal error" }, { status: 500 });
   }
@@ -52,6 +61,7 @@ export async function POST(request: NextRequest) {
     const body = (await request.json().catch(() => ({}))) as {
       verify?: boolean;
       deprecate?: { id: string; is_deprecated: boolean };
+      sync?: boolean;
     };
 
     // Manual deprecation toggle.
@@ -64,6 +74,22 @@ export async function POST(request: NextRequest) {
         .single();
       if (error) throw error;
       return NextResponse.json({ model: data });
+    }
+
+    // Live catalog sync: pull each configured provider's current model list
+    // and upsert it (the manual counterpart of the twice-daily cron).
+    if (body.sync) {
+      const { syncModelCatalogs } = await import("@/lib/ai/model-catalog");
+      const { results, syncedAt } = await syncModelCatalogs();
+      const ok = results.filter((r) => r.ok);
+      return NextResponse.json({
+        syncedAt,
+        providersSynced: ok.length,
+        providersFailed: results.length - ok.length,
+        modelsUpserted: ok.reduce((s, r) => s + r.upserted, 0),
+        modelsDeprecated: ok.reduce((s, r) => s + r.deprecated, 0),
+        errors: results.filter((r) => !r.ok).map((r) => ({ provider: r.provider, error: r.error })),
+      });
     }
 
     // Availability check for fal.ai-hosted models (model pages are public).

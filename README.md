@@ -146,6 +146,16 @@ All migrations live in the `supabase/migrations/` folder.
     ladder, then escalates (alert notification + surfaced in the Scheduled panel).
   - `publishing-health-weekly-email` — Mondays 08:30 UTC; per-client scheduled/published/failed summary
     for the last 7 days (Resend; logs instead of failing when `RESEND_API_KEY` is unset).
+  - `refresh-model-catalog` — **twice daily** (03:00 & 15:00 UTC); pulls each configured AI provider's
+    live model list and upserts `ai_models`, so new models appear in pickers and retired ones are
+    flagged deprecated with no code change. Uses the platform env key per provider (or a tenant-stored
+    key); OpenRouter's public catalog syncs keyless. Providers without a key are skipped and reported.
+    Manual counterpart: **Admin → APIs & Models → Models → “Sync model catalogs”**; the panel shows
+    the last sync time per model.
+- **Migration 110** (`110_ai_models_catalog_sync`) — deduplicates `ai_models` on
+  `(provider_id, model_identifier)`, adds the UNIQUE constraint the catalog upsert requires, and
+  `last_verified_at` for freshness stamps. Until it runs, the cron logs upsert errors and the model
+  list simply stays as seeded (the app keeps working otherwise).
 - **Scheduled panel** (`/dashboard/scheduled`, nav under Manage) — overview of everything queued for the
   publish cron (upcoming / due / overdue >1 h) plus persistent failures whose retry ladder is exhausted.
   Persistent failures have **Retry now** (re-queue a fresh attempt immediately) and **Dismiss**

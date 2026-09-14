@@ -96,6 +96,8 @@ async function publishToPlatform(
   platformPostId?: string;
   platformPostUrl?: string;
   errorMessage?: string;
+  /** True when delivery went through the tenant's Make.com webhook. */
+  viaRelay?: boolean;
 }> {
   // --- Make.com relay path (no Meta review needed) -----------------------
   if (RELAY_PLATFORMS.has(target.platform)) {
@@ -112,10 +114,11 @@ async function publishToPlatform(
         success: true,
         platformPostId: relay.platformPostId,
         platformPostUrl: relay.platformPostUrl,
+        viaRelay: true,
       };
     }
     if (relay.status === "failed") {
-      return { success: false, errorMessage: relay.errorMessage };
+      return { success: false, errorMessage: relay.errorMessage, viaRelay: true };
     }
     // status === "skipped" (no relay configured) → fall through to Ayrshare
   }
@@ -321,13 +324,16 @@ export async function publishPost(
         .eq("id", target.ppId);
     }
 
-    // 4. Insert publishing log
+    // 4. Insert publishing log — relay deliveries are marked "via Make"
+    // in site_name so the publishing history panel shows the webhook
+    // outcome alongside direct publishes.
     await supabase.from("publishing_logs").insert({
       post_id: postId,
       platform: target.platform,
       attempt_at: new Date().toISOString(),
       success: outcome.success,
       error_message: outcome.errorMessage ?? null,
+      site_name: outcome.viaRelay ? "via Make.com" : null,
     });
   }
 

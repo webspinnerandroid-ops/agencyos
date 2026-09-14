@@ -228,7 +228,7 @@ export default function ClientsPage({
                     <SelectValue placeholder="Select a workspace…" />
                   </SelectTrigger>
                   <SelectContent className="w-full">
-                    <SelectItem value={NO_WORKSPACE}>No workspace (create during onboarding)</SelectItem>
+                    <SelectItem value={NO_WORKSPACE}>Create a dedicated workspace (recommended)</SelectItem>
                     {workspaceOptions.map((w) => (
                       <SelectItem key={w.id} value={w.id}>
                         {w.name}
@@ -239,8 +239,8 @@ export default function ClientsPage({
                 </Select>
                 {workspaceOptions.length === 0 && !isPending && (
                   <p className="text-[11px] text-muted-foreground">
-                    No workspaces found — the client&apos;s workspace will be
-                    created during onboarding.
+                    No workspaces found — a dedicated workspace will be
+                    created for this client automatically.
                   </p>
                 )}
               </div>

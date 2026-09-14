@@ -1,7 +1,7 @@
 "use server";
 
 import { getTenantId, requireRole } from "@/lib/auth";
-import { getCurrentWorkspaceId } from "@/lib/workspace";
+import { slugify } from "@/lib/cms";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getLifecycle, getOrCreateLifecycle } from "@/lib/client-lifecycle";
 
@@ -74,6 +74,13 @@ export async function createClient(input: {
   name: string;
   website?: string;
   notes?: string;
+  /**
+   * Explicit workspace choice from the Add Client form. A workspace id =
+   * attach to that existing workspace; null/undefined = create a DEDICATED
+   * workspace for this client right now (named after the client) and link it
+   * — one client, one workspace, from the moment of creation. Never silently
+   * glue the client to whatever workspace the user happens to be browsing.
+   */
   workspaceId?: string | null;
 }): Promise<{ id: string }> {
   const tenantId = await getTenantId();
@@ -81,19 +88,34 @@ export async function createClient(input: {
   const name = (input.name ?? "").trim();
   if (!name) throw new Error("Client name is required");
 
-  // Resolve the workspace: an explicitly chosen one (validated against this
-  // tenant), else the currently-selected workspace, else none (the wizard will
-  // offer to create one on Step 1).
-  let workspaceId = input.workspaceId ?? (await getCurrentWorkspaceId());
   const supabase = await createServiceClient();
-  if (workspaceId) {
+
+  // Resolve the workspace: an explicitly chosen id (validated against this
+  // tenant), else a brand-new dedicated workspace for this client.
+  let workspaceId: string | null = null;
+  if (input.workspaceId) {
     const { data: owned } = await supabase
       .from("workspaces")
       .select("id")
-      .eq("id", workspaceId)
+      .eq("id", input.workspaceId)
       .eq("tenant_id", tenantId)
       .maybeSingle();
-    if (!owned) workspaceId = null;
+    if (owned) workspaceId = owned.id;
+  }
+  if (!workspaceId) {
+    const base = slugify(name).slice(0, 40);
+    const { data: ws, error: wsErr } = await supabase
+      .from("workspaces")
+      .insert({
+        tenant_id: tenantId,
+        name,
+        slug: `${base}-${crypto.randomUUID().slice(0, 8)}`,
+        is_default: false,
+      })
+      .select("id")
+      .single();
+    if (wsErr || !ws) throw new Error(`Failed to create the client's workspace: ${wsErr?.message ?? ""}`);
+    workspaceId = ws.id;
   }
 
   const { data, error } = await supabase

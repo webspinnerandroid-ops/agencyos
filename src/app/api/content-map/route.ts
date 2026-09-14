@@ -4,6 +4,7 @@ import { getCurrentWorkspaceId } from "@/lib/workspace";
 import { createServiceClient } from "@/lib/supabase/server";
 import { rateLimitRequest } from "@/lib/rate-limit";
 import { parseCsv, mapCsvRows } from "@/lib/content-map-import";
+import { slugify } from "@/lib/cms";
 
 export const maxDuration = 60;
 
@@ -146,12 +147,59 @@ export async function POST(request: NextRequest) {
     const tenantId = await getTenantId();
     await requireRole("agency_editor");
     const supabase = await createServiceClient();
-    const workspaceId = await getCurrentWorkspaceId();
+    let workspaceId = await getCurrentWorkspaceId();
 
     const form = await request.formData();
     const file = form.get("file");
     const clientId = (form.get("clientId") as string | null) || null;
     const brandVoice = ((form.get("brandVoice") as string | null) ?? "").trim() || null;
+
+    // When the map is for a specific client, the rows belong in THAT client's
+    // workspace — not whichever workspace the user is currently browsing. This
+    // is what makes "import Mike's year of ideas while browsing Decore
+    // Hotels" land on Mike's map instead of silently vanishing into the wrong
+    // workspace. Falls back to the current workspace for agency (no-client)
+    // maps.
+    if (clientId) {
+      const { data: client } = await supabase
+        .from("clients")
+        .select("id, workspace_id, name")
+        .eq("id", clientId)
+        .eq("tenant_id", tenantId)
+        .maybeSingle();
+      if (!client) {
+        return NextResponse.json({ error: "Client not found." }, { status: 400 });
+      }
+      if (client.workspace_id) {
+        workspaceId = client.workspace_id;
+      } else {
+        // Client has no workspace yet — create + link one (same flow the
+        // onboarding wizard uses) so the import never lands "nowhere".
+        const base = slugify(client.name || "Client").slice(0, 40);
+        const { data: ws, error: wsErr } = await supabase
+          .from("workspaces")
+          .insert({
+            tenant_id: tenantId,
+            name: client.name || "Client Workspace",
+            slug: `${base}-${crypto.randomUUID().slice(0, 8)}`,
+            is_default: false,
+          })
+          .select("id")
+          .single();
+        if (wsErr || !ws) {
+          return NextResponse.json(
+            { error: "Failed to create the client's workspace", details: wsErr?.message },
+            { status: 500 }
+          );
+        }
+        await supabase
+          .from("clients")
+          .update({ workspace_id: ws.id })
+          .eq("id", clientId)
+          .eq("tenant_id", tenantId);
+        workspaceId = ws.id;
+      }
+    }
 
     if (!(file instanceof File)) {
       return NextResponse.json(

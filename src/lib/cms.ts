@@ -104,6 +104,43 @@ export function slugify(title: string): string {
     .slice(0, 60) || "page";
 }
 
+/**
+ * Convert a generated blog post's body (markdown with inline ![alt](url)
+ * images) into CMS blocks: text blocks for prose, image blocks for the
+ * embedded images. Returns a list of blocks ready for a site_pages row.
+ * Shared by the saved-post "Your Website (CMS)" publish and the built-in
+ * CMS connected-sites target.
+ */
+export function markdownBodyToCmsBlocks(body: string): CmsBlock[] {
+  const blocks: CmsBlock[] = [];
+  const imageRe = /!\[([^\]]*)\]\(([^)]+)\)/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  let imgCount = 0;
+  while ((m = imageRe.exec(body))) {
+    const before = body.slice(last, m.index).trim();
+    if (before) blocks.push({ id: newBlockId(), kind: "text", content: before });
+    imgCount += 1;
+    // First image is the featured hero (full-width, centered); the rest float
+    // left/right alternating so text wraps around them instead of stacking.
+    const float =
+      imgCount === 1 ? "none" : imgCount % 2 === 0 ? "left" : "right";
+    blocks.push({
+      id: newBlockId(),
+      kind: "image",
+      url: m[2],
+      alt: m[1] || "",
+      style: { float },
+    });
+    last = m.index + m[0].length;
+  }
+  const after = body.slice(last).trim();
+  if (after) blocks.push({ id: newBlockId(), kind: "text", content: after });
+  if (blocks.length === 0)
+    blocks.push({ id: newBlockId(), kind: "text", content: body });
+  return blocks;
+}
+
 // ============================================================================
 // Rendering
 // ============================================================================

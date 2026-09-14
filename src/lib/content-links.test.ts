@@ -3,6 +3,7 @@ import {
   resolveInternalLinks,
   findBestPage,
   buildInternalLinkContext,
+  appendSourcesSection,
   type LinkablePage,
 } from "./content-links";
 
@@ -86,5 +87,30 @@ describe("buildInternalLinkContext", () => {
       url: "https://example.com/blog/local-seo-coffee-shops",
       anchorText: "Local SEO for Coffee Shops",
     });
+  });
+});
+
+describe("appendSourcesSection", () => {
+  it("returns the body unchanged when no sources are provided (optional)", () => {
+    expect(appendSourcesSection("Body text.", [])).toBe("Body text.");
+  });
+
+  it("appends only sources whose host is missing from the body", () => {
+    const body =
+      "Some claim [1](https://parks-canada.example/report) and more text.";
+    const out = appendSourcesSection(body, [
+      { url: "https://parks-canada.example/report", anchorText: "Parks report" },
+      { url: "https://stats-canada.example/tourism", anchorText: "Tourism stats" },
+    ]);
+    expect(out).toContain("## Sources");
+    expect(out).toContain("stats-canada.example");
+    expect(out).not.toMatch(/## Sources[\s\S]*parks-canada/);
+  });
+
+  it("keeps the body untouched when every source is already cited", () => {
+    const body = "Claim [a](https://source.example/page) with a link.";
+    expect(
+      appendSourcesSection(body, [{ url: "https://source.example/page", anchorText: "S" }])
+    ).toBe(body);
   });
 });

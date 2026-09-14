@@ -1,13 +1,15 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { X, ImageIcon, Sparkles, RefreshCw, Loader2 } from "lucide-react";
+import { X, ImageIcon, Sparkles, RefreshCw, Loader2, Check } from "lucide-react";
 import PublishButton from "@/components/PublishButton";
+import AutoPublishHoldBanner from "@/components/AutoPublishHoldBanner";
 import PostContent from "@/components/BlogContent";
 import ScoreBadge from "@/components/ScoreBadge";
 import {
   getPostPreview,
   getSeoScore,
+  getAeoGeoScore,
   parseContent,
   statusBadgeClass,
   type PostRow,
@@ -81,6 +83,18 @@ export default function PostDetailModal({
       }
     | undefined;
   const seoChecks = seo?.checks?.length ? seo.checks : (current.seo_checks as any[] | null) ?? [];
+  // Quality-gate story persisted by the generate pipelines (content.gate) —
+  // which attempt cleared the gate and how each regeneration scored. Older
+  // posts predate it, so everything is optional.
+  const gateStory = (c.gate ?? null) as
+    | {
+        gate: number;
+        attempts: number;
+        maxAttempts: number;
+        retries: number;
+        history: { attempt: number; seo: number; aeoGeo: number; belowGate: boolean }[];
+      }
+    | null;
   const images: { url: string; description?: string; placement?: string }[] =
     (c.images as never[] | undefined) ?? [];
 
@@ -153,6 +167,19 @@ export default function PostDetailModal({
     }
   };
 
+  // Cancel the 15-minute auto-publish hold from inside the modal. The draft
+  // is kept; only the automation is removed (same endpoint as the map rows).
+  const [holdCancelled, setHoldCancelled] = useState(false);
+  const cancelHold = async () => {
+    const res = await fetch(`/api/posts/${post.id}`, {
+      method: "PATCH",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "cancel_auto_publish" }),
+    });
+    if (res.ok) setHoldCancelled(true);
+  };
+
   const handleDelete = async () => {
     if (!confirm("Delete this post? This cannot be undone.")) return;
     setDeleting(true);
@@ -222,7 +249,10 @@ export default function PostDetailModal({
               </span>
             )}
             {preview.type === "blog" && (
-              <ScoreBadge score={getSeoScore(current)} />
+              <>
+                <ScoreBadge score={getSeoScore(current)} />
+                <ScoreBadge score={getAeoGeoScore(current)} label="AEO/GEO" />
+              </>
             )}
             {current.tier_level != null && (
               <span className="px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
@@ -230,6 +260,45 @@ export default function PostDetailModal({
               </span>
             )}
           </div>
+
+          {/* Quality-gate story — which attempt cleared and how each
+              regeneration moved the scores (same banner as the results card). */}
+          {gateStory && (
+            <div className="rounded-md border border-green-500/30 bg-green-500/5 px-3 py-2 space-y-1.5">
+              <div className="flex items-center gap-2">
+                <Check className="size-3.5 shrink-0 text-green-600" />
+                <span className="text-xs text-muted-foreground">
+                  Cleared SEO + AEO/GEO ≥ {gateStory.gate}/100
+                  {gateStory.attempts > 1
+                    ? ` — cleared on attempt ${gateStory.attempts} after ${gateStory.retries} regenerat${gateStory.retries === 1 ? "ion" : "ions"}`
+                    : " — first attempt"}
+                </span>
+              </div>
+              {gateStory.history?.length > 1 && (
+                <div className="flex flex-wrap items-center gap-1.5 pl-5">
+                  {gateStory.history.map((h, i) => (
+                    <span key={h.attempt} className="flex items-center gap-1.5">
+                      {i > 0 && <span className="text-muted-foreground/50 text-[10px]">→</span>}
+                      <span
+                        title={
+                          h.belowGate
+                            ? `Attempt ${h.attempt}: below the ${gateStory!.gate}/100 gate — regenerated with the failing checks as feedback`
+                            : `Attempt ${h.attempt}: cleared the ${gateStory!.gate}/100 gate`
+                        }
+                        className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border ${
+                          h.belowGate
+                            ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400"
+                            : "border-green-500/40 bg-green-500/10 text-green-700 dark:text-green-400"
+                        }`}
+                      >
+                        #{h.attempt} · SEO {h.seo} / AEO·GEO {h.aeoGeo}
+                      </span>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Scheduled */}
           {current.scheduled_at && (
@@ -240,6 +309,18 @@ export default function PostDetailModal({
                 timeStyle: "short",
               })}
             </div>
+          )}
+
+          {/* 15-minute auto-publish undo window — same banner as the map
+              rows and the posts list; cancel keeps the draft. */}
+          {current.auto_publish_at && !holdCancelled && (
+            <AutoPublishHoldBanner
+              postId={current.id}
+              autoPublishAt={current.auto_publish_at}
+              scheduledAt={current.scheduled_at}
+              type={preview.type === "social" ? "social" : "blog"}
+              onCancel={() => setHoldCancelled(true)}
+            />
           )}
 
           {/* Content — blog bodies render as markdown so embedded images display */}

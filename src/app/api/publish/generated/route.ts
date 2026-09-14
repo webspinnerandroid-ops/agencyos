@@ -1,20 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantId } from "@/lib/auth";
 import {
-  publishGeneratedContentToSites,
-  type GeneratedContentTarget,
-  type GeneratedContentPayload,
+  publishToConnectedSites,
+} from "@/lib/publishing/connectedSitesPublisher";
+import type {
+  GeneratedContentTarget,
+  GeneratedContentPayload,
 } from "@/lib/publishing/wordpressPublisher";
 
 /**
  * POST /api/publish/generated
  *
  * Publishes a freshly generated blog post (from the Generate Content page —
- * not yet saved in `posts`) straight to a chosen set of connected sites.
+ * not yet saved in `posts`) straight to a chosen set of connected sites:
+ * WordPress, Ghost, Medium, Webflow, or the built-in CMS site_pages.
  *
  * Body:
  *   targets: [{
- *     blogPlatformId,          // blog_platforms.id
+ *     blogPlatformId,          // blog_platforms.id (or "builtin_cms")
  *     mode: "create" | "overwrite",
  *     kind: "post" | "page",   // what an overwrite replaces
  *     wpPostId?,               // required for overwrite
@@ -53,7 +56,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const result = await publishGeneratedContentToSites(
+    const result = await publishToConnectedSites(
       tenantId,
       targets,
       content

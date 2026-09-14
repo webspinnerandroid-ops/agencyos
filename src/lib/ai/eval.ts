@@ -414,6 +414,13 @@ export function evalTeam(
 // persona change that loosens quality breaks the suite.
 // ---------------------------------------------------------------------------
 
+// Dated samples (Malory's plans) must always schedule FORWARD, so compute
+// their dates from "now" instead of hardcoding them — a fixed 2026 date turns
+// into a time bomb once the calendar catches up and "No past dates" fails a
+// good sample. Deterministic within a single run.
+const isoDaysFromNow = (days: number): string =>
+  new Date(Date.now() + days * 86_400_000).toISOString().slice(0, 10);
+
 export const EVAL_SAMPLES: Record<
   string,
   { good: string; bad: string }
@@ -476,9 +483,9 @@ export const EVAL_SAMPLES: Record<
   nina: {
     good:
       "Plan: Fall launch awareness\n" +
-      "1. 2026-08-25 — Cheryl: launch blog post\n" +
-      "2. 2026-08-27 — Pam: Instagram teaser\n" +
-      "3. 2026-08-29 — Cheryl: FAQ blog",
+      `1. ${isoDaysFromNow(3)} — Cheryl: launch blog post\n` +
+      `2. ${isoDaysFromNow(5)} — Pam: Instagram teaser\n` +
+      `3. ${isoDaysFromNow(7)} — Cheryl: FAQ blog`,
     bad:
       "2026-01-01 — old plan, no owners, no structure at all really.",
   },

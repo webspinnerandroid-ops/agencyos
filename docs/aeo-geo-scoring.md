@@ -1,6 +1,6 @@
 # AEO / GEO Scoring Engine — Design
 
-**Status:** Engine built (`src/lib/aeo-geo.ts`, unit-tested); UI surfacing pending.
+**Status:** Engine built (`src/lib/aeo-geo.ts`, unit-tested) and surfaced: generate results card, Recent Content / All Content chips + detail modal checklist, and the calendar dialog (with expandable AEO/GEO checklist).
 **Goal:** every piece of content gets an **SEO score** (the on-page scorer in
 `src/lib/seo-scorer.ts`), an **AEO score** (answer-engine readiness), and a
 **GEO score** (generative-engine citation readiness), all in one dashboard the
@@ -51,12 +51,17 @@ runs the same pillars through the tenant's configured text model, and
 
 1. **Compute on save:** call `scoreAeoGeo()` alongside `scoreContent()` in
    `cherylGenerateBlog` and the manual generate-content pipeline; store
-   `seo_score` (existing) + new `aeo_geo_score JSONB` column (migration).
+   `seo_score` (existing) + new `aeo_geo_score JSONB` column (migration). ✅
 2. **UI:** show SEO / AEO / GEO as three chips on every post in Recent Content
-   and the calendar dialog, with the AEO/GEO checklist expandable.
+   and the calendar dialog, with the AEO/GEO checklist expandable. ✅
 3. **Client reports:** the per-workspace analytics dashboard (already planned)
    surfaces the three scores per piece and per workspace average.
-4. **Answer library:** derive from `qaPairs` + generated FAQPage JSON-LD.
+   (Migration `100_aeo_geo_split_scores.sql` adds the `aeo_geo_split` column the
+   AEO/GEO sub-averages read — pending on next deploy, see README.)
+4. **Answer library:** derive from `qaPairs` + generated FAQPage JSON-LD. ✅
+   Live at `/dashboard/answer-library` — aggregates `content.aeoGeo.qaPairs`
+   across posts, dedupes questions (best-scored answer wins), and emits a
+   copy-ready FAQPage JSON-LD block for the filtered library.
 
 ## Honesty guardrails
 

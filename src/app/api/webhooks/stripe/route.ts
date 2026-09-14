@@ -143,10 +143,62 @@ async function handleInvoicePaid(invoice: Stripe.Invoice) {
   const subscriptionId = (invoice as unknown as { subscription: string }).subscription;
   if (!subscriptionId) return;
 
-  // Could store invoice history, send receipt emails, etc.
   console.log(
     `[stripe-webhook] Invoice ${invoice.id} paid for subscription ${subscriptionId}`
   );
+
+  // Agency ops (Phase 2/4): ledger entry + workflow event, idempotent on the
+  // Stripe event id so Stripe's at-least-once retries never double-resume a
+  // payment gate (plan Phase 4 acceptance test: 3× replay → one ledger row).
+  try {
+    const { data: sub } = await supabase
+      .from("subscriptions")
+      .select("tenant_id")
+      .eq("stripe_subscription_id", subscriptionId)
+      .maybeSingle();
+    if (!sub) return;
+    const tenantId = sub.tenant_id as string;
+
+    const { record } = await import("@/lib/agency/ledger");
+    const { emitInvoicePaid } = await import("@/lib/agency/events");
+    const eventId = (invoice as unknown as { id: string }).id ?? "";
+
+    // Idempotency probe: the activity table has no unique constraint on
+    // artifact_ref, so we check for this Stripe event before inserting.
+    const { data: existing } = await supabase
+      .from("activity")
+      .select("id")
+      .eq("artifact_ref", eventId)
+      .eq("type", "payment")
+      .limit(1)
+      .maybeSingle();
+    if (existing) {
+      console.log(`[stripe-webhook] Invoice event ${eventId} already recorded — skipping`);
+      return;
+    }
+
+    const amountUsd =
+      typeof invoice.amount_paid === "number" ? invoice.amount_paid / 100 : null;
+    await record({
+      tenantId,
+      actor: { kind: "webhook", name: "stripe" },
+      type: "payment",
+      summary: `Invoice paid: ${invoice.number ?? invoice.id} ($${amountUsd?.toFixed(2) ?? "?"})`,
+      payload: { stripeInvoiceId: invoice.id, subscriptionId },
+      artifactRef: eventId,
+      status: "ok",
+    });
+    await emitInvoicePaid({
+      tenantId,
+      stripeEventId: eventId,
+      invoiceId: invoice.id ?? null,
+      amountUsd,
+      clientId: null,
+      workspaceId: null,
+    });
+  } catch (err) {
+    console.error("[stripe-webhook] agency ops emission failed:", (err as Error).message);
+  }
 }
 
 // ------------------------------------------------------------------

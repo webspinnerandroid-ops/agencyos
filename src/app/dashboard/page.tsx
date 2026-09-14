@@ -2,6 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import { getTenantId } from "@/lib/auth";
 import { fetchWithTimeout } from "@/lib/supabase/server";
 import { getCurrentWorkspaceId } from "@/lib/workspace";
+import { mapPublishLogsToHistory } from "@/lib/publish-history";
 import { UsageBanner } from "./usage-banner";
 import { DashboardRecents } from "./dashboard-recents";
 
@@ -56,9 +57,16 @@ export default async function DashboardPage({ searchParams }: { searchParams?: P
 
   // Recents must stay inside the selected workspace — a tenant with multiple
   // workspaces shouldn't see another client's content/audits on the dashboard.
+  // workspaceId resolves via getCurrentWorkspaceId(), which falls back to the
+  // tenant's default workspace, so it should always be set for an isolated
+  // tenant. If it is somehow null, show nothing rather than leaking posts
+  // from every workspace.
   if (workspaceId) {
     postsQuery = postsQuery.eq("workspace_id", workspaceId);
     auditsQuery = auditsQuery.eq("workspace_id", workspaceId);
+  } else {
+    postsQuery = postsQuery.is("workspace_id", null);
+    auditsQuery = auditsQuery.is("workspace_id", null);
   }
 
   if (clientId) {
@@ -93,6 +101,26 @@ export default async function DashboardPage({ searchParams }: { searchParams?: P
     await Promise.all([clientsQuery, postsQuery, auditsQuery, apiKeyCountQuery, repliesQuery]);
   const clientsArr = (clients ?? []) as { id: string; name: string }[];
   const apiKeyCount = apiKeyCountResult ?? 0;
+
+  // Per-post publish history (connected-sites publishes): the dashboard's
+  // recent posts get live links to wherever they were published. Logs are
+  // scoped by joining against the tenant/workspace-scoped post ids above.
+  const postIds = ((posts ?? []) as { id: string }[]).map((p) => p.id);
+  const publishLogs =
+    postIds.length > 0
+      ? await db
+          .from("publishing_logs")
+          .select(
+            "post_id, platform, site_name, target_url, success, error_message, attempt_at"
+          )
+          .in("post_id", postIds)
+          .order("attempt_at", { ascending: false })
+          .limit(100)
+      : await Promise.resolve({ data: [] });
+  const publishHistory = mapPublishLogsToHistory(
+    (publishLogs?.data ?? []) as Array<Record<string, unknown>>,
+    postIds
+  );
 
   const hasApiKey = apiKeyCount > 0;
   const hasWorkspace = !!workspaceId;
@@ -241,7 +269,11 @@ export default async function DashboardPage({ searchParams }: { searchParams?: P
         </a>
       </div>
 
-      <DashboardRecents posts={(posts ?? []) as any} audits={(audits ?? []) as any} />
+      <DashboardRecents
+        posts={(posts ?? []) as any}
+        audits={(audits ?? []) as any}
+        history={publishHistory}
+      />
     </div>
   );
 }

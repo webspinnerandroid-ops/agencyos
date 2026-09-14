@@ -215,6 +215,15 @@ export async function addUrlItem(
     const wsId = await resolveWorkspace(workspaceId);
     const supabase = getAdminClient();
 
+    // Store a normalized URL so the crawl matches the seed row in place
+    // (strip trailing slash) instead of creating a duplicate page row.
+    let normalizedUrl: string;
+    try {
+      normalizedUrl = new URL(url).href.replace(/\/$/, "");
+    } catch {
+      normalizedUrl = url;
+    }
+
     const { data, error } = await supabase
       .from("knowledgebase_items")
       .insert({
@@ -223,7 +232,7 @@ export async function addUrlItem(
         folder_id: folderId || null,
         name,
         type: "url",
-        source_url: url,
+        source_url: normalizedUrl,
         status: "pending",
       })
       .select("*")
@@ -232,7 +241,7 @@ export async function addUrlItem(
     if (error) throw new Error(error.message);
 
     // Start scraping asynchronously (fire and forget)
-    scrapeUrlItem(data.id, url, tenantId, wsId);
+    scrapeUrlItem(data.id, normalizedUrl, tenantId, wsId);
 
     return { success: true, data: data as KbItem };
   } catch (err) {
@@ -319,9 +328,179 @@ export async function deleteItem(
 }
 
 // ------------------------------------------------------------------
-// URL Scraping (inline, called from addUrlItem)
+// URL Scraping (crawls the whole site, staying same-domain)
 // ------------------------------------------------------------------
 
+const FETCH_UA = "AgencyOS/1.0 Knowledgebase Scraper";
+const CRAWL_MAX_PAGES = 100; // hard cap so huge sites can't run forever
+const CRAWL_MAX_IMAGES = 150; // per-site cap for downloaded images
+
+/** Skip file types that are clearly not HTML pages. */
+const SKIP_EXT = /(?:\.(?:png|jpe?g|gif|svg|webp|avif|ico|css|js|json|xml|pdf|zip|gz|mp4|webm|mp3|wav|mov|woff2?|ttf|ico))(?:\.|[?#]|$)/i;
+
+/** Skip private/logout/in-page/capture destinations we must never follow. */
+function isFollowableHref(href: string): boolean {
+  if (!href) return false;
+  const raw = href.trim();
+  if (!raw || raw.startsWith("#") || raw.startsWith("mailto:") || raw.startsWith("tel:") || raw.startsWith("javascript:")) return false;
+  return !SKIP_EXT.test(raw);
+}
+
+/** True when both URLs share the same hostname (stays on-site). */
+function sameSite(a: string, b: string): boolean {
+  try {
+    const ua = new URL(a);
+    const ub = new URL(b);
+    return ua.hostname.toLowerCase() === ub.hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
+async function fetchHtml(fullUrl: string): Promise<string> {
+  const response = await fetch(fullUrl, {
+    headers: { "User-Agent": FETCH_UA },
+    signal: AbortSignal.timeout(30000),
+  });
+  if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+  const type = response.headers.get("content-type") ?? "";
+  // Guard against following a URL that quietly redirects to a binary asset.
+  if (type && /image\/|application\/pdf|video\/|audio\//.test(type)) {
+    throw new Error(`Skipping non-page content (${type})`);
+  }
+  return await response.text();
+}
+
+/** Insert one scraped page as a knowledgebase url item (skips duplicates). */
+async function upsertPageItem(
+  supabase: ReturnType<typeof getAdminClient>,
+  tenantId: string,
+  workspaceId: string,
+  name: string,
+  fullUrl: string,
+  html: string
+): Promise<{ text: string; title: string; images: string[] }> {
+  const $ = cheerio.load(html);
+  $("script, style, nav, footer, header, .nav, .footer, .header, .sidebar, .menu, noscript, iframe").remove();
+
+  const title = $("title").text().trim() || $("h1").first().text().trim() || name;
+  const metaDescription = $('meta[name="description"]').attr("content") ?? "";
+  const bodyText = $("body").text().replace(/\s+/g, " ").trim();
+  const truncatedText = bodyText.substring(0, 50000);
+
+  // Collect same-domain image URLs only — external/CDN-hosted images stay out.
+  const images: string[] = [];
+  $("img").each((_, el) => {
+    const src = $(el).attr("src") || $(el).attr("data-src") || "";
+    if (!src) return;
+    try {
+      const abs = new URL(src, fullUrl).href;
+      if (sameSite(abs, fullUrl)) images.push(abs);
+    } catch { /* skip malformed */ }
+  });
+
+  const metadata = {
+    title,
+    metaDescription,
+    url: fullUrl,
+    scrapedAt: new Date().toISOString(),
+    contentLength: bodyText.length,
+    crawled: true,
+  };
+
+  // Reuse an existing row for this exact URL; otherwise insert one.
+  const { data: existing } = await supabase
+    .from("knowledgebase_items")
+    .select("id")
+    .eq("tenant_id", tenantId)
+    .eq("workspace_id", workspaceId)
+    .eq("type", "url")
+    .eq("source_url", fullUrl)
+    .maybeSingle();
+
+  if (existing) {
+    await supabase
+      .from("knowledgebase_items")
+      .update({ scraped_text: truncatedText, extracted_metadata: metadata, status: "ready" })
+      .eq("id", existing.id)
+      .eq("tenant_id", tenantId);
+  } else {
+    await supabase
+      .from("knowledgebase_items")
+      .insert({
+        tenant_id: tenantId,
+        workspace_id: workspaceId,
+        name: title,
+        type: "url",
+        source_url: fullUrl,
+        scraped_text: truncatedText,
+        extracted_metadata: metadata,
+        status: "ready",
+      });
+  }
+
+  return { text: bodyText, title, images };
+}
+
+/** Download one image and store it into the workspace knowledgebase. */
+async function storeCrawledImage(
+  supabase: ReturnType<typeof getAdminClient>,
+  tenantId: string,
+  workspaceId: string,
+  imageUrl: string
+): Promise<void> {
+  try {
+    const response = await fetch(imageUrl, {
+      headers: { "User-Agent": FETCH_UA },
+      signal: AbortSignal.timeout(30000),
+    });
+    if (!response.ok) return;
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.length === 0 || buffer.length > 8 * 1024 * 1024) return; // skip empty / >8MB
+
+    const type = response.headers.get("content-type")?.split(";")[0]?.trim() || "image/webp";
+    const ext = type === "image/png" ? "png" : type === "image/gif" ? "gif" : type === "image/jpeg" || type === "image/jpg" ? "jpg" : type.match(/\/(svg|webp|avif|ico|bmp)$/)?.[1] ?? "webp";
+    const storagePath = `${tenantId}/workspaces/${workspaceId}/knowledgebase/crawl/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${ext}`;
+
+    const { error: upErr } = await supabase.storage
+      .from("tenant-assets")
+      .upload(storagePath, buffer, { contentType: type, upsert: false });
+    if (upErr) return;
+
+    const { data: urlData } = supabase.storage.from("tenant-assets").getPublicUrl(storagePath);
+    const name = imageUrl.split("/").pop()?.replace(/[?#].*/, "") || "image";
+
+    const { data: existing } = await supabase
+      .from("knowledgebase_items")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .eq("workspace_id", workspaceId)
+      .eq("type", "image")
+      .eq("source_url", imageUrl)
+      .maybeSingle();
+    if (existing) return;
+
+    await supabase.from("knowledgebase_items").insert({
+      tenant_id: tenantId,
+      workspace_id: workspaceId,
+      name,
+      type: "image",
+      source_url: imageUrl,
+      storage_path: storagePath,
+      mime_type: type,
+      file_size: buffer.length,
+      extracted_metadata: { publicUrl: urlData.publicUrl, sourceUrl: imageUrl, crawled: true },
+      status: "ready",
+    });
+  } catch { /* image storage is best-effort */ }
+}
+
+/**
+ * Crawl the site starting at `url`, staying same-domain. Every internal page
+ * becomes its own url knowledgebase item, and same-domain images are
+ * downloaded into the workspace as image items. Runs fire-and-forget from
+ * addUrlItem. The originally-created row represents the seed page.
+ */
 async function scrapeUrlItem(
   itemId: string,
   url: string,
@@ -329,59 +508,78 @@ async function scrapeUrlItem(
   workspaceId: string
 ) {
   const supabase = getAdminClient();
+  const markStatus = async (status: "scraping" | "ready" | "error", message?: string) =>
+    supabase
+      .from("knowledgebase_items")
+      .update({
+        status,
+        ...(message ? { error_message: message } : {}),
+        ...(status === "ready"
+          ? { extracted_metadata: { crawled: true, scrapedAt: new Date().toISOString() } }
+          : {}),
+      })
+      .eq("id", itemId)
+      .eq("tenant_id", tenantId);
 
   try {
-    // Mark as scraping
-    await supabase
-      .from("knowledgebase_items")
-      .update({ status: "scraping" })
-      .eq("id", itemId)
-      .eq("tenant_id", tenantId);
+    await markStatus("scraping");
 
-    const response = await fetch(url, {
-      headers: { "User-Agent": "AgencyOS/1.0 Knowledgebase Scraper" },
-      signal: AbortSignal.timeout(30000),
-    });
+    const queue: string[] = [url];
+    const visited = new Set<string>();
+    const imageSet = new Set<string>();
+    let pageCount = 0;
 
-    if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    while (queue.length > 0 && pageCount < CRAWL_MAX_PAGES) {
+      const current = queue.shift()!;
+      const normalized = new URL(current).href.replace(/\/$/, "");
+      if (visited.has(normalized)) continue;
+      visited.add(normalized);
 
-    const html = await response.text();
-    const $ = cheerio.load(html);
+      let html: string;
+      try {
+        html = await fetchHtml(normalized);
+      } catch {
+        continue; // a failed page should never abort the crawl
+      }
 
-    // Remove scripts, styles, nav, footer
-    $("script, style, nav, footer, header, .nav, .footer, .header, .sidebar, .menu").remove();
+      const { images } = await upsertPageItem(supabase, tenantId, workspaceId, normalized, normalized, html);
+      pageCount++;
 
-    const title = $("title").text().trim() || $("h1").first().text().trim();
-    const metaDescription = $('meta[name="description"]').attr("content") ?? "";
-    const bodyText = $("body").text().replace(/\s+/g, " ").trim();
-    const truncatedText = bodyText.substring(0, 50000);
+      // Harvest same-domain images from this page.
+      for (const img of images) {
+        if (imageSet.size < CRAWL_MAX_IMAGES) imageSet.add(img);
+      }
 
-    const metadata = {
-      title,
-      metaDescription,
-      url,
-      scrapedAt: new Date().toISOString(),
-      contentLength: bodyText.length,
-    };
+      // Discover internal pages to enqueue next.
+      const $ = cheerio.load(html);
+      $("a[href]").each((_, el) => {
+        const href = $(el).attr("href") || "";
+        if (!isFollowableHref(href)) return;
+        let abs: string;
+        try {
+          abs = new URL(href, normalized).href;
+        } catch {
+          return;
+        }
+        if (!sameSite(abs, normalized)) return;
+        const clean = abs.replace(/\/$/, "");
+        if (!visited.has(clean) && !queue.includes(clean)) {
+          queue.push(clean);
+        }
+      });
+    }
 
-    await supabase
-      .from("knowledgebase_items")
-      .update({
-        scraped_text: truncatedText,
-        extracted_metadata: metadata,
-        status: "ready",
-      })
-      .eq("id", itemId)
-      .eq("tenant_id", tenantId);
+    // Download harvested same-domain images (best-effort, sequential).
+    let storedImages = 0;
+    for (const img of imageSet) {
+      if (storedImages >= CRAWL_MAX_IMAGES) break;
+      await storeCrawledImage(supabase, tenantId, workspaceId, img);
+      storedImages++;
+    }
+
+    await markStatus("ready");
   } catch (err: any) {
-    await supabase
-      .from("knowledgebase_items")
-      .update({
-        status: "error",
-        error_message: err?.message ?? "Unknown error during scraping",
-      })
-      .eq("id", itemId)
-      .eq("tenant_id", tenantId);
+    await markStatus("error", err?.message ?? "Unknown error during crawling");
   }
 }
 

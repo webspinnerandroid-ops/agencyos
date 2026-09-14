@@ -33,7 +33,7 @@ export async function GET(
 
     const { data, error } = await supabase
       .from("publishing_logs")
-      .select("id, platform, success, error_message, attempt_at")
+      .select("id, platform, success, error_message, attempt_at, site_name, target_url")
       .eq("post_id", id)
       .order("attempt_at", { ascending: false })
       .limit(10);

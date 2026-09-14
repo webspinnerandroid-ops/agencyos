@@ -15,6 +15,9 @@ import {
 import { enqueueOrRun } from "@/lib/ai/team-task";
 import { EMPLOYEE_PERSONAS } from "@/lib/ai/employee-personas";
 import { persistImageToStorage } from "@/lib/media/storage";
+import { decideApproval, loadByApprovalToken } from "@/lib/agency/workflow";
+import { recentForClient } from "@/lib/agency/ledger";
+import { emitGateDecided } from "@/lib/agency/events";
 
 /**
  * POST /api/telegram/webhook
@@ -141,6 +144,9 @@ export async function POST(request: NextRequest) {
       chatIdStr,
       "👋 This is your Agency OS bot.\n\n" +
         "/status — your latest updates in notifications\n" +
+        "/open <client> — everything about a client in one card\n" +
+        "/approve / /reject — decide the oldest pending approval\n" +
+        "/costs — token balance + spend this cycle\n" +
         "/workspaces — list and switch workspaces\n" +
         "/newworkspace <name> — create a workspace from here\n" +
         "/team — pick an employee to chat with directly\n" +
@@ -176,6 +182,63 @@ export async function POST(request: NextRequest) {
 
   if (text === "/status") {
     await replyWithStatus(chatIdStr);
+    return NextResponse.json({ ok: true });
+  }
+
+  // ---- Agency ops commands (Plan v3 Phase 3) ----------------------------
+  const openMatch = text.match(/^\/open\s+(.+)$/);
+  if (openMatch) {
+    const link = await findLinkByChatId(chatIdStr);
+    if (!link) {
+      await sendTelegramMessage(chatIdStr, "You aren't connected to an app account yet.");
+    } else {
+      await replyWithClientCard(chatIdStr, link.tenant_id, openMatch[1].trim());
+    }
+    return NextResponse.json({ ok: true });
+  }
+
+  if (text === "/approve" || text === "/reject") {
+    const decision = text === "/approve" ? "approve" : "reject";
+    const link = await findLinkByChatId(chatIdStr);
+    if (!link) {
+      await sendTelegramMessage(chatIdStr, "You aren't connected to an app account yet.");
+      return NextResponse.json({ ok: true });
+    }
+    const gate = await latestWaitingGate(link.tenant_id);
+    if (!gate) {
+      await sendTelegramMessage(chatIdStr, "Nothing is waiting for approval right now. ✅");
+      return NextResponse.json({ ok: true });
+    }
+    const result = await decideApproval(
+      gate.approval_token ?? "",
+      decision,
+      `telegram:${chatIdStr}`
+    );
+    if (!result.decided) {
+      await sendTelegramMessage(chatIdStr, `Couldn't ${decision}: ${result.reason ?? "unknown reason"}.`);
+      return NextResponse.json({ ok: true });
+    }
+    void emitGateDecided({
+      tenantId: link.tenant_id,
+      stateId: gate.id,
+      token: gate.approval_token ?? "",
+      decision: result.status === "approved" ? "approved" : "rejected",
+      decidedBy: `telegram:${chatIdStr}`,
+    }).catch(() => null);
+    await sendTelegramMessage(
+      chatIdStr,
+      `${decision === "approve" ? "✅ Approved" : "❌ Rejected"}: ${gate.workflow} / ${gate.step}.`
+    );
+    return NextResponse.json({ ok: true });
+  }
+
+  if (text === "/costs") {
+    const link = await findLinkByChatId(chatIdStr);
+    if (!link) {
+      await sendTelegramMessage(chatIdStr, "You aren't connected to an app account yet.");
+      return NextResponse.json({ ok: true });
+    }
+    await replyWithCosts(chatIdStr, link.tenant_id);
     return NextResponse.json({ ok: true });
   }
 
@@ -405,6 +468,39 @@ async function handleCallback(callbackId: string, chatId: string, data: string) 
         chatId,
         `✅ Active workspace is now *${ws.name}*. New messages go to its Team Room.`,
         { parseMode: "Markdown" }
+      );
+      return;
+    }
+    if (data.startsWith("ap:")) {
+      // Approval gate buttons: ap:approve:<token> | ap:reject:<token>
+      const [, action, token] = data.split(":");
+      if (action !== "approve" && action !== "reject") {
+        await answerTelegramCallback(callbackId, "Unknown action.");
+        return;
+      }
+      const state = await loadByApprovalToken(token);
+      const result = await decideApproval(token, action, `telegram:${chatId}`);
+      if (state) {
+        void emitGateDecided({
+          tenantId: state.tenant_id,
+          stateId: state.id,
+          token,
+          decision: action === "approve" ? "approved" : "rejected",
+          decidedBy: `telegram:${chatId}`,
+        }).catch(() => null);
+      }
+      if (!result.decided && result.reason === "already decided") {
+        await answerTelegramCallback(callbackId, `Already decided (${result.status}).`);
+        return;
+      }
+      if (!result.decided) {
+        await answerTelegramCallback(callbackId, result.reason ?? "Couldn't record that.");
+        return;
+      }
+      await answerTelegramCallback(callbackId, action === "approve" ? "Approved ✅" : "Rejected ❌");
+      await sendTelegramMessage(
+        chatId,
+        `${action === "approve" ? "✅ Approved" : "❌ Rejected"}: ${state?.workflow ?? "workflow"} / ${state?.step ?? ""}.`
       );
       return;
     }
@@ -735,4 +831,114 @@ async function processInline(payload: {
       if (i < attempts - 1) await new Promise((r) => setTimeout(r, 1500 * 2 ** i));
     }
   }
+}
+
+// ===========================================================================
+// Agency ops helpers (Plan v3 Phase 3): context card, pending gate, costs.
+// ===========================================================================
+
+/** /open <name> — one card with the client's services, links, and ledger tail. */
+async function replyWithClientCard(chatId: string, tenantId: string, nameQuery: string) {
+  const supabase = await createServiceClient();
+  const q = nameQuery.trim();
+  const { data: clients } = await supabase
+    .from("clients")
+    .select("id, name, website, email")
+    .eq("tenant_id", tenantId)
+    .or(`name.ilike.%${q}%,website.ilike.%${q}%`)
+    .limit(5);
+  if (!clients || clients.length === 0) {
+    await sendTelegramMessage(chatId, `No client matching “${q}”. Try /open <part of the name>.`);
+    return;
+  }
+  if (clients.length > 1) {
+    const lines = clients.map((c, i) => `${i + 1}. ${c.name ?? "(unnamed)"}`);
+    await sendTelegramMessage(
+      chatId,
+      `*${clients.length} matches* — be more specific:\n${lines.join("\n")}`,
+      { parseMode: "Markdown" }
+    );
+    return;
+  }
+  const client = clients[0];
+
+  const [{ data: subsystems }, { data: campaigns }, ledger] = await Promise.all([
+    supabase
+      .from("client_subsystems")
+      .select("subsystem, resource_url, provisioned_at")
+      .eq("client_id", client.id)
+      .eq("tenant_id", tenantId),
+    supabase
+      .from("seo_campaigns")
+      .select("id, status, docusign_status, tier_name")
+      .eq("client_id", client.id)
+      .eq("tenant_id", tenantId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    recentForClient(tenantId, client.id, 5),
+  ]);
+
+  const site = process.env.NEXT_PUBLIC_SITE_URL ?? "https://platform.blissmedialab.com";
+  const lines: string[] = [`*${client.name ?? "Client"}*`];
+  if (client.website) lines.push(`🌐 ${client.website}`);
+  if (campaigns) {
+    lines.push(`📈 SEO: ${campaigns.tier_name ?? "campaign"} — ${campaigns.status ?? "?"}${
+      campaigns.docusign_status === "completed" ? " (signed)" : ""
+    }`);
+    lines.push(`🔗 ${site}/dashboard/seo/campaigns`);
+  }
+  if (subsystems && subsystems.length > 0) {
+    lines.push(
+      `🧩 ${subsystems.map((s) => s.subsystem).join(", ")}`
+    );
+  }
+  lines.push("", "*Recent activity:*");
+  if (ledger.length === 0) {
+    lines.push("_(no activity yet)_");
+  } else {
+    for (const entry of ledger) {
+      const d = new Date(entry.occurredAt);
+      const when = `${d.getMonth() + 1}/${d.getDate()}`;
+      lines.push(`• [${when}] ${entry.summary}`);
+    }
+  }
+  await sendTelegramMessage(chatId, lines.join("\n"), { parseMode: "Markdown" });
+}
+
+/** The oldest gate still waiting_for_approval for this tenant (for /approve). */
+async function latestWaitingGate(tenantId: string) {
+  const supabase = await createServiceClient();
+  const { data } = await supabase
+    .from("workflow_state")
+    .select("id, workflow, step, approval_token, updated_at")
+    .eq("tenant_id", tenantId)
+    .eq("status", "waiting_for_approval")
+    .order("updated_at", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+  return (data as {
+    id: string;
+    workflow: string;
+    step: string;
+    approval_token: string | null;
+    updated_at: string;
+  } | null);
+}
+
+/** /costs — token balance + this cycle's spend, from token-billing. */
+async function replyWithCosts(chatId: string, tenantId: string) {
+  const { getTokenBalance } = await import("@/lib/token-billing");
+  const balance = await getTokenBalance(tenantId);
+  if (!balance.enforced) {
+    await sendTelegramMessage(chatId, "💰 Token billing isn't enforced for this tenant.");
+    return;
+  }
+  const used = balance.usedThisCycleUsd.toFixed(2);
+  const remaining = balance.remainingUsd.toFixed(2);
+  await sendTelegramMessage(
+    chatId,
+    `💰 *This cycle*\nUsed: $${used}\nRemaining: $${remaining} (allowance $${balance.monthlyAllowanceUsd.toFixed(2)} + addon $${balance.addonBalanceUsd.toFixed(2)})`,
+    { parseMode: "Markdown" }
+  );
 }

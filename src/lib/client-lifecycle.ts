@@ -13,11 +13,7 @@
  */
 
 import { createServiceClient } from "@/lib/supabase/server";
-import {
-  LIFECYCLE_STEPS,
-  stepIndexFor,
-  nextStepAfter,
-} from "@/lib/lifecycle-steps";
+import { LIFECYCLE_STEPS, stepIndexFor } from "@/lib/lifecycle-steps";
 
 export {
   LIFECYCLE_STEPS,
@@ -115,9 +111,16 @@ export async function advanceLifecycle(
 
   const target = stepIndexFor(stepId);
   const current = lifecycle.step;
-  // Clamp: can advance to the immediate next step at most (wizard UX keeps
-  // the order strict; chat continuation uses the same rule).
-  const next = Math.max(current, Math.min(target, nextStepAfter(current)));
+  // Confirm/progress rule: completing the current step (or any later step)
+  // always moves to the immediate next step. The wizard passes the step it
+  // just finished; Malory may pass a later step but is still clamped to one
+  // ahead. Calls for an earlier or already-passed step are idempotent and
+  // leave the step unchanged. The final step never auto-advances (`go_live`
+  // is completed via completeLifecycle).
+  const next =
+    target >= current && current < LIFECYCLE_STEPS.length - 1
+      ? current + 1
+      : current;
   const advanced = next > current || Object.keys(dataPatch ?? {}).length > 0;
 
   const data = { ...(lifecycle.data ?? {}), ...(dataPatch ?? {}) };

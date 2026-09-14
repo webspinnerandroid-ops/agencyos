@@ -28,6 +28,7 @@ const SEGMENT_LABELS: Record<string, string> = {
   knowledgebase: "Knowledge Base",
   cms: "Website",
   analytics: "Analytics",
+  reputation: "Reputation",
   assets: "Asset Library",
   connections: "Connections",
   billing: "Billing",

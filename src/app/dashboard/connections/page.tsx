@@ -34,7 +34,8 @@ import {
   disconnectConnection,
 } from "./actions";
 import type { GoogleBusinessProfile } from "../settings/gbp/actions";
-import { getProfiles, removeProfile, syncGbpProfiles } from "../settings/gbp/actions";
+import { getProfiles, removeProfile } from "../settings/gbp/actions";
+import GbpBusinessPicker from "@/components/dashboard/GbpBusinessPicker";
 import type { SocialAccount, OAuthConfigStatus } from "../settings/social/actions";
 import {
   checkOAuthConfig,
@@ -118,6 +119,7 @@ export default function ConnectionsPage() {
   // ---- Google Business Profile ----
   const [profiles, setProfiles] = useState<GoogleBusinessProfile[]>([]);
   const [oauthConfig, setOauthConfig] = useState<OAuthConfigStatus | null>(null);
+  const [gbpPickerOpen, setGbpPickerOpen] = useState(false);
 
   // ---- Social ----
   const [accounts, setAccounts] = useState<SocialAccount[]>([]);
@@ -349,17 +351,12 @@ export default function ConnectionsPage() {
     });
   };
 
-  const refreshGbp = () => {
-    startTransition(async () => {
-      setFeedback(null);
-      const res = await syncGbpProfiles();
-      if (res.success) {
-        if (res.data) setProfiles(res.data);
-        setFeedback({ type: "success", message: `Refreshed from Google — ${res.data?.length ?? 0} profile(s) found.` });
-      } else {
-        setFeedback({ type: "error", message: res.error ?? "Refresh failed." });
-      }
+  const onGbpConnected = (connected: GoogleBusinessProfile[]) => {
+    setFeedback({
+      type: "success",
+      message: `Connected ${connected.length} ${connected.length === 1 ? "business" : "businesses"} from Google.`,
     });
+    void loadGbp();
   };
 
   const removeGbp = (id: string, name: string) => {
@@ -618,8 +615,8 @@ export default function ConnectionsPage() {
               <Button size="sm" onClick={connectGbp} disabled={isPending || !oauthConfig?.googleBusinessConfigured} style={{ backgroundColor: "#4285F4" }}>
                 {isPending ? <><Loader2 className="size-4 animate-spin mr-1" /> Connecting…</> : hasGbpConnected ? "Reconnect (replaces existing)" : "Connect Google Account"}
               </Button>
-              <Button size="sm" variant="outline" onClick={refreshGbp} disabled={isPending || !hasGbpConnected}>
-                {isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <RefreshCw className="size-4 mr-1" />} Refresh from Google
+              <Button size="sm" variant="outline" onClick={() => setGbpPickerOpen(true)} disabled={isPending || !hasGbpConnected}>
+                {isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <Store className="size-4 mr-1" />} Choose businesses
               </Button>
             </div>
             {profiles.length === 0 ? (
@@ -648,6 +645,13 @@ export default function ConnectionsPage() {
             )}
           </CardContent>
         </Card>
+
+        <GbpBusinessPicker
+          open={gbpPickerOpen}
+          onOpenChange={setGbpPickerOpen}
+          onConnected={onGbpConnected}
+          onError={(message) => setFeedback({ type: "error", message })}
+        />
       </section>
 
       {/* ---------------- Social ---------------- */}

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getTenantId } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import { submitPostToIndexNow } from "@/lib/seo/indexnow";
+import { cancelAutoPublish } from "@/lib/content-map-autopublish";
 
 export async function GET(
   _request: NextRequest,
@@ -14,7 +15,7 @@ export async function GET(
 
     const { data: post, error } = await supabase
       .from("posts")
-      .select("id, content, status, ai_generated, scheduled_at, tier_level, client_id")
+      .select("id, content, status, ai_generated, scheduled_at, tier_level, client_id, auto_publish_at")
       .eq("id", id)
       .eq("tenant_id", tenantId)
       .single();
@@ -124,7 +125,21 @@ export async function PATCH(
     const { id } = await params;
 
     const body = await request.json();
-    const { scheduled_at, status, workspace_id, revision_reason } = body;
+    const { scheduled_at, status, workspace_id, revision_reason, action } = body;
+
+    // Cancel the 15-minute auto-publish hold (the undo window on
+    // content-map automation). The draft is kept — only the automation is
+    // removed. Same endpoint the Content Map rows use.
+    if (action === "cancel_auto_publish") {
+      const cancelled = await cancelAutoPublish(tenantId, id);
+      if (!cancelled) {
+        return NextResponse.json(
+          { error: "No active auto-publish hold on this post" },
+          { status: 404 }
+        );
+      }
+      return NextResponse.json({ ok: true, cancelled: true });
+    }
 
     if (scheduled_at === undefined && status === undefined && workspace_id === undefined && revision_reason === undefined) {
       return NextResponse.json(

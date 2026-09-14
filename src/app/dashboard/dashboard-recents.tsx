@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Loader2, FileText, Palette, Film, HardDrive } from "lucide-react";
 import { RecentContentList } from "./recent-content";
 import type { PostRow } from "@/lib/post-preview";
+import type { PublishHistoryEntry } from "@/lib/publish-history";
 
 const STORAGE_KEY = "agency_os_dash_recents";
 
@@ -34,9 +35,11 @@ interface DashAsset {
 export function DashboardRecents({
   posts,
   audits,
+  history = {},
 }: {
   posts: PostRow[];
   audits: any[];
+  history?: Record<string, PublishHistoryEntry[]>;
 }) {
   const [enabled, setEnabled] = useState<Record<SectionKey, boolean>>({
     content: true,
@@ -155,7 +158,7 @@ export function DashboardRecents({
         <div className="grid gap-8 lg:grid-cols-2 items-start">
           {enabled.content && (
             <div className="min-w-0">
-              <RecentContentList posts={posts} />
+              <RecentContentList posts={posts} history={history} />
             </div>
           )}
 

@@ -20,7 +20,16 @@ import { deleteClient } from "./actions";
  * onboarding row (cascade), and unassigns user roles — posts/assets are kept
  * but orphaned from the client.
  */
-export default function DeleteClientButton({ clientId, clientName }: { clientId: string; clientName: string }) {
+export default function DeleteClientButton({
+  clientId,
+  clientName,
+  onDeleted,
+}: {
+  clientId: string;
+  clientName: string;
+  /** Called after a successful delete so the parent can refresh its list. */
+  onDeleted?: () => void;
+}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -31,7 +40,13 @@ export default function DeleteClientButton({ clientId, clientName }: { clientId:
       try {
         setError(null);
         await deleteClient(clientId);
-        router.push("/dashboard/clients");
+        setOpen(false);
+        if (onDeleted) {
+          onDeleted();
+        } else {
+          // No callback (e.g. the detail page) — leave the client views.
+          router.push("/dashboard/clients");
+        }
         router.refresh();
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to delete client");

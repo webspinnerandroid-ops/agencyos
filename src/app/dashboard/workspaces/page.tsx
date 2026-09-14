@@ -10,7 +10,7 @@ import { Switch } from "@/components/ui/switch";
 import { Loader2, Plus, Trash2, Building2, ArrowRight, Users, UserPlus } from "lucide-react";
 import Link from "next/link";
 import { getWorkspaces, createWorkspace, deleteWorkspace, getWorkspaceTeamAccess, setWorkspaceMemberAccess, type Workspace, type TeamMemberAccess } from "@/lib/workspace";
-import { inviteTeamMember } from "@/lib/workspace-team";
+import { inviteTeamMember, searchUsersToAdd, type UserSearchResult } from "@/lib/workspace-team";
 
 function roleLabel(role: string) {
   if (role === "super_admin") return "Super Admin";
@@ -49,6 +49,12 @@ export default function WorkspacesPage() {
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState("agency_editor");
   const [inviteWorkspaceIds, setInviteWorkspaceIds] = useState<string[]>([]);
+
+  // Per-workspace member search (inside the Team access panel)
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<UserSearchResult[] | null>(null);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [addingUserId, setAddingUserId] = useState<string | null>(null);
 
   const load = useCallback(() => {
     startLoading(async () => {
@@ -113,6 +119,53 @@ export default function WorkspacesPage() {
 
   const toggleInviteWorkspace = (id: string) => {
     setInviteWorkspaceIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+  };
+
+  const handleSearchMembers = async (workspaceId: string) => {
+    const q = searchQuery.trim();
+    if (q.length < 2) return;
+    setSearchLoading(true);
+    setSearchResults(null);
+    const res = await searchUsersToAdd(q, workspaceId);
+    setSearchLoading(false);
+    if (res.success && res.data) setSearchResults(res.data);
+    else setFeedback({ type: "error", message: res.error ?? "Search failed." });
+  };
+
+  const handleAddFromSearch = async (workspaceId: string, u: UserSearchResult) => {
+    setAddingUserId(u.userId);
+    if (u.inTeam) {
+      // Already part of the team — just grant this workspace.
+      const res = await setWorkspaceMemberAccess(workspaceId, u.userId, true);
+      if (res.success) {
+        setFeedback({ type: "success", message: `${u.email} granted access.` });
+        // Refresh the member list for this workspace.
+        const tr = await getWorkspaceTeamAccess(workspaceId);
+        if (tr.success && tr.data) {
+          setTeamMembers((prev) => ({ ...prev, [workspaceId]: tr.data!.members }));
+        }
+        setSearchResults((prev) => (prev ?? []).map((x) => x.userId === u.userId ? { ...x, inWorkspace: true } : x));
+      } else {
+        setFeedback({ type: "error", message: res.error ?? "Failed to grant access." });
+      }
+    } else {
+      // Not in the team yet — invite as editor with this workspace.
+      const res = await inviteTeamMember(u.email, "agency_editor", [workspaceId]);
+      if (res.success && res.data) {
+        const msg = res.data.existing
+          ? `${u.email} added to the team with access to this workspace.`
+          : `${u.email} invited. Share this temporary password: ${res.data.tempPassword}`;
+        setFeedback({ type: "success", message: msg });
+        const tr = await getWorkspaceTeamAccess(workspaceId);
+        if (tr.success && tr.data) {
+          setTeamMembers((prev) => ({ ...prev, [workspaceId]: tr.data!.members }));
+        }
+        setSearchResults((prev) => (prev ?? []).map((x) => x.userId === u.userId ? { ...x, inTeam: true, inWorkspace: true } : x));
+      } else {
+        setFeedback({ type: "error", message: res.error ?? "Failed to invite member." });
+      }
+    }
+    setAddingUserId(null);
   };
 
   const handleInvite = () => {
@@ -248,7 +301,7 @@ export default function WorkspacesPage() {
                   ) : !teamCanManage ? (
                     <p className="text-xs text-muted-foreground">Only admins can manage team access.</p>
                   ) : (teamMembers[w.id] ?? []).length === 0 ? (
-                    <p className="text-xs text-muted-foreground">No team members yet. Use “Add member” above.</p>
+                    <p className="text-xs text-muted-foreground">No team members yet. Add one below.</p>
                   ) : (
                     <ul className="space-y-2">
                       {(teamMembers[w.id] ?? []).map((m) => (
@@ -272,6 +325,44 @@ export default function WorkspacesPage() {
                       ))}
                     </ul>
                   )}
+
+                  {/* Search + add members to this workspace */}
+                  <div className="mt-3 pt-3 border-t">
+                    <div className="flex gap-2">
+                      <Input
+                        placeholder="Search by email…"
+                        value={searchQuery}
+                        onChange={(e) => { setSearchQuery(e.target.value); setSearchResults(null); }}
+                        onKeyDown={(e) => { if (e.key === "Enter") handleSearchMembers(w.id); }}
+                        className="h-8 text-xs"
+                      />
+                      <Button size="sm" variant="outline" onClick={() => handleSearchMembers(w.id)} disabled={searchLoading || searchQuery.trim().length < 2}>
+                        {searchLoading ? <Loader2 className="size-3 animate-spin" /> : "Search"}
+                      </Button>
+                    </div>
+                    {searchQuery.trim().length > 0 && searchQuery.trim().length < 2 && (
+                      <p className="text-[11px] text-muted-foreground mt-1">Type at least 2 characters to search.</p>
+                    )}
+                    {searchResults && searchResults.length === 0 && (
+                      <p className="text-[11px] text-muted-foreground mt-1">No accounts match that email.</p>
+                    )}
+                    {searchResults && searchResults.length > 0 && (
+                      <ul className="mt-2 space-y-1">
+                        {searchResults.map((u) => (
+                          <li key={u.userId} className="flex items-center justify-between gap-2 text-xs">
+                            <span className="truncate">{u.email}</span>
+                            {u.inWorkspace ? (
+                              <Badge variant="secondary" className="shrink-0">Already added</Badge>
+                            ) : (
+                              <Button size="sm" variant="outline" onClick={() => handleAddFromSearch(w.id, u)} disabled={addingUserId === u.userId}>
+                                {addingUserId === u.userId ? <Loader2 className="size-3 animate-spin" /> : u.inTeam ? "Add to workspace" : "Invite as editor"}
+                              </Button>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
                 </div>
               )}
             </div>

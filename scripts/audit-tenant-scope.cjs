@@ -56,11 +56,14 @@ const IGNORE = new Set([
   "src/lib/inngest/functions/monthlyBillingReset.ts",
   "src/lib/inngest/functions/fetchAnalytics.ts",
   "src/lib/inngest/functions/syncInboxes.ts",
+  "src/lib/inngest/functions/classifyEmails.ts",
   "src/lib/inngest/functions/syncSocialInbox.ts",
   "src/lib/inngest/functions/processSequences.ts",
   "src/lib/inngest/functions/publishScheduledPosts.ts",
   "src/lib/inngest/functions/checkProviderBalances.ts",
   "src/lib/inngest/functions/syncSiteMetrics.ts",
+  "src/lib/inngest/functions/syncGbpReviews.ts",
+  "src/lib/inngest/functions/reputationDigestEmail.ts",
   // Auth plumbing
   "src/proxy.ts",
   "src/app/api/register/route.ts",
@@ -169,6 +172,34 @@ const IGNORE = new Set([
   // attacker-supplied tenant_id). The finalize write mirrors exactly what the
   // allowlisted docusign webhook did.
   "src/lib/signing.ts",
+  // content-map-autopublish.ts: the 15-minute auto-publish hold processor.
+  // A cross-tenant job worker by design — it sweeps EVERY tenant's expired
+  // holds on a timer (the exact same trust model as the allowlisted
+  // publishScheduledPosts.ts above it: background scheduler, no session,
+  // tenant_id carried from the scanned row into every subsequent write).
+  // Each due post is claimed by clearing its own auto_publish_at keyed to
+  // the row id + the expiry predicate, never an attacker-supplied tenant.
+  "src/lib/content-map-autopublish.ts",
+  // retryFailedPublishes.ts: the publish-retry sweeper (5m/30m/2h backoff
+  // ladder for failed publishes). Cross-tenant job worker, same trust model
+  // as publishScheduledPosts.ts + content-map-autopublish.ts above: it
+  // sweeps every tenant's failed posts on a schedule; each due post is
+  // claimed (retry marker bumped) keyed to the row id + status predicate
+  // before any publish runs, and tenant_id flows from the scanned row into
+  // every write and notification.
+  "src/lib/publishing/retryFailedPublishes.ts",
+  // grouped-notifications.ts: folds per-post publish events into one bell
+  // row per client — a support module for the allowlisted sweepers above.
+  // The only cross-tenant read is the client NAME lookup by the client_id
+  // carried on the scanned post row (no user input, no writes to clients);
+  // notification inserts carry the scanned row's tenant_id verbatim.
+  "src/lib/publishing/grouped-notifications.ts",
+  // publishingHealthWeeklyEmail.ts: the weekly per-tenant publishing-health
+  // digest. Cross-tenant like the reputation digest above it — it sweeps
+  // every tenant with recent post activity, reads only that tenant's rows
+  // (every query carries the scanned tenant_id), and resolves recipients
+  // from the tenant's own user_roles. No attacker-supplied ids anywhere.
+  "src/lib/inngest/functions/publishingHealthWeeklyEmail.ts",
   // campaign re-run-audit route: same verified pattern — fetch + update go
   // through tenantScopedClient (runtime tenant filter invisible to the static
   // regex) plus assertTenantOwner on the by-id lookup. The rescore helper it

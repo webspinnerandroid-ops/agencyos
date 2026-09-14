@@ -40,4 +40,17 @@ export async function register() {
 
   const { startDiscordGateway } = await import("@/lib/discord-gateway");
   startDiscordGateway();
+
+  // 3. Background job sweepers (in-process durability for this long-lived
+  // Node deployment; the Inngest crons drive the same seams on serverless):
+  //    - hold processor: resolves expired 15-minute auto-publish holds
+  //    - retry processor: retries failed publishes on a backoff ladder
+  // Starting them here (not on first route import) guarantees a hold armed
+  // right after boot is resolved even before any matching route is hit.
+  const { startHoldProcessor } = await import("@/lib/content-map-autopublish");
+  startHoldProcessor();
+  const { startRetryProcessor } = await import(
+    "@/lib/publishing/retryFailedPublishes"
+  );
+  startRetryProcessor();
 }

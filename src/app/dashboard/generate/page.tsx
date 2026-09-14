@@ -83,6 +83,21 @@ interface GenerateResponse {
       wordCount: number;
       checks: { id: string; label: string; category: string; maxPoints: number; earned: number; passed: boolean; detail: string }[];
     };
+    aeoGeo?: {
+      score: number;
+      aeoScore: number;
+      geoScore: number;
+      grade: "red" | "yellow" | "green";
+      checks: { id: string; label: string; pillar: "AEO" | "GEO"; maxPoints: number; earned: number; passed: boolean; detail: string }[];
+      qaPairs: { q: string; a: string }[];
+    };
+    gate?: {
+      gate: number;
+      attempts: number;
+      maxAttempts: number;
+      retries: number;
+      history: { attempt: number; seo: number; aeoGeo: number; belowGate: boolean }[];
+    };
     schemaTypes?: string[];
     seoMeta?: Record<string, string | string[]>;
     seoMetaSummary?: {
@@ -283,7 +298,9 @@ export default function GeneratePage() {
   const [error, setError] = useState<string | null>(null);
   const [buyMoreTokens, setBuyMoreTokens] = useState<string | null>(null);
   const [keywordsText, setKeywordsText] = useState("");
-  const [imageCount, setImageCount] = useState(1);
+  // Fixed image budget (0-3; 0 = none) or "auto" = illustrate key points
+  // (the model chooses where images genuinely support the content).
+  const [imageCount, setImageCount] = useState<number | "auto">(1);
   const [imageSource, setImageSource] = useState<"generate" | "upload">("generate");
   const [schemaTypes, setSchemaTypes] = useState<string>("auto");
   const [uploadedFiles, setUploadedFiles] = useState<
@@ -397,7 +414,8 @@ export default function GeneratePage() {
         body: JSON.stringify({
           ...data,
           keywords,
-          imageCount,
+          imageAuto: imageCount === "auto" ? true : undefined,
+          imageCount: imageCount === "auto" ? undefined : imageCount,
           uploadedImages,
           schemaTypes:
             schemaTypes === "auto" ? "auto" : (schemaTypes.split(",") as SchemaType[]),
@@ -580,9 +598,12 @@ export default function GeneratePage() {
                     <option value={1}>1 — featured image</option>
                     <option value={2}>2 — featured + 1 inline</option>
                     <option value={3}>3 — featured + 2 inline</option>
+                    <option value="auto">To illustrate key points (recommended)</option>
                   </select>
                   <p className="text-xs text-muted-foreground">
-                    Fewer images generates faster and costs less.
+                    &quot;Illustrate key points&quot; places images where they genuinely
+                    support the content, capped at 3. Fewer images generates
+                    faster and costs less.
                   </p>
                 </div>
               ) : (
@@ -887,6 +908,79 @@ export default function GeneratePage() {
                 </details>
               )}
 
+              {/* Gate story — nothing saves unless BOTH engines clear the
+                  quality gate; show which attempt got there. */}
+              {result.blogPost.gate && (
+                <div className="rounded-md border border-green-500/30 bg-green-500/5 px-3 py-2 space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <Check className="size-3.5 shrink-0 text-green-600" />
+                    <span className="text-xs text-muted-foreground">
+                      Cleared SEO + AEO/GEO ≥ {result.blogPost.gate.gate}/100
+                      {result.blogPost.gate.attempts > 1
+                        ? ` — cleared on attempt ${result.blogPost.gate.attempts} after ${result.blogPost.gate.retries} regenerat${result.blogPost.gate.retries === 1 ? "ion" : "ions"}`
+                        : " — first attempt"}
+                    </span>
+                  </div>
+                  {result.blogPost.gate.history?.length > 1 && (
+                    <div className="flex flex-wrap items-center gap-1.5 pl-5">
+                      {result.blogPost.gate.history.map((h, i) => (
+                        <span key={h.attempt} className="flex items-center gap-1.5">
+                          {i > 0 && <span className="text-muted-foreground/50 text-[10px]">→</span>}
+                          <span
+                            title={
+                              h.belowGate
+                                ? `Attempt ${h.attempt}: below the ${result.blogPost.gate!.gate}/100 gate — regenerated with the failing checks as feedback`
+                                : `Attempt ${h.attempt}: cleared the ${result.blogPost.gate!.gate}/100 gate`
+                            }
+                            className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border ${
+                              h.belowGate
+                                ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400"
+                                : "border-green-500/40 bg-green-500/10 text-green-700 dark:text-green-400"
+                            }`}
+                          >
+                            #{h.attempt} · SEO {h.seo} / AEO·GEO {h.aeoGeo}
+                          </span>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* AEO/GEO checklist — answer + citation readiness, from the
+                  same engine the quality gate runs (nothing saves below the
+                  gate on either engine). */}
+              {result.blogPost.aeoGeo && (
+                <details className="rounded-md border p-3">
+                  <summary className="text-xs font-semibold cursor-pointer flex items-center gap-2">
+                    <Sparkles className="size-3.5 text-primary" />
+                    AEO/GEO readiness — {result.blogPost.aeoGeo.score}/100
+                    <span className="ml-auto text-[10px] px-1.5 py-0.5 rounded-full bg-muted">
+                      AEO {result.blogPost.aeoGeo.aeoScore} · GEO {result.blogPost.aeoGeo.geoScore}
+                    </span>
+                  </summary>
+                  <ul className="mt-2 space-y-1.5">
+                    {result.blogPost.aeoGeo.checks.map((c) => (
+                      <li
+                        key={c.id}
+                        className={`text-xs flex items-start gap-2 ${
+                          c.passed ? "text-muted-foreground" : "text-destructive"
+                        }`}
+                      >
+                        <span>{c.passed ? "✓" : "✗"}</span>
+                        <span>
+                          <span className="font-medium">{c.label}</span>
+                          <span className="block text-[11px] opacity-70">{c.detail}</span>
+                        </span>
+                        <span className="ml-auto shrink-0">
+                          {c.earned}/{c.maxPoints}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+
               <div>
                 <Label className="text-xs">Title</Label>
                 <h3 className="text-lg font-semibold mt-0.5">
@@ -1063,7 +1157,7 @@ export default function GeneratePage() {
                   excerpt={result.blogPost.metaDescription ?? ""}
                   featuredImageUrl={result.blogPost.images?.[0]?.url ?? ""}
                   seoScore={result.blogPost.seo?.score ?? null}
-                  aeoGeoScore={result.blogPost.seo?.checks ? Math.round(result.blogPost.seo.checks.reduce((s: number, c: any) => s + (c.passed ? 1 : 0), 0) / result.blogPost.seo.checks.length * 100) : null}
+                  aeoGeoScore={result.blogPost.aeoGeo?.score ?? null}
                 />
               </div>
             </CardContent>

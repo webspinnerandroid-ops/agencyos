@@ -87,7 +87,56 @@ export interface CalendarPost {
   revision_reason?: string | null;
   seo_score?: number | null;
   seo_checks?: unknown;
+  /** Denormalized AEO/GEO readiness score (migration 039/060). */
+  aeo_geo_score?: number | null;
   post_platforms: PostPlatform[] | null;
+}
+
+/** The AEO/GEO payload stored on blog posts (content.aeoGeo) — engine output. */
+interface AeoGeoPayload {
+  score?: number;
+  aeoScore?: number;
+  geoScore?: number;
+  checks?: {
+    id?: string;
+    label: string;
+    pillar?: "AEO" | "GEO";
+    maxPoints?: number;
+    earned?: number;
+    passed: boolean;
+    detail?: string;
+  }[];
+}
+
+/**
+ * Resolves a post's AEO/GEO payload for the detail dialog: the nested
+ * content.aeoGeo engine output (score + per-check checklist) when present,
+ * otherwise just the denormalized score column (no checklist available).
+ */
+function getAeoGeoPayload(
+  post: CalendarPost
+): (Omit<AeoGeoPayload, "score"> & { score: number | null }) | null {
+  let parsed: Record<string, unknown> | null = null;
+  if (typeof post.content === "string") {
+    try {
+      parsed = JSON.parse(post.content);
+    } catch {
+      parsed = null;
+    }
+  } else if (post.content && typeof post.content === "object") {
+    parsed = post.content as Record<string, unknown>;
+  }
+  const aeo = parsed?.aeoGeo as AeoGeoPayload | undefined;
+  if (aeo && (typeof aeo.score === "number" || (aeo.checks?.length ?? 0) > 0)) {
+    return {
+      ...aeo,
+      score: typeof aeo.score === "number" ? aeo.score : (post.aeo_geo_score ?? null),
+    };
+  }
+  if (typeof post.aeo_geo_score === "number") {
+    return { score: post.aeo_geo_score, checks: [] };
+  }
+  return null;
 }
 
 export type PostStatus =
@@ -998,6 +1047,72 @@ export default function ContentCalendar({
                     {renderSeoChecks()}
                   </div>
                 )}
+
+                {/* AEO/GEO readiness + expandable checklist (blogs only) */}
+                {isBlogPost(selectedPost) &&
+                  (() => {
+                    const aeo = getAeoGeoPayload(selectedPost);
+                    if (!aeo || aeo.score == null) return null;
+                    const aeoChecks = aeo.checks ?? [];
+                    return (
+                      <div className="rounded-md bg-muted/50 border px-3 py-2">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <h4 className="text-sm font-medium">AEO/GEO Readiness</h4>
+                          <ScoreBadge score={aeo.score} label="AEO/GEO" />
+                        </div>
+                        {typeof aeo.aeoScore === "number" && typeof aeo.geoScore === "number" && (
+                          <p className="text-[11px] text-muted-foreground mb-2">
+                            AEO {aeo.aeoScore}/50 · GEO {aeo.geoScore}/50 — AI-estimated readiness, not a guarantee of citation.
+                          </p>
+                        )}
+                        {(aeoChecks.length > 0) && (
+                          <details>
+                            <summary className="text-xs font-medium cursor-pointer">
+                              Checklist ({aeoChecks.filter((chk) => !chk.passed).length} failing)
+                            </summary>
+                            <ul className="space-y-1.5 mt-1.5">
+                              {aeoChecks.map((chk, i) => (
+                                <li
+                                  key={chk.id ?? i}
+                                  className="text-xs flex items-start gap-2"
+                                  title={chk.detail ?? ""}
+                                >
+                                  <span
+                                    className={cn(
+                                      "mt-0.5 inline-flex size-3.5 shrink-0 items-center justify-center rounded-full text-[9px] font-bold",
+                                      chk.passed
+                                        ? "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400"
+                                        : "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400"
+                                    )}
+                                  >
+                                    {chk.passed ? "✓" : "✗"}
+                                  </span>
+                                  <span
+                                    className={cn(
+                                      chk.passed
+                                        ? "text-muted-foreground"
+                                        : "text-red-700 dark:text-red-400"
+                                    )}
+                                  >
+                                    <span className="font-medium">
+                                      {chk.pillar ? `${chk.pillar} · ` : ""}
+                                      {chk.label}
+                                    </span>
+                                    <span className="block text-[11px] opacity-70">{chk.detail}</span>
+                                  </span>
+                                  <span className="ml-auto shrink-0 text-muted-foreground">
+                                    {typeof chk.earned === "number" && typeof chk.maxPoints === "number"
+                                      ? `${chk.earned}/${chk.maxPoints}`
+                                      : ""}
+                                  </span>
+                                </li>
+                              ))}
+                            </ul>
+                          </details>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                 {/* Publish attempt log — why and when it failed */}
                 {attemptsLoading ? (

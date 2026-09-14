@@ -31,6 +31,18 @@ const noAdjacent = (body: string) =>
   !/!\[[^\]]*\]\([^)]*\)\s*\n\s*\n\s*!\[[^\]]*\]\([^)]*\)/.test(body);
 
 describe("selectBlogImageSpecs", () => {
+  it('"illustrate key points" mode: limit=3 keeps featured first and caps total', () => {
+    const specs: BlogImageSpec[] = [
+      { prompt: "p0", placement: "featured", sectionTitle: "", description: "d0" },
+      { prompt: "p1", placement: "inline", sectionTitle: "A", description: "d1" },
+      { prompt: "p2", placement: "inline", sectionTitle: "B", description: "d2" },
+      { prompt: "p3", placement: "inline", sectionTitle: "C", description: "d3" },
+    ];
+    const selected = selectBlogImageSpecs(specs, 3);
+    expect(selected).toHaveLength(3);
+    expect(selected[0].placement).toBe("featured");
+  });
+
   it("caps at MAX_BLOG_IMAGES total", () => {
     const specs = [
       spec({ placement: "featured", sectionTitle: "" }),

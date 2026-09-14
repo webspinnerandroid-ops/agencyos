@@ -31,7 +31,10 @@ export function buildNavSections(isSuperAdmin: boolean): NavSection[] {
       items: [
         { href: "/dashboard/clients", label: "Clients" },
         { href: "/dashboard/posts", label: "Posts" },
+        { href: "/dashboard/scheduled", label: "Scheduled" },
         { href: "/dashboard/calendar", label: "Calendar" },
+        { href: "/dashboard/answer-library", label: "Answer Library" },
+        { href: "/dashboard/content-map", label: "Content Map" },
         { href: "/dashboard/workspaces", label: "Workspaces" },
         { href: "/dashboard/cms", label: "Website" },
       ],
@@ -53,6 +56,7 @@ export function buildNavSections(isSuperAdmin: boolean): NavSection[] {
       label: "Grow",
       items: [
         { href: "/dashboard/analytics", label: "Analytics" },
+        { href: "/dashboard/reputation", label: "Reputation" },
         { href: "/dashboard/assets", label: "Asset Library" },
         { href: "/dashboard/connections", label: "Connections" },
       ],

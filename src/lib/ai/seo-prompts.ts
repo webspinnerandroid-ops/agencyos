@@ -21,10 +21,23 @@ export interface SeoContext {
   targetWordCount?: number;
   readabilityTarget?: "grade-6" | "grade-8" | "grade-10" | "college";
   internalLinks?: { url: string; anchorText: string }[];
+  /**
+   * Preferred EXTERNAL sources to cite (Content Map "External Links" column).
+   * Optional — absent means the model picks its own reputable sources; the
+   * internal-links check never depends on this.
+   */
+  externalLinks?: string[];
   ctaText?: string;
   ctaUrl?: string;
   /** A user-supplied page title the post must satisfy. */
   titleHint?: string;
+  /**
+   * How many images to plan: a fixed 1/2/3, or `null` = "illustrate key
+   * points" — the model chooses per-section where an illustration genuinely
+   * helps (featured + the sections where a visual earns its place). Undefined
+   * falls back to the 3-image cap.
+   */
+  imageCount?: number | null;
   /** Web research (questions people ask + trends) that the post must answer. */
   research?: {
     questions: string[];
@@ -127,6 +140,28 @@ export function getBlogPrompt(brandVoice?: string, seoContext?: SeoContext): str
   const titleHint = seoContext?.titleHint?.trim();
   const research = seoContext?.research;
 
+  // Preferred external sources (optional). Rendered as a "cite these" list;
+  // absent when none were provided — the model then finds its own sources.
+  const preferredLinksStr = (seoContext?.externalLinks ?? [])
+    .slice(0, 5)
+    .map((u, i) => `${i + 1}. ${u}`)
+    .join("\n   ");
+
+  // Image budget: a fixed 1/2/3, or null = "illustrate key points" — the
+  // model chooses per-section where an illustration genuinely helps (still
+  // capped at 3 total). Undefined falls back to the 3-image cap.
+  const imageCount = seoContext?.imageCount;
+  const maxImages =
+    imageCount === null || imageCount === undefined
+      ? 3
+      : Math.min(3, Math.max(1, imageCount));
+  const imageDirective =
+    imageCount === null
+      ? "a featured image plus inline images ONLY where they genuinely illustrate a key point of a specific section — you choose the sections (a concrete example, a comparison, a data story, a how-to moment); cap the total at 3"
+      : maxImages === 1
+        ? "exactly ONE featured image and no inline images"
+        : `exactly ONE featured image plus ${maxImages - 1} inline image${maxImages - 1 === 1 ? "" : "s"}`;
+
   let researchStr = "";
   if (research) {
     const q = research.questions
@@ -184,11 +219,15 @@ export function getBlogPrompt(brandVoice?: string, seoContext?: SeoContext): str
 
 9. **Call to Action**: End with a natural, contextual call to action: "${ctaText}" linking to ${ctaUrl}.
 
-10. **Links (scored tests — both required)**: Include AT LEAST ONE internal link to another page on the site, marked as [INTERNAL LINK: anchor text → page title] (the system resolves it), AND at least one outbound link to a reputable external source ([Outbound: anchor → https://reputable-source.com]). Both are scoring tests; a post with zero internal or zero outbound links loses those points.
+10. **Links (scored tests)**: Internal links (at least one) and outbound links (at least one) are scoring tests — a post with neither loses those points.${
+    preferredLinksStr
+      ? `\n\n   PREFERRED SOURCES (provided for this post — cite them):\n   ${preferredLinksStr}\n   Weave these outbound sources into the body where their content supports a claim (as normal markdown links), rather than clustering them at the end.`
+      : ""
+  } Include at least one internal link to another page on the site, marked as [INTERNAL LINK: anchor text → page title] (the system resolves it), and at least one outbound link to a reputable external source (a normal markdown link to a trusted source).
 
 11. **Paragraph readability (scored test)**: No paragraph may exceed 120 words — the scorer fails the readability test otherwise. Keep paragraphs to 2-4 sentences and under ~80 words.
 
-12. **Images**: Plan the post's images. Every post gets exactly ONE featured image (placement "featured") that captures the overall topic, plus AT MOST TWO inline images (placement "inline") — never more than 3 images total. A 1500-2000-word post therefore has 1 featured + 1-2 inline. SPACE THE IMAGES OUT: each image must be separated from every other image by at least one full paragraph of body text — never place two images adjacent to each other, never place an image directly under a heading, and never place an image directly before the next heading. Each image must have a distinct, detailed prompt that is RELEVANT to the specific section it accompanies (its topic, examples, and data — never generic filler). Never repeat the same prompt twice. In the body markdown, place each inline image on its own line, surrounded by blank lines, AFTER at least one paragraph of its section's text, as ![description](IMAGE_URL_N) — keep the URL as a placeholder like ![description](IMAGE_URL_2) since the actual image URLs are generated separately; the sectionTitle field tells the system where each image belongs. IMAGE ALT TEXT IS AN SEO SIGNAL AND A SCORED TEST: every image description (the alt text) must be a unique, descriptive sentence that contains the primary keyword "${primaryKw}" naturally where it fits (e.g. "${primaryKw} pour-over station") — never the same alt twice, never a generic "image of coffee". The scorer requires ALL images to have alt text AND at least one alt to contain the primary keyword.
+12. **Images — illustrate key points (scored test)**: Plan ${imageDirective}. SPACE THE IMAGES OUT: each image must be separated from every other image by at least one full paragraph of body text — never place two images adjacent to each other, never place an image directly under a heading, and never place an image directly before the next heading. Every image must illustrate a KEY POINT of the section it accompanies — a concrete example, a comparison, a data story, a how-to moment — never generic decorative filler. Each image must have a distinct, detailed prompt that is RELEVANT to that section (its topic, examples, and data). Never repeat the same prompt twice. In the body markdown, place each inline image on its own line, surrounded by blank lines, AFTER at least one paragraph of its section's text, as ![description](IMAGE_URL_N) — keep the URL as a placeholder like ![description](IMAGE_URL_2) since the actual image URLs are generated separately; the sectionTitle field tells the system where each image belongs. IMAGE ALT TEXT IS AN SEO SIGNAL AND A SCORED TEST: every image description (the alt text) must be a unique, descriptive sentence that contains the primary keyword "${primaryKw}" naturally where it fits (e.g. "${primaryKw} pour-over station") — never the same alt twice, never a generic "image of coffee". The scorer requires ALL images to have alt text AND at least one alt to contain the primary keyword.
 
 13. **AEO / GEO — answer engines and generative engines (scored separately)**: This post is also scored for how well AI answer engines (ChatGPT, Gemini, Claude, Perplexity, AI Overviews) can extract a direct answer and how likely they are to cite it. To maximize that score:
     - Open with a crisp definitional sentence ("${primaryKw} refers to …" / "${primaryKw} is …") inside the first ~150 words.
@@ -231,7 +270,13 @@ The JSON must have this structure:
   ]
 }
 
-IMPORTANT: The first entry of "images" MUST be the featured image (placement "featured"). Follow it with at most TWO inline images, in body order, each tied to a real H2 section in your headings. Total images must never exceed 3 (1 featured + 2 inline). Never place two images adjacent — always keep at least one full paragraph of text between them.
+IMPORTANT: The first entry of "images" MUST be the featured image (placement "featured").${
+    imageCount === null
+      ? " Follow it with inline images only where they genuinely illustrate key points, in body order, each tied to a real H2 section in your headings."
+      : imageCount && imageCount > 1
+        ? ` Follow it with ${imageCount - 1} inline image${imageCount - 1 === 1 ? "" : "s"}, in body order, each tied to a real H2 section in your headings.`
+        : " It is the only image."
+  } Total images must never exceed ${maxImages}${imageCount === null ? " (1 featured + inline illustrations where a section genuinely benefits)" : imageCount === 1 ? " (featured only)" : " (1 featured + the rest inline)"}. Never place two images adjacent — always keep at least one full paragraph of text between them.
 `;
 }
 
@@ -248,6 +293,48 @@ IMPORTANT: The first entry of "images" MUST be the featured image (placement "fe
  * - Facebook: conversational, community-focused
  * - TikTok: casual, trend-aware, hook-driven
  */
+/**
+ * Per-platform hard specs — the numbers each destination actually enforces
+ * (or performs best within). Used to enrich the caption prompt with concrete
+ * constraints AND stored alongside generated posts so the UI can show the
+ * limit the caption was written for. All image sizes are pixel dimensions.
+ */
+export const PLATFORM_SPECS: Record<
+  string,
+  { charLimit: number; sweetSpot: string; imageSize: string; note?: string }
+> = {
+  instagram: {
+    charLimit: 2200,
+    sweetSpot: "125-150 words (first line is the hook — it's all that shows before \"more\")",
+    imageSize: "1080×1350 (4:5 feed) or 1080×1920 (9:16 stories/reels)",
+  },
+  twitter: {
+    charLimit: 280,
+    sweetSpot: "71-100 chars per single tweet; threads for depth",
+    imageSize: "1600×900 (16:9) or 1080×1080 (1:1)",
+  },
+  linkedin: {
+    charLimit: 3000,
+    sweetSpot: "150-300 words (first 3 lines visible before \"see more\")",
+    imageSize: "1200×627 (1.91:1 link card) or 1080×1080 (1:1)",
+  },
+  facebook: {
+    charLimit: 63206,
+    sweetSpot: "80-150 words (short outperforms long unless it's a story)",
+    imageSize: "1200×630 (1.91:1) or 1080×1080 (1:1)",
+  },
+  tiktok: {
+    charLimit: 2200,
+    sweetSpot: "15-50 words (caption is SEO — front-load keywords)",
+    imageSize: "1080×1920 (9:16 vertical)",
+  },
+  threads: {
+    charLimit: 500,
+    sweetSpot: "50-150 words, conversational",
+    imageSize: "1080×1350 (4:5) — reuses Instagram-style visuals",
+  },
+};
+
 export function getSocialCaptionPrompt(platform: string, brandVoice?: string): string {
   const brandSection = brandVoice
     ? `\n\nBRAND VOICE: ${brandVoice}\nAdapt the brand voice to fit the platform while maintaining consistency.`
@@ -261,6 +348,7 @@ export function getSocialCaptionPrompt(platform: string, brandVoice?: string): s
 - Emoji usage: 3-5 relevant emojis scattered naturally through the text (not at the beginning of every sentence)
 - Call to action: encourage comments, saves, or shares (Instagram algorithm favors these)
 - Optimal length: 125-150 words
+- HARD LIMIT: 2200 characters total — count before returning
 - Include a hidden hashtag strategy comment (place 20-25 hashtags in a first-comment style, marked as [FIRST COMMENT HASHTAGS])`,
 
     twitter: `## TWITTER/X CAPTION GUIDELINES
@@ -304,14 +392,22 @@ export function getSocialCaptionPrompt(platform: string, brandVoice?: string): s
 - Short paragraphs, conversational tone
 - Ask questions to spark discussion
 - Length: 50-150 words
+- HARD LIMIT: 500 characters total
 - Emoji use: natural and minimal`,
   };
 
   const guide = platformGuides[platform.toLowerCase()] ?? platformGuides.instagram;
+  const spec = PLATFORM_SPECS[platform.toLowerCase()];
+  const specSection = spec
+    ? `\n\n## ${platform.toUpperCase()} HARD SPECS (non-negotiable)
+- Character limit: ${spec.charLimit} — the caption MUST fit within it
+- Sweet spot: ${spec.sweetSpot}
+- Suggested image size: ${spec.imageSize} (mention nothing about it in the caption; it's for the asset team)`
+    : "";
 
   return `You are a social media strategist and copywriter specializing in platform-optimized content. Write a social media caption for ${platform.toUpperCase()}.
 
-${guide}
+${guide}${specSection}
 ${brandSection}
 
 ## OUTPUT FORMAT
@@ -533,7 +629,14 @@ Avoid these common issues: blurry, low quality, distorted faces, extra limbs, di
  * Returns the JSON schema object for blog post structured output.
  * Can be passed to generateStructuredOutput as the schema parameter.
  */
-export function getBlogPostSchema() {
+export function getBlogPostSchema(imageCount?: number | null) {
+  // Mirrors getBlogPrompt: null/undefined → the 3-image cap, fixed n → n
+  // (but never below 1 — the schema always plans the featured image; the
+  // route decides whether to actually generate it).
+  const maxImages =
+    imageCount === null || imageCount === undefined
+      ? 3
+      : Math.min(3, Math.max(1, imageCount));
   return {
     type: "object",
     properties: {
@@ -554,7 +657,12 @@ export function getBlogPostSchema() {
       body: { type: "string", description: "Full blog post body in markdown format, with image placeholders (![description](IMAGE_URL_N)) on their own lines, placed after at least one paragraph of the relevant H2 sections" },
       images: {
         type: "array",
-        description: "One featured image plus at most two inline images (never more than 3 total). Each prompt must be relevant to the section it accompanies, and images must be spaced apart in the body (never adjacent).",
+        description:
+          maxImages === 1
+            ? "Exactly one featured image for the post."
+            : imageCount === null
+              ? "A featured image plus inline images only where they illustrate key points of specific sections (never more than 3 total). Each prompt must be relevant to the section it accompanies, and images must be spaced apart in the body (never adjacent)."
+              : `One featured image plus ${maxImages - 1} inline image${maxImages - 1 === 1 ? "" : "s"} (never more than ${maxImages} total). Each prompt must be relevant to the section it accompanies, and images must be spaced apart in the body (never adjacent).`,
         items: {
           type: "object",
           properties: {

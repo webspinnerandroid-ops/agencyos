@@ -44,6 +44,7 @@ import { getBlogPrompt, getBlogPostSchema } from "@/lib/ai/seo-prompts";
 import { pamGenerateSocial } from "@/lib/ai/social-pipeline";
 import { persistImageToStorage } from "@/lib/media/storage";
 import {
+  MAX_BLOG_IMAGES,
   selectBlogImageSpecs,
   injectImagesIntoBody,
   type BlogImageSpec,
@@ -62,8 +63,10 @@ import {
   MAX_SCORE_ATTEMPTS,
   isBelowGate,
   buildGateFeedback,
+  buildGateStory,
   ScoreGateError,
   mapReusedImages,
+  type GateHistoryEntry,
 } from "@/lib/score-gate";
 import { incrementUsage } from "@/lib/usage";
 import { checkTrialContentLimit } from "@/lib/trial-limits";
@@ -406,7 +409,9 @@ async function cherylGenerateBlog(
   chatContext: string,
   keywords: string[] = [],
   shouldCancel?: () => Promise<boolean>,
-  revisionFeedback?: string
+  revisionFeedback?: string,
+  /** Image budget: fixed 1/2/3, or undefined = the 3-image cap. */
+  imageCount?: number
 ): Promise<BlogDraft> {
   const supabase = await createServiceClient();
 
@@ -432,6 +437,7 @@ async function cherylGenerateBlog(
       primaryKeyword,
       secondaryKeywords: keywords.length > 1 ? keywords.slice(1) : undefined,
       internalLinks: buildInternalLinkContext(linkablePages),
+      imageCount,
     });
   const userPrompt = `Write a comprehensive, publish-ready blog post about: "${topic}".` +
     (keywords.length > 0
@@ -454,6 +460,9 @@ async function cherylGenerateBlog(
   const gate = getScoreGate();
   let attempts = 0;
   let fixFeedback = "";
+  // Score history: one entry per attempt so the gate story (results card and
+  // detail modal) can show how each regeneration moved the scores.
+  const scoreHistory: GateHistoryEntry[] = [];
   let blogPost: {
     title: string;
     slug: string;
@@ -485,12 +494,13 @@ async function cherylGenerateBlog(
       systemPrompt,
       fixFeedback ? `${userPrompt}\n\n${fixFeedback}` : userPrompt,
       tenantId,
-      getBlogPostSchema(),
+      getBlogPostSchema(imageCount),
       { functionName: "generate_blog_post" }
     );
 
     const specs = selectBlogImageSpecs(
-      Array.isArray(blogPost.images) ? blogPost.images : []
+      Array.isArray(blogPost.images) ? blogPost.images : [],
+      imageCount ?? MAX_BLOG_IMAGES
     );
     if (attempts === 1) {
       // First attempt: generate every image fresh and record it in
@@ -573,7 +583,14 @@ async function cherylGenerateBlog(
       entities: [],
     });
 
-    if (!isBelowGate(seo.total, aeoGeo.total, gate)) break;
+    const belowGate = isBelowGate(seo.total, aeoGeo.total, gate);
+    scoreHistory.push({
+      attempt: attempts,
+      seo: seo.total,
+      aeoGeo: aeoGeo.total,
+      belowGate,
+    });
+    if (!belowGate) break;
     if (attempts >= MAX_SCORE_ATTEMPTS) {
       throw new ScoreGateError(seo.total, aeoGeo.total, gate, seo, aeoGeo);
     }
@@ -646,6 +663,9 @@ async function cherylGenerateBlog(
           checks: aeoGeo.checks,
           qaPairs: aeoGeo.qaPairs,
         },
+        // Persisted so the post detail modal can show the same "cleared on
+        // attempt N" badge + per-attempt score timeline as the results card.
+        gate: buildGateStory(gate, attempts, scoreHistory),
         seoMeta: seoMeta.meta,
         seoMetaPreview: schemaPreview({
           title: blogPost.title,

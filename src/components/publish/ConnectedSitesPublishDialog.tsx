@@ -18,6 +18,10 @@ interface BlogPlatform {
   site_url: string;
   site_name: string;
   platform_type: string;
+  /** Whether this platform can overwrite existing posts (Medium can't). */
+  supportsOverwrite?: boolean;
+  /** Which content models the platform accepts (post/page). */
+  kinds?: ("post" | "page")[];
 }
 
 // ------------------------------------------------------------------
@@ -47,7 +51,8 @@ export interface SitePublishTarget {
   blogPlatformId: string;
   mode: "create" | "overwrite";
   kind: "post" | "page";
-  wpPostId?: number;
+  /** Numeric for WordPress, string for Ghost/Webflow/built-in CMS. */
+  wpPostId?: number | string;
   includeImages: boolean;
 }
 
@@ -145,11 +150,15 @@ export default function ConnectedSitesPublishDialog({
             siteUrl: string;
             siteName: string;
             platformType: string;
+            supportsOverwrite?: boolean;
+            kinds?: ("post" | "page")[];
           }) => ({
             id: p.id,
             site_url: p.siteUrl,
             site_name: p.siteName,
             platform_type: p.platformType,
+            supportsOverwrite: p.supportsOverwrite ?? true,
+            kinds: p.kinds ?? ["post", "page"],
           })
         );
         setPlatforms(list);
@@ -185,10 +194,18 @@ export default function ConnectedSitesPublishDialog({
   // Load a site's existing posts/pages for the overwrite picker.
   const loadSiteContent = async (config: SitePublishConfig, search?: string) => {
     patchConfig(config.platform.id, { itemsLoading: true, itemsError: null });
+    // Reset the kind to a supported value if a previous platform's kind
+    // isn't available here (e.g. Ghost has posts only).
+    const kinds = config.platform.kinds ?? ["post", "page"];
+    const kind = kinds.includes(config.kind) ? config.kind : kinds[0];
+    if (kind !== config.kind) {
+      patchConfig(config.platform.id, { kind, wpPostId: null });
+      config = { ...config, kind, wpPostId: null };
+    }
     try {
       const query = new URLSearchParams({
         siteId: config.platform.id,
-        kind: config.kind,
+        kind,
       });
       if (search) query.set("search", search);
       const res = await fetch(
@@ -268,7 +285,7 @@ export default function ConnectedSitesPublishDialog({
           blogPlatformId: c.platform.id,
           mode: c.mode,
           kind: c.kind,
-          wpPostId: c.mode === "overwrite" ? Number(c.wpPostId) : undefined,
+          wpPostId: c.mode === "overwrite" ? (c.wpPostId ?? undefined) : undefined,
           includeImages: hasImages && c.includeImages,
         }))
       );
@@ -391,8 +408,15 @@ export default function ConnectedSitesPublishDialog({
                           className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm"
                         >
                           <option value="create">Create new post</option>
-                          <option value="overwrite">Overwrite existing…</option>
+                          {config.platform.supportsOverwrite !== false && (
+                            <option value="overwrite">Overwrite existing…</option>
+                          )}
                         </select>
+                        {config.platform.supportsOverwrite === false && (
+                          <p className="text-[11px] text-muted-foreground">
+                            This platform only supports creating new posts.
+                          </p>
+                        )}
                       </div>
                       {config.mode === "overwrite" && (
                         <div className="space-y-1">
@@ -408,8 +432,13 @@ export default function ConnectedSitesPublishDialog({
                             }
                             className="w-full rounded-md border border-input bg-background px-2.5 py-1.5 text-sm"
                           >
-                            <option value="post">Posts (blog)</option>
-                            <option value="page">Pages</option>
+                            {(config.platform.kinds ?? ["post", "page"]).map(
+                              (k) => (
+                                <option key={k} value={k}>
+                                  {k === "post" ? "Posts (blog)" : "Pages"}
+                                </option>
+                              )
+                            )}
                           </select>
                         </div>
                       )}

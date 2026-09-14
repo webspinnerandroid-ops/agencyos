@@ -14,6 +14,14 @@ import { refreshCompetitorBenchmarks } from "@/lib/inngest/functions/refreshComp
 import { checkProviderBalances } from "@/lib/inngest/functions/checkProviderBalances";
 import { autoAuditMonitoredSites } from "@/lib/inngest/functions/autoAuditMonitoredSites";
 import { assetHealthWeeklyEmail } from "@/lib/inngest/functions/assetHealthWeeklyEmail";
+import { syncGbpReviews } from "@/lib/inngest/functions/syncGbpReviews";
+import { reputationDigestEmail } from "@/lib/inngest/functions/reputationDigestEmail";
+import { onboardClient } from "@/lib/inngest/functions/onboardClient";
+import { reconcileWorkflows } from "@/lib/inngest/functions/reconcileWorkflows";
+import { classifySyncedEmails } from "@/lib/inngest/functions/classifyEmails";
+import { processAutoPublishHolds } from "@/lib/inngest/functions/processAutoPublishHolds";
+import { processPublishRetries } from "@/lib/inngest/functions/processPublishRetries";
+import { publishingHealthWeeklyEmail } from "@/lib/inngest/functions/publishingHealthWeeklyEmail";
 
 /**
  * Inngest API handler — serves all registered functions.
@@ -25,5 +33,5 @@ import { assetHealthWeeklyEmail } from "@/lib/inngest/functions/assetHealthWeekl
  */
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [publishScheduledPosts, monthlyBillingReset, syncInboxes, syncSocialInbox, processSequences, teamChatTask, weeklyOpportunityScan, autoRewritePost, syncSiteMetrics, scoreCompetitors, refreshCompetitorBenchmarks, checkProviderBalances, autoAuditMonitoredSites, assetHealthWeeklyEmail],
+  functions: [publishScheduledPosts, monthlyBillingReset, syncInboxes, syncSocialInbox, processSequences, teamChatTask, weeklyOpportunityScan, autoRewritePost, syncSiteMetrics, scoreCompetitors, refreshCompetitorBenchmarks, checkProviderBalances, autoAuditMonitoredSites, assetHealthWeeklyEmail, syncGbpReviews, reputationDigestEmail, onboardClient, reconcileWorkflows, classifySyncedEmails, processAutoPublishHolds, processPublishRetries, publishingHealthWeeklyEmail],
 });

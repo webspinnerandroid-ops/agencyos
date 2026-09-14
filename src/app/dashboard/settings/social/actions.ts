@@ -17,6 +17,51 @@ export interface SocialAccount {
   platform: string;
   account_name: string;
   created_at: string;
+  /** Per-account caption spec overrides (migration 104) — nullable JSONB. */
+  spec_overrides?: {
+    charLimit?: number;
+    hashtagCount?: number;
+    imageSize?: string;
+  } | null;
+}
+
+/**
+ * Save one account's caption spec overrides (char limit / hashtag cap /
+ * image size). Null clears the overrides — the platform defaults apply.
+ */
+export async function saveSpecOverrides(
+  accountId: string,
+  overrides: { charLimit?: number | null; hashtagCount?: number | null; imageSize?: string | null }
+): Promise<ActionResponse> {
+  try {
+    const tenantId = await getTenantId();
+    const supabase = await createServiceClient();
+
+    // Validate: positive ints (charLimit ≥ 40 so a caption is still possible),
+    // hashtagCount ≥ 0; empty strings clear.
+    const clean: Record<string, number | string> = {};
+    if (typeof overrides.charLimit === "number" && overrides.charLimit >= 40) {
+      clean.charLimit = Math.floor(overrides.charLimit);
+    }
+    if (typeof overrides.hashtagCount === "number" && overrides.hashtagCount >= 0) {
+      clean.hashtagCount = Math.floor(overrides.hashtagCount);
+    }
+    if (typeof overrides.imageSize === "string" && overrides.imageSize.trim()) {
+      clean.imageSize = overrides.imageSize.trim().slice(0, 60);
+    }
+
+    const { error } = await supabase
+      .from("social_accounts")
+      .update({ spec_overrides: Object.keys(clean).length > 0 ? clean : null })
+      .eq("id", accountId)
+      .eq("tenant_id", tenantId);
+    if (error) throw new Error(error.message);
+
+    revalidatePath("/dashboard/settings/social");
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
 }
 
 export interface ActionResponse<T = void> {

@@ -33,7 +33,7 @@ export async function GET(request: NextRequest) {
     // columns only — never the JSON content blob (it's megabytes of base64).
     let postsQuery = supabase
       .from("posts")
-      .select("id, status, type, seo_score, aeo_geo_score, cms_published_at, cms_slug, client_id, created_at")
+      .select("id, status, type, seo_score, aeo_geo_score, aeo_geo_split, cms_published_at, cms_slug, client_id, created_at")
       .eq("tenant_id", tenantId);
     if (workspaceId) {
       postsQuery = postsQuery.or(`workspace_id.is.null,workspace_id.eq.${workspaceId}`);
@@ -46,6 +46,7 @@ export async function GET(request: NextRequest) {
       type: string | null;
       seo_score: number | null;
       aeo_geo_score: number | null;
+      aeo_geo_split: { aeo?: number | null; geo?: number | null } | null;
       cms_published_at: string | null;
       cms_slug: string | null;
       created_at: string | null;
@@ -53,6 +54,10 @@ export async function GET(request: NextRequest) {
 
     const scored = rows.filter((p) => typeof p.seo_score === "number");
     const aeoScored = rows.filter((p) => typeof p.aeo_geo_score === "number");
+    // Pillar split (migration 100) — analytics client reports average AEO
+    // (answer readiness) and GEO (citation readiness) separately.
+    const aeoPillarScored = rows.filter((p) => typeof p.aeo_geo_split?.aeo === "number");
+    const geoPillarScored = rows.filter((p) => typeof p.aeo_geo_split?.geo === "number");
     const avg = (arr: number[]) =>
       arr.length ? Math.round((arr.reduce((a, b) => a + b, 0) / arr.length) * 10) / 10 : null;
 
@@ -90,6 +95,8 @@ export async function GET(request: NextRequest) {
         totalPosts: rows.length,
         avgSeoScore: avg(scored.map((p) => p.seo_score as number)),
         avgAeoGeoScore: avg(aeoScored.map((p) => p.aeo_geo_score as number)),
+        avgAeoScore: avg(aeoPillarScored.map((p) => p.aeo_geo_split!.aeo as number)),
+        avgGeoScore: avg(geoPillarScored.map((p) => p.aeo_geo_split!.geo as number)),
         byStatus,
         bands,
         publishedOnSite,

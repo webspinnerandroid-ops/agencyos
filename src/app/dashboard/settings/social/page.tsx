@@ -26,7 +26,18 @@ import {
   initiateTwitterOAuth,
   initiateGoogleOAuth,
   removeSocialAccount,
+  saveSpecOverrides,
 } from "./actions";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 // ------------------------------------------------------------------
 // Helpers
@@ -58,6 +69,12 @@ export default function SocialAccountsPage() {
   const [isPending, startTransition] = useTransition();
   const [connectingPlatform, setConnectingPlatform] = useState<string | null>(null);
   const [oauthConfig, setOauthConfig] = useState<OAuthConfigStatus | null>(null);
+  // Per-account caption spec editor (Settings → Social accounts).
+  const [editingSpec, setEditingSpec] = useState<SocialAccount | null>(null);
+  const [specCharLimit, setSpecCharLimit] = useState("");
+  const [specHashtags, setSpecHashtags] = useState("");
+  const [specImageSize, setSpecImageSize] = useState("");
+  const [specSaving, setSpecSaving] = useState(false);
 
   const loadData = useCallback(() => {
     startLoading(async () => {
@@ -138,6 +155,33 @@ export default function SocialAccountsPage() {
         loadData();
       } else {
         setFeedback({ type: "error", message: res.error ?? "Failed to remove account." });
+      }
+    });
+  };
+
+  const openSpecEditor = (account: SocialAccount) => {
+    setEditingSpec(account);
+    setSpecCharLimit(account.spec_overrides?.charLimit != null ? String(account.spec_overrides.charLimit) : "");
+    setSpecHashtags(account.spec_overrides?.hashtagCount != null ? String(account.spec_overrides.hashtagCount) : "");
+    setSpecImageSize(account.spec_overrides?.imageSize ?? "");
+  };
+
+  const handleSaveSpec = () => {
+    if (!editingSpec) return;
+    setSpecSaving(true);
+    startTransition(async () => {
+      const res = await saveSpecOverrides(editingSpec.id, {
+        charLimit: specCharLimit.trim() ? Number(specCharLimit) : null,
+        hashtagCount: specHashtags.trim() ? Number(specHashtags) : null,
+        imageSize: specImageSize.trim() || null,
+      });
+      setSpecSaving(false);
+      if (res.success) {
+        setFeedback({ type: "success", message: `Caption specs saved for ${editingSpec.account_name}.` });
+        setEditingSpec(null);
+        loadData();
+      } else {
+        setFeedback({ type: "error", message: res.error ?? "Failed to save caption specs." });
       }
     });
   };
@@ -263,22 +307,48 @@ export default function SocialAccountsPage() {
                           <Badge className={`text-xs ${platformBadgeColor(account.platform)}`}>
                             {platformInfo?.name ?? account.platform}
                           </Badge>
+                          {account.spec_overrides && (
+                            <Badge variant="outline" className="text-xs">
+                              Custom specs
+                            </Badge>
+                          )}
                           <span className="text-xs text-muted-foreground">
                             Added {new Date(account.created_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
                           </span>
                         </div>
+                        {account.spec_overrides && (
+                          <p className="text-xs text-muted-foreground mt-1">
+                            {[
+                              account.spec_overrides.charLimit != null && `${account.spec_overrides.charLimit} chars`,
+                              account.spec_overrides.hashtagCount != null && `${account.spec_overrides.hashtagCount} hashtags`,
+                              account.spec_overrides.imageSize,
+                            ]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </p>
+                        )}
                       </div>
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="text-muted-foreground hover:text-destructive shrink-0"
-                      onClick={() => handleRemove(account.id, account.account_name)}
-                      disabled={isPending}
-                      aria-label={`Remove ${account.account_name}`}
-                    >
-                      <Trash2 className="size-4" />
-                    </Button>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-muted-foreground hover:text-foreground"
+                        onClick={() => openSpecEditor(account)}
+                      >
+                        Caption specs
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="text-muted-foreground hover:text-destructive"
+                        onClick={() => handleRemove(account.id, account.account_name)}
+                        disabled={isPending}
+                        aria-label={`Remove ${account.account_name}`}
+                      >
+                        <Trash2 className="size-4" />
+                      </Button>
+                    </div>
                   </div>
                 );
               })}
@@ -286,6 +356,61 @@ export default function SocialAccountsPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Per-account caption spec editor */}
+      <Dialog open={editingSpec !== null} onOpenChange={(open) => !open && setEditingSpec(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Caption specs — {editingSpec?.account_name}</DialogTitle>
+            <DialogDescription>
+              Override this account's caption rules. Blank fields use the platform's
+              defaults. Char limits are hard-enforced on every generated caption.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="spec-char-limit">Character limit</Label>
+              <Input
+                id="spec-char-limit"
+                type="number"
+                min={40}
+                placeholder="Platform default"
+                value={specCharLimit}
+                onChange={(e) => setSpecCharLimit(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="spec-hashtags">Max hashtags</Label>
+              <Input
+                id="spec-hashtags"
+                type="number"
+                min={0}
+                placeholder="Platform default"
+                value={specHashtags}
+                onChange={(e) => setSpecHashtags(e.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="spec-image-size">Image size</Label>
+              <Input
+                id="spec-image-size"
+                type="text"
+                placeholder="e.g. 1080×1350"
+                value={specImageSize}
+                onChange={(e) => setSpecImageSize(e.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditingSpec(null)}>
+              Cancel
+            </Button>
+            <Button onClick={handleSaveSpec} disabled={specSaving}>
+              {specSaving && <Loader2 className="size-4 animate-spin" />} Save specs
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

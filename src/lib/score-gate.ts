@@ -33,6 +33,48 @@ export function isBelowGate(seo: number, aeoGeo: number, gate: number): boolean 
   return Math.min(seo, aeoGeo) < gate;
 }
 
+/** One entry of the per-attempt score history recorded by a gated loop. */
+export interface GateHistoryEntry {
+  attempt: number;
+  seo: number;
+  aeoGeo: number;
+  belowGate: boolean;
+}
+
+/**
+ * The quality-gate story of one gated generation: which attempt cleared,
+ * the gate itself, and how each attempt scored. Returned by the generate
+ * APIs and persisted on the post's content so the results card AND the post
+ * detail modal can show the full attempt timeline.
+ */
+export interface GateStory {
+  gate: number;
+  attempts: number;
+  maxAttempts: number;
+  retries: number;
+  history: GateHistoryEntry[];
+}
+
+/**
+ * Build the gate story from a finished gated loop. The loops in
+ * generate-content and team-task only exit via the clearing `break` (or by
+ * throwing ScoreGateError), so `attempts` is exactly the attempt that
+ * passed and `history` records every attempt — including the failing ones.
+ */
+export function buildGateStory(
+  gate: number,
+  attempts: number,
+  history: GateHistoryEntry[]
+): GateStory {
+  return {
+    gate,
+    attempts,
+    maxAttempts: MAX_SCORE_ATTEMPTS,
+    retries: Math.max(0, attempts - 1),
+    history,
+  };
+}
+
 export interface GateCheckFailure {
   engine: "SEO" | "AEO/GEO";
   pillar?: "AEO" | "GEO";

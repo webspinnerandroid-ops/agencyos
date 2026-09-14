@@ -808,6 +808,11 @@ export default function AnalyticsPage() {
                     <p className="text-2xl font-bold">
                       {seoData.summary?.avgAeoGeoScore != null ? `${seoData.summary.avgAeoGeoScore}/100` : "—"}
                     </p>
+                    {(seoData.summary?.avgAeoScore != null || seoData.summary?.avgGeoScore != null) && (
+                      <p className="text-[11px] text-muted-foreground mt-1">
+                        AEO {seoData.summary?.avgAeoScore ?? "—"}/50 · GEO {seoData.summary?.avgGeoScore ?? "—"}/50
+                      </p>
+                    )}
                   </CardContent>
                 </Card>
                 <Card>

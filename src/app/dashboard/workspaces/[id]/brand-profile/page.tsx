@@ -134,19 +134,53 @@ export default function BrandProfilePage() {
     });
   };
 
-  const applyPreset = (presetId: string) => {
+  /**
+   * Apply a preset to the form. When this workspace has no brand profile yet,
+   * one is created first so the customization form (which only renders with an
+   * active profile) appears and the preset values can be edited and saved.
+   */
+  const applyPreset = async (presetId: string) => {
     const preset = getPreset(presetId);
     if (!preset) return;
-    setBrandVoice(preset.brand_voice ?? "");
-    setToneOfVoice(preset.tone_of_voice ?? "");
-    setPersona(preset.persona_description ?? "");
-    setMinWords(preset.min_word_count ?? 300);
-    setMaxWords(preset.max_word_count ?? 2500);
-    if (preset.heading_style) setHeadingStyle(preset.heading_style);
-    if (preset.paragraph_structure) setParagraphStructure(preset.paragraph_structure);
-    if (preset.required_sections) setRequiredSectionsStr(preset.required_sections.join(", "));
-    if (preset.target_keyword_density) setKeywordDensity(preset.target_keyword_density);
-    setFeedback({ type: "success", message: `Applied ${preset.name} template.` });
+    try {
+      let target = activeProfile;
+      if (!target) {
+        setFeedback({ type: "success", message: `Creating a profile from the ${preset.name} template…` });
+        const res = await createBrandProfile("Default Brand Profile");
+        if (!res.success || !res.data) throw new Error(res.error ?? "Could not create a brand profile.");
+        target = res.data;
+        selectProfile(target);
+      }
+      setBrandVoice(preset.brand_voice ?? "");
+      setToneOfVoice(preset.tone_of_voice ?? "");
+      setPersona(preset.persona_description ?? "");
+      setMinWords(preset.min_word_count ?? 300);
+      setMaxWords(preset.max_word_count ?? 2500);
+      if (preset.heading_style) setHeadingStyle(preset.heading_style);
+      if (preset.paragraph_structure) setParagraphStructure(preset.paragraph_structure);
+      if (preset.required_sections) setRequiredSectionsStr(preset.required_sections.join(", "));
+      if (preset.target_keyword_density) setKeywordDensity(preset.target_keyword_density);
+      setFeedback({
+        type: "success",
+        message: `Applied ${preset.name} template — customize the fields below, then Save.`,
+      });
+    } catch (e) {
+      setFeedback({ type: "error", message: e instanceof Error ? e.message : "Could not apply the preset." });
+    }
+  };
+
+  /** Create a fresh (empty) brand profile for workspaces that have none. */
+  const handleCreateFirst = () => {
+    startTransition(async () => {
+      const res = await createBrandProfile("Default Brand Profile");
+      if (res.success && res.data) {
+        setProfiles((p) => [res.data!, ...p]);
+        selectProfile(res.data);
+        setFeedback({ type: "success", message: "Brand profile created — customize the fields below, then Save." });
+      } else {
+        setFeedback({ type: "error", message: res.error ?? "Could not create a brand profile." });
+      }
+    });
   };
 
   if (isLoading && !activeProfile) return <div className="flex justify-center py-20"><Loader2 className="size-8 animate-spin" /></div>;
@@ -176,11 +210,28 @@ export default function BrandProfilePage() {
           <div className="flex flex-wrap gap-2">
             {["blog_agency", "corporate", "creative", "ecommerce", "technical"].map((pid) => {
               const preset = getPreset(pid);
-              return <Button key={pid} variant="outline" size="sm" onClick={() => applyPreset(pid)} disabled={isPending}>{preset?.name ?? pid}</Button>;
+              return <Button key={pid} variant="outline" size="sm" onClick={() => startTransition(() => applyPreset(pid))} disabled={isPending}>{preset?.name ?? pid}</Button>;
             })}
           </div>
         </CardContent>
       </Card>
+
+      {/* Empty state for a workspace with no brand profile yet */}
+      {!activeProfile && (
+        <Card>
+          <CardHeader><CardTitle>No brand profile yet</CardTitle><CardDescription>
+            This workspace doesn&apos;t have a brand profile yet. Create one to
+            start customizing its voice, content and formatting rules — or pick
+            a Quick Template above to start from a preset.
+          </CardDescription></CardHeader>
+          <CardContent>
+            <Button size="sm" onClick={handleCreateFirst} disabled={isPending}>
+              {isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <Plus className="size-4 mr-1" />}
+              Create brand profile
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       {activeProfile && (
         <>

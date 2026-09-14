@@ -5,12 +5,21 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Check, ChevronRight, Loader2, MessageSquareText, Sparkles, ArrowLeft } from "lucide-react";
 import { LIFECYCLE_STEPS } from "@/lib/lifecycle-steps";
 import {
   advanceStep,
   announceGoLive,
+  assignExistingWorkspace,
   createPlanFromProposal,
   delegateToMalory,
   ensureClientWorkspace,
@@ -32,6 +41,7 @@ export default function OnboardingWizard({ initial }: { initial: WizardData }) {
   );
   const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
   const [isPending, startTransition] = useTransition();
+  const [selectedWs, setSelectedWs] = useState<string>(initial.workspace?.id ?? "__create__");
 
   const step = data.lifecycle.step;
   const completed = data.lifecycle.status === "completed";
@@ -154,26 +164,66 @@ export default function OnboardingWizard({ initial }: { initial: WizardData }) {
                         <Check className="size-3 text-green-600" /> {data.workspace.name}
                       </span>
                     ) : (
-                      <span className="text-amber-600">Not created yet</span>
+                      <span className="text-muted-foreground">Not assigned yet</span>
                     )}
                   </div>
                 </div>
+
+                {!data.workspace && (
+                  <div className="rounded-md border p-3 space-y-2">
+                    <Label className="text-xs">
+                      Assign an existing workspace (recommended) or create a new one
+                    </Label>
+                    <Select value={selectedWs} onValueChange={setSelectedWs}>
+                      <SelectTrigger className="w-full" id="step1-workspace">
+                        <SelectValue placeholder="Choose a workspace…" />
+                      </SelectTrigger>
+                      <SelectContent className="w-full">
+                        {data.workspaces.length > 0 && (
+                          <SelectItem value="__create__">Create a new workspace</SelectItem>
+                        )}
+                        {data.workspaces.map((w) => (
+                          <SelectItem key={w.id} value={w.id}>
+                            {w.name}
+                            {w.is_default ? " (Default)" : ""}
+                          </SelectItem>
+                        ))}
+                        {data.workspaces.length === 0 && (
+                          <SelectItem value="__create__">Create a new workspace</SelectItem>
+                        )}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+
                 <div className="flex flex-wrap gap-2">
                   <Button
                     size="sm"
                     disabled={isPending}
                     onClick={() => {
                       const finish = () =>
-                        ensureClientWorkspace(data.client.id).then(() =>
+                        (selectedWs === "__create__" || selectedWs === ""
+                          ? ensureClientWorkspace(data.client.id)
+                          : assignExistingWorkspace(data.client.id, selectedWs)
+                        ).then(() =>
                           advanceStep(data.client.id, "client_workspace", {
                             workspace_ready: true,
                           })
                         );
-                      run(finish, "Workspace created — client confirmed.");
+                      run(
+                        finish,
+                        selectedWs === "__create__" || selectedWs === ""
+                          ? "Workspace created — client confirmed."
+                          : "Client assigned to the selected workspace."
+                      );
                     }}
                   >
                     {isPending ? <Loader2 className="size-4 animate-spin mr-1" /> : <Check className="size-4 mr-1" />}
-                    {data.workspace ? "Confirm & continue" : "Create workspace & continue"}
+                    {data.workspace
+                      ? "Confirm & continue"
+                      : selectedWs === "__create__" || selectedWs === ""
+                      ? "Create workspace & continue"
+                      : "Assign workspace & continue"}
                   </Button>
                   <Button size="sm" variant="outline" disabled={isPending} onClick={() => delegate(current.id)}>
                     <MessageSquareText className="size-4 mr-1" /> Ask Malory

@@ -21,6 +21,8 @@ export interface PostRow {
   /** Set when the post was published to the tenant's own CMS website. */
   cms_published_at?: string | null;
   cms_slug?: string | null;
+  /** Armed 15-minute auto-publish hold (content-map automation). NULL = no hold. */
+  auto_publish_at?: string | null;
 }
 
 interface FlatPost {

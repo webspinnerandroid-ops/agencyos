@@ -14,6 +14,7 @@ import {
 import { createCampaignFromProposal } from "@/lib/campaign-from-proposal";
 import { slugify } from "@/lib/cms";
 import { getOrCreateTeamChat, sendChatMessage } from "@/lib/ai-team-chat";
+import { listWorkspaceOptions, type WorkspaceOption } from "../../actions";
 
 // ---------------------------------------------------------------------------
 // Data for the wizard
@@ -32,6 +33,7 @@ export interface WizardData {
     data: Record<string, unknown>;
   };
   workspace: { id: string; name: string } | null;
+  workspaces: WorkspaceOption[];
   connections: { provider: string; selected_resource: string | null }[];
   brandProfiles: { id: string; name: string; is_default: boolean }[];
   proposals: { id: string; tier_name: string | null; status: string }[];
@@ -59,6 +61,7 @@ export async function getWizardData(clientId: string): Promise<WizardData> {
     (await getOrCreateLifecycle(tenantId, clientId, client.workspace_id ?? null));
 
   const workspaceId = lifecycle.workspace_id ?? client.workspace_id;
+  const workspaceOptions = await listWorkspaceOptions();
 
   const [wsRes, connRes, bpRes, propRes, planRes, blogRes, socialRes] =
     await Promise.all([
@@ -119,6 +122,7 @@ export async function getWizardData(clientId: string): Promise<WizardData> {
       data: (lifecycle.data ?? {}) as Record<string, unknown>,
     },
     workspace: (wsRes?.data as { id: string; name: string } | null) ?? null,
+    workspaces: workspaceOptions,
     connections:
       (connRes?.data as { provider: string; selected_resource: string | null }[]) ?? [],
     brandProfiles:
@@ -190,6 +194,41 @@ export async function ensureClientWorkspace(
   await requireRole("agency_editor");
   const workspaceId = await resolveWorkspaceForClient(tenantId, clientId);
   if (!workspaceId) throw new Error("Could not resolve a workspace");
+  return { workspaceId };
+}
+
+/**
+ * Assign an existing workspace to the client (instead of creating a new one).
+ * Validates that the workspace belongs to this tenant, then links both the
+ * client row and its onboarding lifecycle to it.
+ */
+export async function assignExistingWorkspace(
+  clientId: string,
+  workspaceId: string
+): Promise<{ workspaceId: string }> {
+  const tenantId = await getTenantId();
+  await requireRole("agency_editor");
+  const supabase = await createServiceClient();
+
+  const { data: ws } = await supabase
+    .from("workspaces")
+    .select("id")
+    .eq("id", workspaceId)
+    .eq("tenant_id", tenantId)
+    .maybeSingle();
+  if (!ws) throw new Error("Workspace not found");
+
+  await supabase
+    .from("clients")
+    .update({ workspace_id: workspaceId })
+    .eq("id", clientId)
+    .eq("tenant_id", tenantId);
+  await supabase
+    .from("client_onboarding")
+    .update({ workspace_id: workspaceId })
+    .eq("tenant_id", tenantId)
+    .eq("client_id", clientId);
+
   return { workspaceId };
 }
 

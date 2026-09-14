@@ -59,7 +59,7 @@ const employees = [
   { icon: Search, name: "Ray", role: "Web Developer", status: "built", desc: "Publishes content and web changes to WordPress sites. Webflow publishing is planned in Phase 5. Constantly dealing with broken infrastructure, putting out fires, and complaining about how underappreciated his technical work is.", integrations: "WordPress API (Webflow planned)" },
   { icon: TrendingUp, name: "Sterling", role: "Performance Marketer", status: "built", desc: "Pulls engagement analytics via background workers. Meta Insights / X Analytics reporting is planned. Operates on raw ego and reckless luck, with a total disregard for ROI until it somehow works out.", integrations: "Analytics workers, Meta/X (planned)" },
   { icon: Briefcase, name: "Malory", role: "Project Manager", status: "built", desc: "Processes scheduled tasks and follow-up sequences, coordinates blog-generation tasks, and keeps deliverables on track. Runs a tight, highly toxic ship with an iron fist and a martini in hand.", integrations: "Inngest workers, task queues" },
-  { icon: Star, name: "Lana", role: "Reputation Manager", status: "built", desc: "Manages Google Business Profile connections. Review monitoring and response automation are planned. Constantly doing damage control and yelling about how everyone else is ruining the brand.", integrations: "Google Business Profile" },
+  { icon: Star, name: "Lana", role: "Reputation Manager", status: "built", desc: "Connects Google Business Profiles and monitors Google reviews for every connected listing, with ratings and reply status at a glance. Constantly doing damage control and yelling about how everyone else is ruining the brand.", integrations: "Google Business Profile" },
   { icon: Wrench, name: "Cyril", role: "Legal Assistant", status: "planned", desc: "Planned — drafts contracts, answers legal questions, and clarifies fine print for your agency and clients. Chronically nervous, deeply insecure, one minor spreadsheet error away from a complete psychological breakdown.", integrations: "AI drafting (planned)" },
 ];
 
@@ -128,7 +128,7 @@ const roadmap = [
   { title: "Google Search Console", status: "planned", desc: "Phase 5 — connect GSC to track keyword rankings and search performance." },
   { title: "Meta Insights / X Analytics", status: "planned", desc: "Phase 5 — pull engagement analytics from Meta and X." },
   { title: "SEO → Content enrichment", status: "planned", desc: "Feed competitor analysis and keywords from SEO campaigns into blog prompts." },
-  { title: "Reputation review automation", status: "planned", desc: "Monitor and respond to Google reviews automatically." },
+  { title: "Reputation review monitoring & replies", status: "built", desc: "Syncs Google reviews hourly for every connected Business Profile listing, notifies on new reviews, drafts public replies with Lana's crisis-comms rules, and posts them straight to Google." },
   { title: "Promo codes", status: "planned", desc: "Coupon/promo-code support for billing." },
 ];
 

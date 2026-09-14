@@ -12,8 +12,16 @@ import {
   statusBadgeClass,
   type PostRow,
 } from "@/lib/post-preview";
+import type { PublishHistoryEntry } from "@/lib/publish-history";
+import PublishHistoryLinks from "@/components/publish/PublishHistoryLinks";
 
-export function RecentContentList({ posts: initialPosts }: { posts: PostRow[] }) {
+export function RecentContentList({
+  posts: initialPosts,
+  history = {},
+}: {
+  posts: PostRow[];
+  history?: Record<string, PublishHistoryEntry[]>;
+}) {
   const [posts, setPosts] = useState<PostRow[]>(initialPosts);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [selectedPost, setSelectedPost] = useState<PostRow | null>(null);
@@ -101,8 +109,36 @@ export function RecentContentList({ posts: initialPosts }: { posts: PostRow[] })
                     )}
                     {preview.type === "blog" && (
                       <>
-                        <ScoreBadge score={getSeoScore(post)} />
-                        <ScoreBadge score={getAeoGeoScore(post)} label="AEO/GEO" />
+                        <button
+                          type="button"
+                          className="shrink-0 cursor-pointer"
+                          title={
+                            getSeoScore(post) != null
+                              ? `On-page SEO score: ${getSeoScore(post)}/100 — click for the full checklist`
+                              : "No SEO score"
+                          }
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedPost(post);
+                          }}
+                        >
+                          <ScoreBadge score={getSeoScore(post)} />
+                        </button>
+                        <button
+                          type="button"
+                          className="shrink-0 cursor-pointer"
+                          title={
+                            getAeoGeoScore(post) != null
+                              ? `AEO/GEO readiness: ${getAeoGeoScore(post)}/100 — click for the answer + citation checklist`
+                              : "No AEO/GEO score"
+                          }
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedPost(post);
+                          }}
+                        >
+                          <ScoreBadge score={getAeoGeoScore(post)} label="AEO/GEO" />
+                        </button>
                       </>
                     )}
                     {post.cms_published_at && (
@@ -116,6 +152,7 @@ export function RecentContentList({ posts: initialPosts }: { posts: PostRow[] })
                         On site ↗
                       </a>
                     )}
+                    <PublishHistoryLinks entries={history[post.id] ?? []} />
                   </div>
                 </div>
               </div>

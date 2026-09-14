@@ -137,3 +137,75 @@ export async function inviteTeamMember(
     return { success: false, error: (err as Error).message };
   }
 }
+
+export interface UserSearchResult {
+  userId: string;
+  email: string;
+  inTeam: boolean; // already has a role in this tenant
+  inWorkspace: boolean; // already granted access to this workspace
+}
+
+/**
+ * Search registered accounts by email (super admin / agency admin) so an
+ * admin can add someone to a workspace without knowing their exact email or
+ * waiting for an invite. Matches are limited to the first 10 and exclude
+ * nobody — the result carries whether they are already in the team / already
+ * granted this workspace so the UI can show the right action.
+ */
+export async function searchUsersToAdd(
+  query: string,
+  workspaceId: string
+): Promise<ActionResponse<UserSearchResult[]>> {
+  try {
+    const actorRole = await getRole().catch(() => null);
+    if (actorRole !== "super_admin" && actorRole !== "agency_admin") {
+      throw new Error("Forbidden: admin access required");
+    }
+    const tenantId = await getTenantId();
+    const supabase = getAdminClient();
+
+    const { data: ws } = await supabase
+      .from("workspaces")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .eq("id", workspaceId)
+      .maybeSingle();
+    if (!ws) throw new Error("Workspace not found");
+
+    const q = String(query ?? "").trim().toLowerCase();
+    if (q.length < 2) return { success: true, data: [] };
+
+    const { data: page } = await supabase.auth.admin.listUsers({ page: 1, perPage: 1000 });
+    const matches = (page?.users ?? [])
+      .filter((u) => (u.email ?? "").toLowerCase().includes(q))
+      .slice(0, 10);
+    if (matches.length === 0) return { success: true, data: [] };
+
+    const ids = matches.map((u) => u.id);
+    const { data: roleRows } = await supabase
+      .from("user_roles")
+      .select("user_id")
+      .eq("tenant_id", tenantId)
+      .in("user_id", ids);
+    const teamSet = new Set((roleRows ?? []).map((r: any) => r.user_id));
+
+    const { data: memberRows } = await supabase
+      .from("workspace_members")
+      .select("user_id")
+      .eq("workspace_id", workspaceId)
+      .in("user_id", ids);
+    const wsSet = new Set((memberRows ?? []).map((r: any) => r.user_id));
+
+    return {
+      success: true,
+      data: matches.map((u) => ({
+        userId: u.id,
+        email: u.email ?? "Unknown",
+        inTeam: teamSet.has(u.id),
+        inWorkspace: wsSet.has(u.id),
+      })),
+    };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}

@@ -3,48 +3,14 @@ import { getTenantId, getRole } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import {
   buildSavedPostPublishPayload,
-  publishGeneratedContentToSites,
   publishToWordPress,
 } from "@/lib/publishing/wordpressPublisher";
+import { publishToConnectedSites } from "@/lib/publishing/connectedSitesPublisher";
 import { publishPost as publishToSocial } from "@/lib/publishing/socialPublisher";
 import { normalizeScheduledAt } from "@/lib/scheduling";
 import { scoreAeoGeo } from "@/lib/aeo-geo";
 import { getScoreGate } from "@/lib/score-gate";
-import { newBlockId, slugify } from "@/lib/cms";
-
-/**
- * Converts a generated blog post's body (markdown with inline ![alt](url)
- * images) into CMS blocks: text blocks for prose, image blocks for the
- * embedded images. Returns a list of blocks ready for a site_pages row.
- */
-function blogBodyToBlocks(body: string): any[] {
-  const blocks: any[] = [];
-  const imageRe = /!\[([^\]]*)\]\(([^)]+)\)/g;
-  let last = 0;
-  let m: RegExpExecArray | null;
-  let imgCount = 0;
-  while ((m = imageRe.exec(body))) {
-    const before = body.slice(last, m.index).trim();
-    if (before) blocks.push({ id: newBlockId(), kind: "text", content: before });
-    imgCount += 1;
-    // First image is the featured hero (full-width, centered); the rest float
-    // left/right alternating so text wraps around them instead of stacking.
-    const float =
-      imgCount === 1 ? "none" : imgCount % 2 === 0 ? "left" : "right";
-    blocks.push({
-      id: newBlockId(),
-      kind: "image",
-      url: m[2],
-      alt: m[1] || "",
-      style: { float },
-    });
-    last = m.index + m[0].length;
-  }
-  const after = body.slice(last).trim();
-  if (after) blocks.push({ id: newBlockId(), kind: "text", content: after });
-  if (blocks.length === 0) blocks.push({ id: newBlockId(), kind: "text", content: body });
-  return blocks;
-}
+import { markdownBodyToCmsBlocks, slugify } from "@/lib/cms";
 
 // Score-based publish gate: content below this score is blocked from being
 // scheduled/published, so low-quality drafts can't go live. The gate checks
@@ -224,7 +190,7 @@ export async function POST(request: NextRequest) {
         .eq("tenant_id", tenantId)
         .eq("slug", slug)
         .maybeSingle();
-      const blocks = blogBodyToBlocks(body);
+      const blocks = markdownBodyToCmsBlocks(body);
       const patch = {
         tenant_id: tenantId,
         workspace_id: post.workspace_id ?? null,
@@ -365,10 +331,13 @@ export async function POST(request: NextRequest) {
             : undefined,
       });
     } else if (platform === "connected_sites") {
-      // Publish a SAVED post to the connected WordPress sites with the full
-      // create-new OR overwrite-existing (posts/pages) flow, including image
+      // Publish a SAVED post to the connected sites (WordPress, Ghost,
+      // Medium, Webflow, or the built-in CMS) with the full create-new OR
+      // overwrite-existing (posts/pages) flow, including image
       // upload/replacement. The content is rebuilt from the stored post — the
-      // client only sends the per-site targets.
+      // client only sends the per-site targets. Every attempt is logged to
+      // publishing_logs (with site name + live URL) for the publish-history
+      // links on the dashboard and Posts list.
       const targets = body?.targets;
       if (!Array.isArray(targets) || targets.length === 0) {
         return NextResponse.json(
@@ -393,10 +362,11 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
-      const wpResult = await publishGeneratedContentToSites(
+      const wpResult = await publishToConnectedSites(
         tenantId,
         targets,
-        built.content
+        built.content,
+        postId
       );
       results.push(...wpResult.results);
       allSucceeded = wpResult.allSucceeded;

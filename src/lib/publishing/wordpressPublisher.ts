@@ -38,7 +38,7 @@ export interface WpPublishTarget {
 
 export interface WpPublishResult {
   success: boolean;
-  wpPostId?: number;
+  wpPostId?: number | string;
   wpPostUrl?: string;
   errorMessage?: string;
   /** Which connected site this result belongs to (set by publishGeneratedContentToSites). */
@@ -262,12 +262,15 @@ export async function publishToWordPress(
         .update({ status: newStatus, scheduled_at: effectiveScheduledAt })
         .eq("id", postId);
 
-      // Log the publish event
+      // Log the publish event — site name + live URL so the Content Map's
+      // publishing-history panel can link straight to the WP post.
       await supabase.from("publishing_logs").insert({
         post_id: postId,
         platform: "wordpress",
         attempt_at: new Date().toISOString(),
         success: true,
+        site_name: bp.site_name ?? null,
+        target_url: result.wpPostUrl ?? null,
       });
     } else {
       await supabase.from("publishing_logs").insert({
@@ -276,6 +279,7 @@ export async function publishToWordPress(
         attempt_at: new Date().toISOString(),
         success: false,
         error_message: result.errorMessage,
+        site_name: bp.site_name ?? null,
       });
     }
   }
@@ -297,7 +301,8 @@ export interface GeneratedContentTarget {
   mode: "create" | "overwrite";
   /** Which WP object the content maps to: posts (blog) or pages. */
   kind: "post" | "page";
-  /** WP object id — required when mode === "overwrite". */
+  /** WP object id — required when mode === "overwrite". String for non-WP
+   * platforms (Ghost uuid, Webflow item id, site_pages uuid). */
   wpPostId?: number | string;
   /** Upload the generated images to this site's media library and embed them. */
   includeImages: boolean;
@@ -322,7 +327,7 @@ export interface GeneratedContentPayload {
 }
 
 /** Clean HTML for WordPress — renderBlogBody adds Tailwind classes for the app UI. */
-function markdownToPublishHtml(markdown: string): string {
+export function markdownToPublishHtml(markdown: string): string {
   try {
     return renderBlogBody(markdown).replace(/\sclass="[^"]*"/g, "");
   } catch {

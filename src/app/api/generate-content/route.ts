@@ -4,6 +4,7 @@ import { createClient } from "@supabase/supabase-js";
 import { createServiceClient } from "@/lib/supabase/server";
 import { generateStructuredOutput, generateText, generateImage } from "@/lib/ai/orchestrator";
 import { getBlogPrompt, getSocialCaptionPrompt, getBlogPostSchema } from "@/lib/ai/seo-prompts";
+import { generateSocialCaptionFor } from "@/lib/ai/social-caption";
 import { generateContentSchema } from "@/lib/validations";
 import { incrementUsage } from "@/lib/usage";
 import type { AITask } from "@/lib/ai/orchestrator";
@@ -18,7 +19,9 @@ import {
   resolveInternalLinks,
   buildInternalLinkContext,
   appendRelatedReading,
+  appendSourcesSection,
 } from "@/lib/content-links";
+import { hostOf } from "@/lib/seo-scorer";
 import { rateLimitRequest } from "@/lib/rate-limit";
 import { checkTrialContentLimit } from "@/lib/trial-limits";
 import { checkUsageLimit } from "@/lib/plan-limits";
@@ -40,9 +43,12 @@ import {
   MAX_SCORE_ATTEMPTS,
   isBelowGate,
   buildGateFeedback,
+  buildGateStory,
   ScoreGateError,
   mapReusedImages,
+  type GateHistoryEntry,
 } from "@/lib/score-gate";
+import { armAutoPublishHold } from "@/lib/content-map-autopublish";
 import { researchTopic, type TopicResearch } from "@/lib/ai/research";
 
 // Known social platforms
@@ -388,8 +394,19 @@ export async function POST(request: NextRequest) {
       title,
       keywords = [],
       imageCount = MAX_BLOG_IMAGES,
+      imageAuto,
+      socialOnly,
       uploadedImages,
       schemaTypes = "auto",
+      // Preferred external sources (optional — empty means none provided).
+      externalLinks = [],
+      // Suggested publish time (optional) — stored on the draft so the
+      // calendar shows the planned slot; the approval flow still governs.
+      scheduledAt,
+      // Auto-publish target from the Content Map row ("wordpress") — a
+      // gate-cleared blog is auto-approved and scheduled to WP (see the
+      // post-insert hook below).
+      autoPublish,
     } = parsed.data;
 
     // Schema author/publisher defaults to the CLIENT's company name (falls
@@ -508,6 +525,143 @@ export async function POST(request: NextRequest) {
     }
 
     // ------------------------------------------------------------------
+    // 2.4. Social-only generation (Content Map social rows)
+    // ------------------------------------------------------------------
+    // No blog post — write one platform-native post per social platform
+    // straight from the topic/keywords/brand voice. Same caption pipeline,
+    // parsing, persistence, and usage metering as the full path; only the
+    // blog body/images/schema steps are skipped.
+    if (socialOnly) {
+      const socialPlatforms = platforms.filter((p) => p !== "blog");
+      const workspaceId = await getCurrentWorkspaceId().catch(() => null);
+      if (socialPlatforms.length === 0) {
+        return NextResponse.json(
+          {
+            error:
+              "socialOnly requires at least one social platform (instagram, facebook, linkedin, twitter, tiktok, threads).",
+          },
+          { status: 400 }
+        );
+      }
+
+      const { createServerClient: createSocialAuthClient } = await import("@supabase/ssr");
+      const { cookies: socialCookies } = await import("next/headers");
+      const socialCookieStore = await socialCookies();
+      const socialUserClient = createSocialAuthClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+        {
+          cookies: {
+            getAll() { return socialCookieStore.getAll(); },
+            setAll() {},
+          },
+        }
+      );
+      const { data: { user: socialUser } } = await socialUserClient.auth.getUser();
+      const socialUserId = socialUser?.id ?? null;
+      const socialSupabase = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.SUPABASE_SERVICE_ROLE_KEY!,
+        { auth: { autoRefreshToken: false, persistSession: false } }
+      );
+
+      const socialOnlyResults = await Promise.all(
+        socialPlatforms.map((platform) =>
+          generateSocialCaptionFor(platform, {
+            tenantId,
+            clientId,
+            workspaceId,
+            brandVoice,
+            topic: workingTopic,
+            keywords: (keywords ?? []).filter(Boolean),
+          })
+        )
+      );
+
+      const savedSocialIds: (string | undefined)[] = [];
+      for (const { platform, caption } of socialOnlyResults) {
+        const { data: socialPost, error: socialError } = await socialSupabase
+          .from("posts")
+          .insert({
+            tenant_id: tenantId,
+            client_id: clientId ?? null,
+            workspace_id: workspaceId ?? null,
+            content: {
+              type: "social",
+              platform,
+              caption: caption.caption,
+              hashtags: caption.hashtags,
+              firstComment: caption.firstComment,
+              contentWarnings: caption.contentWarnings,
+              suggestedImageDescription: caption.suggestedImageDescription,
+              topic: workingTopic,
+              brandVoice: brandVoice ?? null,
+            },
+            status: "draft",
+            // Suggested publish time from the map row/CSV — a planning hint
+            // the calendar shows; the approval flow still governs publishing.
+            scheduled_at: scheduledAt ?? null,
+            created_by: socialUserId,
+            ai_generated: true,
+          })
+          .select("id")
+          .single();
+        if (socialError) {
+          console.error(
+            `[generate-content] Error saving social-only post for ${platform}:`,
+            socialError
+          );
+          savedSocialIds.push(undefined);
+          continue;
+        }
+        savedSocialIds.push(socialPost?.id);
+
+        // Auto-publish for social rows: arm the same 15-minute hold. When it
+        // expires, the hold processor queues the post to the scheduled-posts
+        // cron (status 'scheduled') for the planned time — no WordPress call.
+        if (socialPost?.id && autoPublish === "wordpress" && scheduledAt) {
+          void armAutoPublishHold(tenantId, socialPost.id, scheduledAt).catch(
+            (err) =>
+              console.error(
+                "[generate-content] social auto-publish hold failed:",
+                err
+              )
+          );
+        }
+
+        // Queue for publishing when a social account exists for the platform.
+        const { data: socialAccount } = await socialSupabase
+          .from("social_accounts")
+          .select("id")
+          .eq("tenant_id", tenantId)
+          .eq("platform", platform)
+          .limit(1)
+          .single();
+        if (socialAccount && socialPost) {
+          await socialSupabase.from("post_platforms").insert({
+            post_id: socialPost.id,
+            social_account_id: socialAccount.id,
+            status: "queued",
+          });
+        }
+      }
+
+      void incrementUsage(tenantId, "social_posts", socialPlatforms.length);
+      void incrementUsage(tenantId, "ai_tokens", socialPlatforms.length * 1000);
+
+      return NextResponse.json({
+        success: true,
+        socialOnly: true,
+        topic: workingTopic,
+        socialPosts: socialOnlyResults.map(({ platform, caption }, index) => ({
+          platform,
+          id: savedSocialIds[index],
+          ...caption,
+        })),
+      });
+    }
+
+    // ------------------------------------------------------------------
     // 2.5. Enrich prompts with workspace context (brand profile + knowledgebase)
     // ------------------------------------------------------------------
     const workspaceId = await getCurrentWorkspaceId();
@@ -557,8 +711,12 @@ export async function POST(request: NextRequest) {
       getBlogPrompt(brandVoice, {
         primaryKeyword: primaryKeyword,
         internalLinks: buildInternalLinkContext(linkablePages),
+        externalLinks: (externalLinks ?? []).filter(Boolean).slice(0, 5),
         research: research ?? undefined,
         titleHint: title,
+        // "Illustrate key points" lets the model choose where images go; a
+        // fixed imageCount keeps the exact budget. imageAuto wins.
+        imageCount: imageAuto ? null : imageCount,
       }) + workspaceContext;
 
     const blogUserPrompt = `Write a comprehensive blog post about: "${workingTopic}". ${
@@ -613,6 +771,9 @@ export async function POST(request: NextRequest) {
     let bodyWithImages = "";
     let seoScore: SeoScoreResult;
     let aeoGeo: AeoGeoResult;
+    // Score history: one entry per attempt so the results card can show how
+    // each regeneration moved the scores toward the gate.
+    const scoreHistory: GateHistoryEntry[] = [];
 
     while (true) {
       attempts += 1;
@@ -622,7 +783,7 @@ export async function POST(request: NextRequest) {
         blogSystemPrompt,
         fixFeedback ? `${blogUserPrompt}\n\n${fixFeedback}` : blogUserPrompt,
         tenantId,
-        getBlogPostSchema(),
+        getBlogPostSchema(imageAuto ? null : imageCount),
         {
           clientId,
           functionName: "generate_blog_post",
@@ -663,7 +824,7 @@ export async function POST(request: NextRequest) {
           enrichedSystemPrompt,
           enrichedUserPrompt,
           tenantId,
-          getBlogPostSchema(),
+          getBlogPostSchema(imageAuto ? null : imageCount),
           {
             clientId,
             functionName: "generate_blog_post",
@@ -745,12 +906,21 @@ export async function POST(request: NextRequest) {
       // Resolve internal-link markers, then guarantee at least one internal
       // link (related-reading section) when the body has none — automatic
       // internal linking for posts that will live on the generated site.
-      bodyWithImages = appendRelatedReading(
-        resolveInternalLinks(
-          injectImagesIntoBody(blogPost.body, generatedImages),
+      // Preferred external sources (when provided) are the model's job in the
+      // body; appendSourcesSection is the safety net for any that never made
+      // it in. Without links both calls are no-ops.
+      bodyWithImages = appendSourcesSection(
+        appendRelatedReading(
+          resolveInternalLinks(
+            injectImagesIntoBody(blogPost.body, generatedImages),
+            linkablePages
+          ),
           linkablePages
         ),
-        linkablePages
+        (externalLinks ?? [])
+          .filter(Boolean)
+          .slice(0, 5)
+          .map((u) => ({ url: u, anchorText: hostOf(u) || u }))
       );
 
       // On-page SEO score — stored with the post and
@@ -777,7 +947,9 @@ export async function POST(request: NextRequest) {
         entities: [],
       });
 
-      if (!isBelowGate(seoScore.total, aeoGeo.total, gate)) break;
+      const belowGate = isBelowGate(seoScore.total, aeoGeo.total, gate);
+      scoreHistory.push({ attempt: attempts, seo: seoScore.total, aeoGeo: aeoGeo.total, belowGate });
+      if (!belowGate) break;
       if (attempts >= MAX_SCORE_ATTEMPTS) {
         throw new ScoreGateError(seoScore.total, aeoGeo.total, gate, seoScore, aeoGeo);
       }
@@ -786,6 +958,13 @@ export async function POST(request: NextRequest) {
         `[generate-content] Draft below score gate (SEO ${seoScore.total}/AEO-GEO ${aeoGeo.total}, gate ${gate}) — retrying (${attempts}/${MAX_SCORE_ATTEMPTS})`
       );
     }
+
+    // Gate story: the loop above only breaks when the draft clears the gate,
+    // so `attempts` is exactly the attempt that passed. Include it (plus the
+    // gate itself and the per-attempt score history) in the response AND in
+    // the saved post's content so the detail modal can show the same story
+    // for past posts.
+    const gateStory = buildGateStory(gate, attempts, scoreHistory);
 
     const seoPayload = {
       score: seoScore.total,
@@ -834,82 +1013,22 @@ export async function POST(request: NextRequest) {
     // ------------------------------------------------------------------
     // 4. Generate social captions in parallel for each platform
     // ------------------------------------------------------------------
-    const socialCaptionPromises = platforms.map(
-      async (platform): Promise<{ platform: string; caption: SocialCaptionResult }> => {
-        // Enrich social prompt with platform-specific brand rules
-        let enrichedSocialPrompt = getSocialCaptionPrompt(platform, brandVoice);
-        if (workspaceId) {
-          try {
-            const brandRes = await getDefaultBrandProfile();
-            if (brandRes.success && brandRes.data) {
-              enrichedSocialPrompt += buildBrandSystemPrompt(brandRes.data, platform);
-            }
-          } catch {}
-        }
-        const socialSystemPrompt = enrichedSocialPrompt;
-
-        // Build a contextual prompt that references the blog content
-        const socialUserPrompt = `Create a social media caption for ${platform.toUpperCase()} promoting this blog post:
-
-BLOG TITLE: ${blogPost.title}
-BLOG SLUG: ${blogPost.slug}
-META DESCRIPTION: ${blogPost.metaDescription}
-BLOG SUMMARY: ${blogPost.body.substring(0, 800)}...
-
-Use the above context to craft a compelling, platform-optimized caption that drives engagement and clicks.`;
-
-        const rawCaption = await generateText(
-          "social_caption" as AITask,
-          socialUserPrompt,
-          tenantId,
-          {
-            systemPrompt: socialSystemPrompt,
-            clientId,
-            temperature: 0.8,
-          }
-        );
-
-        // Parse the JSON string returned by generateText
-        let caption: SocialCaptionResult;
-        try {
-          const parsedCaption = JSON.parse(rawCaption) as Partial<SocialCaptionResult>;
-          // Validate the shape: caption must be a non-empty string. If the
-          // model double-encoded the JSON (caption field containing a JSON
-          // string) or returned something malformed, fall through to the
-          // plain-text sanitizer so we never store raw JSON as a caption.
-          const parsedCaptionText = toPlainCaption(parsedCaption?.caption);
-          if (parsedCaptionText) {
-            caption = {
-              caption: parsedCaptionText,
-              hashtags: Array.isArray(parsedCaption.hashtags) ? parsedCaption.hashtags : [],
-              firstComment: toPlainCaption(parsedCaption.firstComment) || "",
-              contentWarnings: Array.isArray(parsedCaption.contentWarnings) ? parsedCaption.contentWarnings : [],
-              suggestedImageDescription: toPlainCaption(parsedCaption.suggestedImageDescription) || "",
-            };
-          } else {
-            // The parsed result had no usable caption text — extract plain text
-            caption = {
-              caption: toPlainCaption(rawCaption) || "Untitled caption",
-              hashtags: [],
-              firstComment: "",
-              contentWarnings: [],
-              suggestedImageDescription: "",
-            };
-          }
-        } catch {
-          // If parsing fails, wrap the raw (sanitized) text as the caption
-          caption = {
-            caption: toPlainCaption(rawCaption) || "Untitled caption",
-            hashtags: [],
-            firstComment: "",
-            contentWarnings: [],
-            suggestedImageDescription: "",
-          };
-        }
-
-        return { platform, caption };
-      }
+    const socialCaptionPromises = platforms.map((platform) =>
+      generateSocialCaptionFor(platform, {
+        tenantId,
+        clientId,
+        workspaceId,
+        brandVoice,
+        topic: workingTopic,
+        blog: {
+          title: blogPost.title,
+          slug: blogPost.slug,
+          metaDescription: blogPost.metaDescription,
+          summary: blogPost.body.substring(0, 800),
+        },
+      })
     );
+
 
     const socialResults = await Promise.all(socialCaptionPromises);
 
@@ -954,6 +1073,7 @@ Use the above context to craft a compelling, platform-optimized caption that dri
         .insert({
           tenant_id: tenantId,
           client_id: clientId ?? null,
+          workspace_id: workspaceId ?? null,
           content: {
             type: "blog",
             title: blogPost.title,
@@ -977,6 +1097,7 @@ Use the above context to craft a compelling, platform-optimized caption that dri
             topicAutoSelected: autoSelectedTopic,
             seo: seoPayload,
             aeoGeo: aeoGeoPayload,
+            gate: gateStory,
             seoMeta: seoMeta.meta,
             schemaTypes: Array.isArray(schemaTypes) ? schemaTypes : seoMeta.summary.schemaTypes,
             seoMetaPreview: schemaPreview({
@@ -991,12 +1112,15 @@ Use the above context to craft a compelling, platform-optimized caption that dri
               body: bodyWithImages,
             }),
           },
-          status: "draft",
-          created_by: userId,
-          ai_generated: true,
-          aeo_geo_score: aeoGeo.total,
-        })
-        .select("id")
+        status: "draft",
+        // Suggested publish time from the map row/CSV — the calendar shows
+        // it; the approval flow (draft → approved → scheduled) still governs.
+        scheduled_at: scheduledAt ?? null,
+        created_by: userId,
+        ai_generated: true,
+        aeo_geo_score: aeoGeo.total,
+      })
+      .select("id")
         .single();
 
     let { data: blogPostRow, error: blogError } = await blogInsert();
@@ -1040,6 +1164,17 @@ Use the above context to craft a compelling, platform-optimized caption that dri
       );
     }
     const blogPostId = blogPostRow.id;
+
+    // Auto-publish hook (Content Map automation): the draft cleared the
+    // gate (generation never saves sub-gate blogs), so ARM the 15-minute
+    // hold — the post stays draft until the hold expires and nobody cancels;
+    // the hold processor then schedules it to WordPress for the planned
+    // date. Fire-and-forget: never delays the loopback response.
+    if (autoPublish === "wordpress" && scheduledAt) {
+      void armAutoPublishHold(tenantId, blogPostId, scheduledAt).catch((err) =>
+        console.error("[generate-content] auto-publish hold failed:", err)
+      );
+    }
 
     // Stamp the final SEO/AEO/GEO scores onto this post's media_assets so
     // the Asset Library card shows how the generated piece scored (chips on
@@ -1098,6 +1233,7 @@ Use the above context to craft a compelling, platform-optimized caption that dri
         .insert({
           tenant_id: tenantId,
           client_id: clientId ?? null,
+          workspace_id: workspaceId ?? null,
           content: {
             type: "social",
             platform,
@@ -1109,6 +1245,8 @@ Use the above context to craft a compelling, platform-optimized caption that dri
             blogPostId,
           },
           status: "draft",
+          // Suggested publish time from the map row/CSV (see blog insert).
+          scheduled_at: scheduledAt ?? null,
           created_by: userId,
           ai_generated: true,
         })
@@ -1178,6 +1316,8 @@ Use the above context to craft a compelling, platform-optimized caption that dri
         suggestedImagePrompt: blogPost.suggestedImagePrompt ?? "",
         status: "draft",
         seo: seoPayload,
+        aeoGeo: aeoGeoPayload,
+        gate: gateStory,
         seoMeta: seoMeta.meta,
         seoMetaSummary: seoMeta.summary,
         schemaTypes: Array.isArray(schemaTypes) ? schemaTypes : seoMeta.summary.schemaTypes,

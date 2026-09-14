@@ -127,6 +127,65 @@ All migrations live in the `supabase/migrations/` folder.
 - `subscription_plans` / `subscriptions` — Stripe‑linked billing
 - `ai_providers` / `ai_models` / `tenant_api_keys` — encrypted LLM key store
 - `usage_logs` — metered usage (AI tokens, social profiles)
+- `content_map_imports` / `content_map_items` — bulk content planning (CSV of a year's ideas per client, migration 101)
+
+### ⚠️ Pending on next deploy
+
+- **`100_aeo_geo_split_scores.sql`** — adds `posts.aeo_geo_split` JSONB (`{ aeo, geo }`) and extends the
+  `sync_post_seo_columns()` trigger to populate it from `content->'aeoGeo'` on insert/update, then backfills
+  existing rows. **Run it before or with the release** that ships the analytics pillar split — until it runs,
+  the analytics dashboard's "Avg AEO/GEO" card shows only the combined score and no AEO/GEO sub-averages
+  (older rows are covered by the backfill; posts generated after it are filled automatically by the trigger).
+- **`108_publish_retry_backoff.sql`** — adds `posts.publish_retry_count` + `posts.publish_retry_at` and a
+  partial index on due failed posts. Powers the self-healing publish retries; until it runs the retry sweeper
+  logs "column does not exist" and no retries happen (the app keeps working otherwise).
+- **New Inngest crons** (registered on `/api/inngest`, no new env vars):
+  - `process-auto-publish-holds` — every minute; resolves the 15-minute auto-publish undo window on
+    serverless deploys (scheduled content-map rows → WordPress `future` / social queue).
+  - `process-publish-retries` — every minute; retries failed publishes on a 5 min → 30 min → 2 h backoff
+    ladder, then escalates (alert notification + surfaced in the Scheduled panel).
+  - `publishing-health-weekly-email` — Mondays 08:30 UTC; per-client scheduled/published/failed summary
+    for the last 7 days (Resend; logs instead of failing when `RESEND_API_KEY` is unset).
+- **Scheduled panel** (`/dashboard/scheduled`, nav under Manage) — overview of everything queued for the
+  publish cron (upcoming / due / overdue >1 h) plus persistent failures whose retry ladder is exhausted.
+  Persistent failures have **Retry now** (re-queue a fresh attempt immediately) and **Dismiss**
+  (record a reason; the failure stays in history but leaves the panel) actions.
+
+### Runbook: diagnosing publish failures
+
+**Where the logs live**
+
+- `publishing_logs` table — one row per platform attempt per post: `platform`, `success`,
+  `error_message`, `attempt_at`. The post detail modal, the Content Map's publishing-history panel,
+  and the Posts list all render these rows; query directly for deeper digs:
+  `select * from publishing_logs where post_id = '…' order by attempt_at desc;`
+- `posts.status` — the post-level rollup (see statuses below).
+- Server logs — the retry sweeper logs `[publish-retries] …`, the hold processor `[auto-publish] …`,
+  and the publish cron `[publishScheduledPosts] …`.
+
+**What each post status means**
+
+| Status | Meaning |
+| --- | --- |
+| `draft` | Generated, not approved. If `auto_publish_at` is set, the 15-minute undo window is running. |
+| `scheduled` | Approved and queued — the publish cron publishes it when `scheduled_at` arrives (blogs also go to WordPress with WP status `future` for that date). |
+| `published` | Delivered to the connected platform(s). Check `publishing_logs` for the live URL(s). |
+| `failed` | The last delivery attempt threw. **Not terminal** — the retry ladder (below) takes over automatically. |
+
+**The retry ladder (self-healing)**
+
+A failed publish is retried automatically on a backoff ladder — **5 min → 30 min → 2 h** (3 attempts,
+~2.5 h total). Retries go through the same channel the post failed on (blogs → WordPress publisher,
+socials → their assigned accounts) and ring the bell with "Failed publish recovered" when one lands.
+
+- **Escalation:** after the third failed retry the post is marked as needing a human: an **alert**
+  notification fires ("Publishing keeps failing"), and the post appears under **"Failed — automatic
+  retries exhausted"** in the Scheduled panel with its last error.
+- **Resolve it there:** **Retry now** re-queues a fresh attempt immediately (clears the ladder);
+  **Dismiss** records a reason (the post stays `failed` in history but leaves the active list).
+- Dismissed/escalated state is tracked on the post itself (`publish_dismissed_at`,
+  `publish_dismiss_reason`, `publish_failed_at`), so the panel and the weekly publishing-health
+  email ("Needs a human" / "Recovered" columns) stay consistent.
 
 ---
 

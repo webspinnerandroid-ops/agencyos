@@ -425,6 +425,34 @@ export async function finalizeSignature(params: {
     }
   }
 
+  // 5. Ledger + workflow event (Phase 2/4): the receipt in Postgres before
+  //    anything downstream resumes.
+  try {
+    const { record } = await import("@/lib/agency/ledger");
+    await record({
+      tenantId: request.tenant_id,
+      workspaceId: request.workspace_id ?? campaign?.workspace_id ?? null,
+      clientId: request.client_id ?? null,
+      actor: { kind: "webhook", name: "signing-page" },
+      type: "approval",
+      summary: `Agreement signed by ${signerName}${campaign ? ` (campaign ${campaign.id.slice(0, 8)}…)` : ""}`,
+      payload: { signRequestId: request.id, signatureType: params.signatureType },
+      artifactRef: request.id,
+      status: "ok",
+    });
+    const { emitContractSigned } = await import("@/lib/agency/events");
+    await emitContractSigned({
+      tenantId: request.tenant_id,
+      signRequestId: request.id,
+      campaignId: request.campaign_id ?? null,
+      clientId: request.client_id ?? null,
+      workspaceId: request.workspace_id ?? null,
+      signerEmail: signerEmail,
+    });
+  } catch (err) {
+    console.error("[signing] ledger/event emission failed:", (err as Error).message);
+  }
+
   return { status: "signed", signedDocumentUrl, alreadySigned: false };
 }
 

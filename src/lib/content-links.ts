@@ -191,3 +191,51 @@ export function appendRelatedReading(
     .join("\n");
   return `${body.replace(/\s+$/, "")}\n\n## Related reading\n\n${list}\n`;
 }
+
+/**
+ * Append a "Sources" section citing the caller's preferred external links.
+ *
+ * Content Map rows may carry external source URLs (optional CSV column). The
+ * prompt asks the model to weave them into the body as outbound links; this
+ * is the safety net — when a provided source never made it into the body,
+ * it is appended here so a provided source is never silently lost.
+ *
+ * Links are OPTIONAL: a no-links call returns the body unchanged (no empty
+ * section, no error). Used links are skipped; sources already cited are
+ * detected by host so a trailing section never duplicates the body.
+ */
+export function appendSourcesSection(
+  body: string,
+  sources: { url: string; anchorText: string }[],
+  maxLinks = 5
+): string {
+  if (sources.length === 0 || !body) return body;
+  // Hosts of every absolute http(s) link already cited in the body, so a
+  // provided source is only appended when the body never referenced it.
+  const bodyHosts = new Set(
+    (body.match(/\]\((https?:\/\/[^)\s]+)\)/g) ?? []).map((m) => {
+      const url = m.slice(3, -1);
+      try {
+        return new URL(url).hostname.replace(/^www\./, "").toLowerCase();
+      } catch {
+        return url.toLowerCase();
+      }
+    })
+  );
+  const hostOf = (url: string): string => {
+    try {
+      return new URL(url).hostname.replace(/^www\./, "").toLowerCase();
+    } catch {
+      return url.toLowerCase();
+    }
+  };
+  const missing = sources
+    .filter((s) => !bodyHosts.has(hostOf(s.url)))
+    .slice(0, maxLinks);
+  if (missing.length === 0) return body;
+
+  const list = missing
+    .map((s) => `- [${s.anchorText.trim() || hostOf(s.url)}](${s.url})`)
+    .join("\n");
+  return `${body.replace(/\s+$/, "")}\n\n## Sources\n\n${list}\n`;
+}

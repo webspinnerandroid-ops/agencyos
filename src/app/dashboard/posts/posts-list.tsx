@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import PublishButton from "@/components/PublishButton";
 import PostDetailModal from "@/components/PostDetailModal";
+import AutoPublishHoldBanner from "@/components/AutoPublishHoldBanner";
 import ScoreBadge from "@/components/ScoreBadge";
 import {
   getPostPreview,
@@ -20,10 +21,18 @@ import {
   formatShortDate,
   type PostRow,
 } from "@/lib/post-preview";
+import type { PublishHistoryEntry } from "@/lib/publish-history";
+import PublishHistoryLinks from "@/components/publish/PublishHistoryLinks";
 
 type SortKey = "newest" | "oldest" | "az" | "za";
 
-export default function PostsList({ posts }: { posts: PostRow[] }) {
+export default function PostsList({
+  posts,
+  history = {},
+}: {
+  posts: PostRow[];
+  history?: Record<string, PublishHistoryEntry[]>;
+}) {
   const [q, setQ] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -31,6 +40,11 @@ export default function PostsList({ posts }: { posts: PostRow[] }) {
   const [selectedPost, setSelectedPost] = useState<PostRow | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [deletedIds, setDeletedIds] = useState<string[]>([]);
+  // Cancelled auto-publish holds (posts whose 15-min undo window the user
+  // closed from this list) — hidden locally; the server cleared the hold.
+  const [holdCancelledIds, setHoldCancelledIds] = useState<string[]>([]);
+  const applyHoldCancel = (postId: string) =>
+    setHoldCancelledIds((prev) => [...prev, postId]);
 
   // Deep link from the AI team chat: /dashboard/posts?post={id} opens that
   // post's detail modal (Cheryl's "View draft" links land here).
@@ -216,8 +230,36 @@ export default function PostsList({ posts }: { posts: PostRow[] }) {
                       )}
                       {preview.type === "blog" && (
                         <>
-                          <ScoreBadge score={getSeoScore(post)} />
-                          <ScoreBadge score={getAeoGeoScore(post)} label="AEO/GEO" />
+                          <button
+                            type="button"
+                            className="shrink-0 cursor-pointer"
+                            title={
+                              getSeoScore(post) != null
+                                ? `On-page SEO score: ${getSeoScore(post)}/100 — click for the full checklist`
+                                : "No SEO score"
+                            }
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedPost(post);
+                            }}
+                          >
+                            <ScoreBadge score={getSeoScore(post)} />
+                          </button>
+                          <button
+                            type="button"
+                            className="shrink-0 cursor-pointer"
+                            title={
+                              getAeoGeoScore(post) != null
+                                ? `AEO/GEO readiness: ${getAeoGeoScore(post)}/100 — click for the answer + citation checklist`
+                                : "No AEO/GEO score"
+                            }
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedPost(post);
+                            }}
+                          >
+                            <ScoreBadge score={getAeoGeoScore(post)} label="AEO/GEO" />
+                          </button>
                         </>
                       )}
                       {post.cms_published_at && (
@@ -231,6 +273,21 @@ export default function PostsList({ posts }: { posts: PostRow[] }) {
                           On site ↗
                         </a>
                       )}
+                      <PublishHistoryLinks entries={history[post.id] ?? []} />
+                      {/* 15-min auto-publish hold (content-map automation) —
+                          same countdown + cancel the map row shows. */}
+                      {post.auto_publish_at &&
+                        !holdCancelledIds.includes(post.id) && (
+                          <span onClick={(e) => e.stopPropagation()}>
+                            <AutoPublishHoldBanner
+                              postId={post.id}
+                              autoPublishAt={post.auto_publish_at}
+                              scheduledAt={post.scheduled_at}
+                              type={preview.type === "social" ? "social" : "blog"}
+                              onCancel={applyHoldCancel}
+                            />
+                          </span>
+                        )}
                     </div>
                   </div>
                 </div>

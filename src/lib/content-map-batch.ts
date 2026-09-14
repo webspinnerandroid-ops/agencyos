@@ -117,7 +117,14 @@ export async function startBatch(args: StartBatchArgs): Promise<StartBatchResult
     .from("content_map_items")
     .select("id")
     .eq("tenant_id", args.tenantId)
-    .eq("status", "planned")
+    // Explicit per-row retries may re-run FAILED rows ("re-run the row to
+    // link it"); full-map runs still only pick up planned rows.
+    .in(
+      "status",
+      args.itemIds && args.itemIds.length > 0
+        ? ["planned", "failed"]
+        : ["planned"]
+    )
     .order("created_at", { ascending: true });
   plannedQuery = args.workspaceId
     ? plannedQuery.eq("workspace_id", args.workspaceId)

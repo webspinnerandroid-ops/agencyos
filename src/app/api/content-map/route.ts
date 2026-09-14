@@ -292,6 +292,18 @@ export async function POST(request: NextRequest) {
       importId: importRow.id,
       imported: inserted.length,
       skipped,
+      // Where the rows landed — the UI shows this so an import into a client's
+      // own workspace (not the one being browsed) is never a surprise. A
+      // display name helps the one-click "switch there" action.
+      workspaceId: workspaceId,
+      workspaceName:
+        (
+          await supabase
+            .from("workspaces")
+            .select("name")
+            .eq("id", workspaceId)
+            .maybeSingle()
+        ).data?.name ?? "the client's workspace",
       // Warnings keyed by source row so the UI can surface them inline.
       notes: rows
         .filter((r) => r.importNote)

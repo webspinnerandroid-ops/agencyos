@@ -96,6 +96,9 @@ interface ImportResult {
   imported: number;
   skipped: { rowNumber: number; reason: string }[];
   notes: { row: number; note: string }[];
+  /** Workspace the rows landed in (the client's own when a client is set). */
+  workspaceId?: string | null;
+  workspaceName?: string | null;
 }
 
 const STATUS_STYLES: Record<MapItem["status"], string> = {
@@ -151,6 +154,9 @@ export default function ContentMapPage() {
   const [showDismissed, setShowDismissed] = useState(false);
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<ImportResult | null>(null);
+  // Set when the import landed in a different workspace than the one being
+  // browsed — the result card then offers a one-click switch.
+  const [importedElsewhere, setImportedElsewhere] = useState<{ workspaceId: string; workspaceName: string } | null>(null);
   const [importError, setImportError] = useState<string | null>(null);
   const [batchRunning, setBatchRunning] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{ done: number; total: number } | null>(null);
@@ -415,6 +421,22 @@ export default function ContentMapPage() {
       }
       setImportResult(data as ImportResult);
       if (fileRef.current) fileRef.current.value = "";
+      // If the import landed in a DIFFERENT workspace than the one being
+      // browsed (a client map imported while inside another workspace),
+      // reload won't show the new rows here — say so plainly instead of
+      // looking like the import vanished.
+      const currentWs = document.cookie
+        .split("; ")
+        .find((row) => row.startsWith("workspace_id="))
+        ?.split("=")[1];
+      if (data.workspaceId && data.workspaceId !== currentWs) {
+        setImportedElsewhere({
+          workspaceId: data.workspaceId,
+          workspaceName: data.workspaceName ?? "another workspace",
+        });
+      } else {
+        setImportedElsewhere(null);
+      }
       await loadMap();
     } catch {
       setImportError("Network error during import");
@@ -716,7 +738,31 @@ export default function ContentMapPage() {
                 <span className="font-medium text-green-700 dark:text-green-400">
                   Imported {importResult.imported} idea{importResult.imported === 1 ? "" : "s"}.
                 </span>
+                {importResult.workspaceName && (
+                  <span className="text-muted-foreground">
+                    {" "}They live in the <strong>{importResult.workspaceName}</strong> workspace.
+                  </span>
+                )}
               </p>
+              {importedElsewhere && (
+                <div className="rounded-md border border-sky-500/40 bg-sky-500/10 p-2.5">
+                  <p className="text-xs text-sky-800 dark:text-sky-300">
+                    This map belongs to <strong>{importedElsewhere.workspaceName}</strong> — switch
+                    over to see and generate the new rows.
+                  </p>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="mt-1.5"
+                    onClick={() => {
+                      document.cookie = `workspace_id=${importedElsewhere.workspaceId}; path=/; max-age=31536000`;
+                      window.location.href = "/dashboard/content-map";
+                    }}
+                  >
+                    Switch to {importedElsewhere.workspaceName}
+                  </Button>
+                </div>
+              )}
               {/* Skipped rows get TOP billing: a 325-row calendar template
                   importing as 6 rows must never be a mystery. */}
               {importResult.skipped.length > 0 && (
@@ -969,6 +1015,15 @@ export default function ContentMapPage() {
                           className="text-xs px-2 py-1 rounded-md border hover:bg-muted inline-flex items-center gap-1"
                         >
                           <Sparkles className="size-3" /> Generate
+                        </button>
+                      )}
+                      {item.status === "failed" && !batchRunning && (
+                        <button
+                          onClick={() => batchStart([item.id])}
+                          className="text-xs px-2 py-1 rounded-md border border-red-500/40 text-red-600 dark:text-red-400 hover:bg-red-500/10 inline-flex items-center gap-1"
+                          title="Run this row again through the gate"
+                        >
+                          <Sparkles className="size-3" /> Retry
                         </button>
                       )}
                       {item.status !== "done" && item.status !== "generating" && (

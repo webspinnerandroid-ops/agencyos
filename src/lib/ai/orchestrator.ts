@@ -1029,15 +1029,18 @@ export async function generateStructuredOutput<T>(
     const parsed = tryParse(content);
     if (parsed) return parsed;
 
-    // If the response was truncated (finish_reason: "length") and we haven't
-    // already doubled the token limit, retry with 2x maxTokens once. Allow
-    // the retry even at the 32768 cap — a second attempt at the same budget
-    // often lands a complete response, and the repair above already salvages
-    // most truncations.
+    // If the response was truncated (finish_reason: "length") or the body was
+    // cut mid-stream by a connection drop (finish_reason missing — the JSON
+    // just ends), retry with 2x maxTokens once. Both look identical after the
+    // parse fails: a valid prefix with no closing structure.
     const finishReason = result.choices[0]?.finish_reason;
-    if (finishReason === "length" && maxTokens <= 32768) {
+    if (
+      (finishReason === "length" || !parsed) &&
+      maxTokens <= 32768 &&
+      maxTokens < 65536
+    ) {
       console.warn(
-        `[Orchestrator] JSON truncated at ${maxTokens} tokens, retrying with ${maxTokens * 2}...`
+        `[Orchestrator] JSON truncated/unparseable (${maxTokens} tokens, finish_reason: ${finishReason ?? "none"}), retrying with ${maxTokens * 2}...`
       );
       const retryResult = await retryWithBackoff(() =>
         makeJsonCall(maxTokens * 2)

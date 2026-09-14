@@ -295,6 +295,7 @@ export async function POST(request: NextRequest) {
       // Where the rows landed — the UI shows this so an import into a client's
       // own workspace (not the one being browsed) is never a surprise. A
       // display name helps the one-click "switch there" action.
+      // (Tenant-scoped on the workspace id, same as every other table read.)
       workspaceId: workspaceId,
       workspaceName:
         (
@@ -302,6 +303,7 @@ export async function POST(request: NextRequest) {
             .from("workspaces")
             .select("name")
             .eq("id", workspaceId)
+            .eq("tenant_id", tenantId)
             .maybeSingle()
         ).data?.name ?? "the client's workspace",
       // Warnings keyed by source row so the UI can surface them inline.

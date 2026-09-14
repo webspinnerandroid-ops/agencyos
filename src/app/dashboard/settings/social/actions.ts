@@ -6,6 +6,14 @@ import { getTenantId } from "@/lib/auth";
 import { encrypt } from "@/lib/encryption";
 import { getCurrentWorkspaceId } from "@/lib/workspace";
 import { SUPPORTED_PLATFORMS, type SupportedPlatform } from "./constants";
+import {
+  getRelayConfig,
+  saveRelayUrl,
+  setRelayEnabled,
+  publishViaRelay,
+  recordRelayTest,
+  isValidRelayUrl,
+} from "@/lib/publishing/makeRelay";
 
 // ------------------------------------------------------------------
 // Types
@@ -117,6 +125,108 @@ export async function checkOAuthConfig(): Promise<OAuthConfigStatus> {
 
 export async function getSupportedPlatforms() {
   return SUPPORTED_PLATFORMS;
+}
+
+// ------------------------------------------------------------------
+// Make.com relay (no-app-review publishing for FB/IG/LinkedIn/TikTok/
+// Threads/Reddit/Pinterest — see src/lib/publishing/makeRelay.ts)
+// ------------------------------------------------------------------
+
+export interface MakeRelayStatus {
+  configured: boolean;
+  enabled: boolean;
+  urlHint: string | null;
+  lastTestAt: string | null;
+  lastTestOk: boolean | null;
+  lastTestError: string | null;
+}
+
+export async function getMakeRelayStatus(): Promise<MakeRelayStatus> {
+  try {
+    const tenantId = await getTenantId();
+    const cfg = await getRelayConfig(tenantId);
+    return {
+      configured: !!cfg,
+      enabled: cfg?.enabled ?? false,
+      urlHint: cfg?.url_hint ?? null,
+      lastTestAt: cfg?.last_test_at ?? null,
+      lastTestOk: cfg?.last_test_ok ?? null,
+      lastTestError: cfg?.last_test_error ?? null,
+    };
+  } catch {
+    return {
+      configured: false,
+      enabled: false,
+      urlHint: null,
+      lastTestAt: null,
+      lastTestOk: null,
+      lastTestError: null,
+    };
+  }
+}
+
+export async function saveMakeRelayUrl(
+  rawUrl: string
+): Promise<ActionResponse<{ urlHint: string }>> {
+  try {
+    const tenantId = await getTenantId();
+    if (!isValidRelayUrl(rawUrl.trim())) {
+      return {
+        success: false,
+        error:
+          "That doesn't look like a Make.com webhook URL (expected https://hook….make.com/…).",
+      };
+    }
+    const r = await saveRelayUrl(tenantId, rawUrl);
+    if (!r.ok) return { success: false, error: r.error };
+    revalidatePath("/dashboard/settings/social");
+    revalidatePath("/dashboard/connections");
+    return { success: true, data: { urlHint: r.urlHint ?? "" } };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+export async function toggleMakeRelay(
+  enabled: boolean
+): Promise<ActionResponse> {
+  try {
+    const tenantId = await getTenantId();
+    const r = await setRelayEnabled(tenantId, enabled);
+    if (!r.ok) return { success: false, error: r.error };
+    revalidatePath("/dashboard/settings/social");
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+/**
+ * Send a harmless test payload to the configured webhook so the tenant can
+ * verify their Make scenario end to end (Make's history shows the run).
+ */
+export async function testMakeRelay(): Promise<
+  ActionResponse<{ ok: boolean; error?: string }>
+> {
+  try {
+    const tenantId = await getTenantId();
+    const res = await publishViaRelay({
+      platform: "test",
+      caption:
+        "✅ Agency OS relay test — if your Make scenario ran, the connection works. Safe to ignore this run.",
+      mediaUrls: [],
+      scheduledAt: null,
+      postPlatformId: "relay-test",
+      tenantId,
+    });
+    const ok = res.status === "published";
+    const error = res.status === "failed" ? res.errorMessage : undefined;
+    await recordRelayTest(tenantId, ok, error);
+    revalidatePath("/dashboard/settings/social");
+    return { success: true, data: { ok, error } };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
 }
 
 // ------------------------------------------------------------------

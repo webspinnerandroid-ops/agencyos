@@ -11,6 +11,10 @@
  */
 
 import { createClient } from "@supabase/supabase-js";
+import {
+  RELAY_PLATFORMS,
+  publishViaRelay,
+} from "@/lib/publishing/makeRelay";
 
 // ------------------------------------------------------------------
 // Types
@@ -23,6 +27,8 @@ export interface PublishTarget {
   encryptedToken: string; // stored token from social_accounts
   content: string;
   mediaUrls: string[];
+  tenantId?: string; // needed for the Make relay path
+  scheduledAt?: string | null; // requested publish time (relay holds via Make)
 }
 
 export interface PublishResult {
@@ -69,7 +75,13 @@ async function decryptToken(encryptedToken: string): Promise<string> {
 // ------------------------------------------------------------------
 
 /**
- * Publishes content to a social platform via the Ayrshare API.
+ * Publishes content to a social platform.
+ *
+ * ROUTING: relay platforms (facebook, instagram, linkedin, tiktok, threads,
+ * reddit, pinterest) go through the tenant's Make.com webhook when one is
+ * configured — that's the no-app-review path (Make's pre-approved Meta app
+ * handles the platform-side auth). No relay config → falls through to the
+ * direct Ayrshare path. twitter/youtube always use Ayrshare directly.
  *
  * Ayrshare API reference: https://docs.ayrshare.com/reference/post
  *
@@ -85,6 +97,29 @@ async function publishToPlatform(
   platformPostUrl?: string;
   errorMessage?: string;
 }> {
+  // --- Make.com relay path (no Meta review needed) -----------------------
+  if (RELAY_PLATFORMS.has(target.platform)) {
+    const relay = await publishViaRelay({
+      platform: target.platform,
+      caption: target.content,
+      mediaUrls: target.mediaUrls,
+      scheduledAt: target.scheduledAt ?? null,
+      postPlatformId: target.postPlatformId,
+      tenantId: target.tenantId ?? "",
+    });
+    if (relay.status === "published") {
+      return {
+        success: true,
+        platformPostId: relay.platformPostId,
+        platformPostUrl: relay.platformPostUrl,
+      };
+    }
+    if (relay.status === "failed") {
+      return { success: false, errorMessage: relay.errorMessage };
+    }
+    // status === "skipped" (no relay configured) → fall through to Ayrshare
+  }
+
   const apiKey = process.env.AYRSHARE_API_KEY;
 
   if (!apiKey) {
@@ -184,11 +219,10 @@ export async function publishPost(
   // 1. Fetch the post content and its platform assignments
   const { data: post, error: postError } = await supabase
     .from("posts")
-    .select(
-      `
-      id,
+    .select(      `id,
       content,
       media_urls,
+      scheduled_at,
       tenant_id,
       post_platforms (
         id,
@@ -256,6 +290,8 @@ export async function publishPost(
       encryptedToken: target.encryptedToken,
       content: post.content ?? "",
       mediaUrls: post.media_urls ?? [],
+      tenantId,
+      scheduledAt: post.scheduled_at ?? null,
     });
 
     const result: PublishResult = {

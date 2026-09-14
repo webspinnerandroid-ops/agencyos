@@ -15,9 +15,12 @@ import {
   Trash2,
   Link2,
   Users,
+  Zap,
+  Save,
+  Send,
 } from "lucide-react";
 
-import type { SocialAccount, OAuthConfigStatus } from "./actions";
+import type { SocialAccount, OAuthConfigStatus, MakeRelayStatus } from "./actions";
 import {
   checkOAuthConfig,
   getSupportedPlatforms,
@@ -27,6 +30,10 @@ import {
   initiateGoogleOAuth,
   removeSocialAccount,
   saveSpecOverrides,
+  getMakeRelayStatus,
+  saveMakeRelayUrl,
+  toggleMakeRelay,
+  testMakeRelay,
 } from "./actions";
 import {
   Dialog,
@@ -75,17 +82,23 @@ export default function SocialAccountsPage() {
   const [specHashtags, setSpecHashtags] = useState("");
   const [specImageSize, setSpecImageSize] = useState("");
   const [specSaving, setSpecSaving] = useState(false);
+  // Make.com relay (no-app-review publishing via the tenant's own webhook)
+  const [relay, setRelay] = useState<MakeRelayStatus | null>(null);
+  const [relayUrl, setRelayUrl] = useState("");
+  const [relayBusy, setRelayBusy] = useState<"save" | "test" | "toggle" | null>(null);
 
   const loadData = useCallback(() => {
     startLoading(async () => {
-      const [accRes, platData, oauthConf] = await Promise.all([
+      const [accRes, platData, oauthConf, relayStatus] = await Promise.all([
         getSocialAccounts(),
         getSupportedPlatforms(),
         checkOAuthConfig(),
+        getMakeRelayStatus(),
       ]);
       if (accRes.success && accRes.data) setAccounts(accRes.data);
       setPlatforms(platData as any);
       setOauthConfig(oauthConf);
+      setRelay(relayStatus);
     });
   }, []);
 
@@ -111,6 +124,50 @@ export default function SocialAccountsPage() {
   }, [loadData]);
 
   const connectedPlatforms = new Set(accounts.map((a) => a.platform));
+
+  const handleRelaySave = async () => {
+    setRelayBusy("save");
+    setFeedback(null);
+    const res = await saveMakeRelayUrl(relayUrl);
+    if (res.success) {
+      setFeedback({ type: "success", message: "Make.com webhook saved — send a test post to verify your scenario." });
+      setRelayUrl("");
+      loadData();
+    } else {
+      setFeedback({ type: "error", message: res.error ?? "Failed to save the webhook URL" });
+    }
+    setRelayBusy(null);
+  };
+
+  const handleRelayTest = async () => {
+    setRelayBusy("test");
+    setFeedback(null);
+    const res = await testMakeRelay();
+    if (res.success && res.data) {
+      if (res.data.ok) {
+        setFeedback({ type: "success", message: "Test delivered to your Make webhook — check Make's history for the run." });
+      } else {
+        setFeedback({ type: "error", message: `Test failed: ${res.data.error ?? "webhook did not accept the payload"}` });
+      }
+      loadData();
+    } else {
+      setFeedback({ type: "error", message: res.error ?? "Test failed" });
+    }
+    setRelayBusy(null);
+  };
+
+  const handleRelayToggle = async () => {
+    if (!relay) return;
+    setRelayBusy("toggle");
+    const res = await toggleMakeRelay(!relay.enabled);
+    if (res.success) {
+      setFeedback({ type: "success", message: !relay.enabled ? "Relay enabled — relay platforms now publish through Make.com." : "Relay disabled — those platforms fall back to direct publishing." });
+      loadData();
+    } else {
+      setFeedback({ type: "error", message: res.error ?? "Failed to update the relay" });
+    }
+    setRelayBusy(null);
+  };
 
   const handleOAuthConnect = (platformId: string) => {
     startTransition(async () => {
@@ -209,6 +266,74 @@ export default function SocialAccountsPage() {
           <button className="ml-3 underline text-xs" onClick={() => setFeedback(null)}>Dismiss</button>
         </div>
       )}
+
+      {/* Make.com relay — no-app-review publishing path */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Zap className="size-5 text-primary" />
+            Publish via Make.com
+            {relay?.configured && (
+              <Badge
+                className={`text-xs ${relay.enabled ? "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300" : "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300"}`}
+              >
+                {relay.enabled ? "Active" : "Paused"}
+              </Badge>
+            )}
+          </CardTitle>
+          <CardDescription>
+            Paste your Make.com webhook URL once and Facebook, Instagram, LinkedIn, TikTok, Threads, Reddit, and Pinterest
+            publish through your own Make scenario — no platform app review needed. Make handles the login/Allow for each
+            network; this app sends each post to your webhook with platform, caption, image URLs, and scheduled time.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {relay?.configured && (
+            <div className="flex items-center gap-3 flex-wrap text-sm">
+              <span className="text-muted-foreground">Webhook:</span>
+              <code className="text-xs bg-muted px-2 py-0.5 rounded">{relay.urlHint}</code>
+              {relay.lastTestAt && (
+                <span className="text-xs text-muted-foreground">
+                  Last test {new Date(relay.lastTestAt).toLocaleString()}{relay.lastTestOk === false ? " — failed" : " — ok"}
+                </span>
+              )}
+            </div>
+          )}
+          <div className="flex items-center gap-2 flex-wrap">
+            <Input
+              type="url"
+              placeholder="https://hook.eu2.make.com/…"
+              value={relayUrl}
+              onChange={(e) => setRelayUrl(e.target.value)}
+              className="max-w-md"
+            />
+            <Button onClick={handleRelaySave} disabled={relayBusy !== null || relayUrl.trim().length === 0}>
+              {relayBusy === "save" ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+              Save URL
+            </Button>
+            {relay?.configured && (
+              <>
+                <Button variant="outline" onClick={handleRelayTest} disabled={relayBusy !== null}>
+                  {relayBusy === "test" ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
+                  Send test post
+                </Button>
+                <Button variant="outline" onClick={handleRelayToggle} disabled={relayBusy !== null}>
+                  {relayBusy === "toggle" ? <Loader2 className="size-4 animate-spin" /> : null}
+                  {relay.enabled ? "Pause relay" : "Enable relay"}
+                </Button>
+              </>
+            )}
+          </div>
+          {relay?.lastTestError && (
+            <p className="text-xs text-red-600 dark:text-red-400">Last test error: {relay.lastTestError}</p>
+          )}
+          <p className="text-xs text-muted-foreground">
+            The webhook URL is a secret (anyone holding it can post to your Make scenario) — it is encrypted at rest and
+            shown only as its last 8 characters. X (Twitter) and YouTube keep using their direct connections regardless of
+            this setting.
+          </p>
+        </CardContent>
+      </Card>
 
       {/* OAuth Configuration Warnings */}
       {oauthConfig && oauthConfig.missingEnvVars.length > 0 && (

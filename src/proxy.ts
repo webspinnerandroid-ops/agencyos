@@ -523,6 +523,9 @@ export default async function middleware(request: NextRequest) {
   // (WorkspaceSelector), so it keeps the legacy non-httpOnly options.
   const cookieOptions = {
     httpOnly: false,
+    // Secure on https so the workspace id never rides an unencrypted hop.
+    // (httpOnly stays off: WorkspaceSelector writes this cookie client-side.)
+    secure: request.nextUrl.protocol === "https:",
     sameSite: "lax" as const,
     path: "/",
     maxAge: 60 * 60 * 24,

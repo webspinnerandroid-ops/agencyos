@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantId, requireRole } from "@/lib/auth";
 import { uploadStoredFile } from "@/lib/media/storage";
+import { safeFormData, unsupportedMediaResponse, internalErrorResponse } from "@/lib/api-http";
 
 const MAX_UPLOAD_IMAGES = 3;
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
@@ -18,7 +19,8 @@ export async function POST(request: NextRequest) {
     const tenantId = await getTenantId();
     await requireRole("agency_editor");
 
-    const form = await request.formData();
+    const form = await safeFormData(request);
+    if (!form) return unsupportedMediaResponse();
     const files = form
       .getAll("files")
       .filter((f): f is File => f instanceof File);
@@ -75,9 +77,6 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ images });
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Internal error" },
-      { status: 500 }
-    );
+    return internalErrorResponse(err, "generate-content/upload");
   }
 }

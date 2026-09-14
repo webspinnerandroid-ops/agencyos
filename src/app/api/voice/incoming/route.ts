@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { handleIncomingCall } from "@/lib/voice/haven";
+import { safeFormData, unsupportedMediaResponse, internalErrorResponse } from "@/lib/api-http";
 
 export async function POST(request: NextRequest) {
   try {
-    const formData = await request.formData();
+    const formData = await safeFormData(request);
+    if (!formData) return unsupportedMediaResponse();
     const callSid = formData.get("CallSid") as string;
     const from = formData.get("From") as string;
     const to = formData.get("To") as string;
@@ -19,7 +21,6 @@ export async function POST(request: NextRequest) {
       headers: { "Content-Type": "text/xml" },
     });
   } catch (err: any) {
-    console.error("[voice/incoming] Error:", err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return internalErrorResponse(err, "voice/incoming");
   }
 }

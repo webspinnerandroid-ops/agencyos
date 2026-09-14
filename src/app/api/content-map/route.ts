@@ -5,6 +5,7 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { rateLimitRequest } from "@/lib/rate-limit";
 import { parseCsv, mapCsvRows } from "@/lib/content-map-import";
 import { slugify } from "@/lib/cms";
+import { safeFormData, unsupportedMediaResponse, internalErrorResponse } from "@/lib/api-http";
 
 export const maxDuration = 60;
 
@@ -119,8 +120,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ items: list, summary, history, linkedPosts });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Internal server error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return internalErrorResponse(err, "content-map GET");
   }
 }
 
@@ -149,7 +149,8 @@ export async function POST(request: NextRequest) {
     const supabase = await createServiceClient();
     let workspaceId = await getCurrentWorkspaceId();
 
-    const form = await request.formData();
+    const form = await safeFormData(request);
+    if (!form) return unsupportedMediaResponse();
     const file = form.get("file");
     const clientId = (form.get("clientId") as string | null) || null;
     const brandVoice = ((form.get("brandVoice") as string | null) ?? "").trim() || null;

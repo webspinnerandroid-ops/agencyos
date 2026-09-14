@@ -10,6 +10,8 @@ interface MobileNavProps {
   sections: NavSection[];
   /** Tailwind breakpoint class controlling when the hamburger shows. */
   breakpointClass?: string;
+  /** Borderless icon-only trigger (bottom-nav "More" slot styling). */
+  bareIcon?: boolean;
 }
 
 /**
@@ -25,6 +27,7 @@ interface MobileNavProps {
 export default function MobileNav({
   sections,
   breakpointClass = "lg:hidden",
+  bareIcon = false,
 }: MobileNavProps) {
   const [open, setOpen] = useState(false);
 
@@ -51,7 +54,11 @@ export default function MobileNav({
     <div className={`${breakpointClass} relative`}>
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center justify-center rounded-md border border-input bg-background p-2 hover:bg-muted transition-colors"
+        className={
+          bareIcon
+            ? "flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground"
+            : "flex items-center justify-center rounded-md border border-input bg-background p-2 hover:bg-muted transition-colors"
+        }
         aria-label="Toggle navigation menu"
         aria-expanded={open}
       >

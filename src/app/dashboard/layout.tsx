@@ -1,7 +1,10 @@
 import type { Metadata } from "next";
 import WorkspaceSelector from "@/components/WorkspaceSelector";
+import WorkspaceChip from "@/components/WorkspaceChip";
 import AccountMenu from "@/components/AccountMenu";
 import MobileNav from "@/components/MobileNav";
+import MobileBottomNav from "@/components/MobileBottomNav";
+import SearchTrigger from "@/components/SearchTrigger";
 import NavDropdown, { type NavSection } from "@/components/NavDropdown";
 import { getNavSections } from "@/lib/nav-config";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -75,8 +78,15 @@ export default async function DashboardLayout({
             <div className="hidden sm:block">
               <WorkspaceSelector />
             </div>
+            {/* Compact chip on small screens — the selector hides there, but
+                workspace context must stay visible (misplaced-import lesson). */}
+            <div className="sm:hidden">
+              <WorkspaceChip />
+            </div>
           </div>
           <div className="flex items-center gap-2">
+            {/* Visible search affordance — ⌘K works, but was undiscoverable */}
+            <SearchTrigger />
             {/* Desktop nav — grouped dropdowns */}
             <NavDropdown sections={navSections} />
             {/* Mobile nav — grouped drawer */}
@@ -89,10 +99,13 @@ export default async function DashboardLayout({
           </div>
         </div>
       </header>
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 overflow-x-hidden">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 overflow-x-hidden pb-20 sm:pb-6">
         <PageBreadcrumbs />
         {children}
       </main>
+      {/* Mobile bottom navigation — the five daily destinations, always one
+          tap away. pb-20 on <main> keeps content clear of the bar. */}
+      <MobileBottomNav sections={navSections} />
       <CommandPalette sections={navSections} />
     </div>
   );

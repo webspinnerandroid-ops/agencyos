@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { handleCallComplete } from "@/lib/voice/haven";
+import { safeFormData, unsupportedMediaResponse, internalErrorResponse } from "@/lib/api-http";
 
 /**
  * Twilio status callback webhook. Twilio POSTs here when a call ends.
@@ -7,7 +8,8 @@ import { handleCallComplete } from "@/lib/voice/haven";
  */
 export async function POST(request: NextRequest) {
   try {
-    const formData = await request.formData();
+    const formData = await safeFormData(request);
+    if (!formData) return unsupportedMediaResponse();
     const callSid = formData.get("CallSid") as string;
     const callStatus = formData.get("CallStatus") as string;
     const duration = formData.get("CallDuration") as string;
@@ -22,7 +24,6 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ received: true });
   } catch (err: any) {
-    console.error("[voice/calls/status] Error:", err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return internalErrorResponse(err, "voice/calls/status");
   }
 }

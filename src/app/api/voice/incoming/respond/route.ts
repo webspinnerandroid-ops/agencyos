@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { handleGatherResponse } from "@/lib/voice/haven";
 import { createClient } from "@supabase/supabase-js";
+import { safeFormData, unsupportedMediaResponse, internalErrorResponse } from "@/lib/api-http";
 
 export async function POST(request: NextRequest) {
   try {
-    const formData = await request.formData();
+    const formData = await safeFormData(request);
+    if (!formData) return unsupportedMediaResponse();
     const callSid = formData.get("CallSid") as string;
     const speechResult = formData.get("SpeechResult") as string;
 
@@ -33,7 +35,6 @@ export async function POST(request: NextRequest) {
       headers: { "Content-Type": "text/xml" },
     });
   } catch (err: any) {
-    console.error("[voice/incoming/respond] Error:", err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return internalErrorResponse(err, "voice/incoming/respond");
   }
 }

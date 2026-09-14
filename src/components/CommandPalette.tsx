@@ -29,7 +29,8 @@ export default function CommandPalette({ sections }: { sections: NavSection[] })
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Toggle with ⌘K / Ctrl+K.
+  // Toggle with ⌘K / Ctrl+K, or the visible header search button
+  // (dispatches the open-command-palette event).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
@@ -38,8 +39,16 @@ export default function CommandPalette({ sections }: { sections: NavSection[] })
         setQuery("");
       }
     };
+    const onOpen = () => {
+      setOpen(true);
+      setQuery("");
+    };
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
+    document.addEventListener("open-command-palette", onOpen);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("open-command-palette", onOpen);
+    };
   }, []);
 
   // Focus the input when opened; fetch clients lazily the first time.

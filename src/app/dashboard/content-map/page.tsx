@@ -16,6 +16,7 @@ import {
   Pencil,
   CalendarClock,
   ShieldQuestion,
+  ChevronDown,
 } from "lucide-react";
 import {
   Card,
@@ -163,6 +164,10 @@ export default function ContentMapPage() {
   const [pageError, setPageError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  // Import form lives in a collapsible card: collapsed by default (and after
+  // a successful import) so the map itself is the first thing you see. The
+  // result banner stays visible below the card either way.
+  const [importOpen, setImportOpen] = useState(false);
 
   // ---- View modes: list (default), timeline, board (bulk edit) ----
   const [view, setView] = useState<"list" | "timeline">("list");
@@ -297,6 +302,11 @@ export default function ContentMapPage() {
   const openDryRun = () => {
     setDryRun({ open: true, loading: false, rows: dryRunRows });
   };
+
+  // "Generate all" always routes through the preview first — one mis-click
+  // must never burn a month of tokens. The preview dialog's "Run all" button
+  // is the only path that starts the batch.
+  const startGenerateAll = () => openDryRun();
 
   // ---- Bulk editor helpers ----
   const editValue = (item: MapItem) =>
@@ -594,22 +604,41 @@ export default function ContentMapPage() {
         </div>
       )}
 
-      {/* ---- Import ---- */}
+      {/* ---- Import (collapsed by default — the map is the hero) ---- */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Upload className="size-5 text-primary" />
-            Import ideas (CSV)
-          </CardTitle>
-          <CardDescription>
-            Columns: <span className="font-medium">Title</span>,{" "}
-            <span className="font-medium">Keywords</span> (comma-separated — the
-            first is the focus keyword), <span className="font-medium">Topic</span>,{" "}
-            <span className="font-medium">Type</span> (blog/social),{" "}
-            <span className="font-medium">Platforms</span>. Title or Topic is
-            required per row.
-          </CardDescription>
+          <button
+            type="button"
+            className="flex w-full items-center justify-between gap-3 text-left"
+            onClick={() => setImportOpen((v) => !v)}
+            aria-expanded={importOpen}
+          >
+            <div className="min-w-0">
+              <CardTitle className="flex items-center gap-2">
+                <Upload className="size-5 text-primary" />
+                Import ideas (CSV)
+                <ChevronDown
+                  className={`size-4 text-muted-foreground transition-transform ${importOpen ? "" : "-rotate-90"}`}
+                />
+              </CardTitle>
+              <CardDescription className="mt-1">
+                {importOpen ? (
+                  <>
+                    Columns: <span className="font-medium">Title</span>,{" "}
+                    <span className="font-medium">Keywords</span> (comma-separated — the
+                    first is the focus keyword), <span className="font-medium">Topic</span>,{" "}
+                    <span className="font-medium">Type</span> (blog/social),{" "}
+                    <span className="font-medium">Platforms</span>. Title or Topic is
+                    required per row.
+                  </>
+                ) : (
+                  "Import a year of ideas in one CSV — click to open the form."
+                )}
+              </CardDescription>
+            </div>
+          </button>
         </CardHeader>
+        {importOpen && (
         <CardContent className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-3">
             <div className="space-y-2">
@@ -805,6 +834,7 @@ export default function ContentMapPage() {
             </div>
           )}
         </CardContent>
+        )}
       </Card>
 
       {/* ---- The map ---- */}
@@ -873,8 +903,9 @@ export default function ContentMapPage() {
                   </Button>
                   <Button
                     size="sm"
-                    onClick={runBatch}
+                    onClick={startGenerateAll}
                     disabled={planned.length === 0}
+                    title="Opens the preview first — nothing generates until you confirm there"
                   >
                     <Sparkles className="size-4 mr-1.5" />
                     Generate all ({planned.length})
@@ -1004,7 +1035,7 @@ export default function ContentMapPage() {
                       {item.linked_post_id && (
                         <a
                           href={`/dashboard/posts?post=${item.linked_post_id}`}
-                          className="text-xs text-primary underline hover:no-underline inline-flex items-center gap-1"
+                          className="min-h-11 text-xs text-primary underline hover:no-underline inline-flex items-center gap-1"
                         >
                           <FileText className="size-3" /> View draft
                         </a>
@@ -1012,7 +1043,7 @@ export default function ContentMapPage() {
                       {item.status === "planned" && !batchRunning && (
                         <button
                           onClick={() => batchStart([item.id])}
-                          className="text-xs px-2 py-1 rounded-md border hover:bg-muted inline-flex items-center gap-1"
+                          className="min-h-11 px-3 text-xs rounded-md border hover:bg-muted inline-flex items-center gap-1"
                         >
                           <Sparkles className="size-3" /> Generate
                         </button>
@@ -1020,7 +1051,7 @@ export default function ContentMapPage() {
                       {item.status === "failed" && !batchRunning && (
                         <button
                           onClick={() => batchStart([item.id])}
-                          className="text-xs px-2 py-1 rounded-md border border-red-500/40 text-red-600 dark:text-red-400 hover:bg-red-500/10 inline-flex items-center gap-1"
+                          className="min-h-11 px-3 text-xs rounded-md border border-red-500/40 text-red-600 dark:text-red-400 hover:bg-red-500/10 inline-flex items-center gap-1"
                           title="Run this row again through the gate"
                         >
                           <Sparkles className="size-3" /> Retry
@@ -1029,7 +1060,7 @@ export default function ContentMapPage() {
                       {item.status !== "done" && item.status !== "generating" && (
                         <button
                           onClick={() => toggleEdit(item.id)}
-                          className="text-xs px-2 py-1 rounded-md border hover:bg-muted inline-flex items-center gap-1"
+                          className="min-h-11 px-3 text-xs rounded-md border hover:bg-muted inline-flex items-center gap-1"
                           title="Edit this row's title, topic, and keywords inline"
                         >
                           <Pencil className="size-3" /> {editing[item.id] ? "Close" : "Edit"}
@@ -1037,14 +1068,14 @@ export default function ContentMapPage() {
                       )}
                       <button
                         onClick={() => dismiss(item)}
-                        className="text-xs px-2 py-1 rounded-md border hover:bg-muted"
+                        className="min-h-11 min-w-11 justify-center inline-flex items-center text-xs px-3 rounded-md border hover:bg-muted"
                         title={item.status === "dismissed" ? "Restore" : "Dismiss"}
                       >
                         {item.status === "dismissed" ? "Restore" : "Dismiss"}
                       </button>
                       <button
                         onClick={() => remove(item)}
-                        className="text-xs px-2 py-1 rounded-md border border-red-200 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30"
+                        className="min-h-11 min-w-11 justify-center inline-flex items-center text-xs rounded-md border border-red-200 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30"
                       >
                         <X className="size-3" />
                       </button>
@@ -1103,7 +1134,7 @@ export default function ContentMapPage() {
                       type="datetime-local"
                       value={toDatetimeLocal(item.scheduled_at)}
                       onChange={(e) => scheduleItem(item, e.target.value)}
-                      className="text-[11px] px-1.5 py-0.5 rounded-md border bg-transparent"
+                      className="min-h-11 text-xs px-2 rounded-md border bg-transparent"
                       title="Planned publish date/time (optional — flows to the draft as a suggestion)"
                     />
                     {item.scheduled_at && (
@@ -1143,7 +1174,7 @@ export default function ContentMapPage() {
                         </span>
                         <button
                           onClick={() => cancelHold(item)}
-                          className="px-1.5 py-0.5 rounded border border-blue-400/60 text-blue-700 dark:text-blue-300 hover:bg-blue-500/20"
+                          className="min-h-11 px-3 inline-flex items-center rounded border border-blue-400/60 text-blue-700 dark:text-blue-300 hover:bg-blue-500/20"
                         >
                           Cancel
                         </button>

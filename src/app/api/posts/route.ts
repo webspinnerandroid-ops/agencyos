@@ -13,12 +13,20 @@ export async function GET(request: NextRequest) {
     const startDate = searchParams.get("startDate");
     const endDate = searchParams.get("endDate");
 
+    // PERF: never select the full `content` blob in a list query — blog bodies
+    // are large and the calendar refetches this endpoint on an 8s poll while
+    // items generate. Instead select only the small JSON keys the calendar UI
+    // actually reads (type/title/caption/aeoGeo); the detail modal lazy-loads
+    // the full body from GET /api/posts/[id] when it opens.
     let query = supabase
       .from("posts")
       .select(
         `
         id,
-        content,
+        content->type,
+        content->title,
+        content->caption,
+        content->aeoGeo,
         media_urls,
         scheduled_at,
         status,
@@ -69,7 +77,23 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    return NextResponse.json({ posts: posts ?? [] });
+    // Broken-blog detection without shipping bodies: let Postgres test the
+    // JSON field directly and return only the ids (same criteria as the UI's
+    // old isBrokenBlogPost — a blog whose body is missing or empty).
+    const { data: brokenRows } = await supabase
+      .from("posts")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .eq("content->>type", "blog")
+      .or("content->>body.is.null,content->>body.eq.\"\"");
+    const brokenBlogIds = new Set((brokenRows ?? []).map((r) => r.id));
+
+    return NextResponse.json({
+      posts: (posts ?? []).map((p) => ({
+        ...p,
+        brokenBlog: brokenBlogIds.has(p.id),
+      })),
+    });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Internal server error";

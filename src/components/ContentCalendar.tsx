@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import {
   startOfMonth,
   endOfMonth,
@@ -75,7 +75,14 @@ interface PostPlatform {
 
 export interface CalendarPost {
   id: string;
-  content: string | null;
+  /**
+   * List queries return only the small JSON keys (type/title/caption/aeoGeo),
+   * NOT the full body — the modal lazy-loads the body via /api/posts/[id].
+   * Accepts object or serialized JSON; full bodies may arrive via hydratePost.
+   */
+  content: string | Record<string, unknown> | null;
+  /** True when the server marked this blog as having an empty/missing body. */
+  brokenBlog?: boolean;
   media_urls: string[];
   scheduled_at: string | null;
   status: PostStatus;
@@ -262,19 +269,25 @@ interface AnalyticsSnapshot {
   fetched_at: string;
 }
 
-/** A blog whose body never generated (empty body / legacy placeholder). */
-function isBrokenBlogPost(post: CalendarPost): boolean {
-  if (!post.content) return false;
-  let parsed: Record<string, unknown> | null = null;
+/**
+ * Parses the post's content payload. List responses contain only the small
+ * JSON keys (type/title/caption/aeoGeo); bodies arrive via hydratePost.
+ */
+function parsePostContent(post: CalendarPost): Record<string, unknown> | null {
+  if (!post.content) return null;
   if (typeof post.content === "string") {
     try {
-      parsed = JSON.parse(post.content);
+      return JSON.parse(post.content) as Record<string, unknown>;
     } catch {
-      return false;
+      return null;
     }
-  } else if (typeof post.content === "object") {
-    parsed = post.content as Record<string, unknown>;
   }
+  return (post.content as Record<string, unknown>) ?? null;
+}
+
+/** A blog whose body never generated (empty body / legacy placeholder). */
+function isBrokenBlogPost(post: CalendarPost): boolean {
+  const parsed = parsePostContent(post);
   if (!parsed || parsed.type !== "blog") return false;
   const body = parsed.body;
   return typeof body !== "string" || body.trim().length === 0;
@@ -282,17 +295,7 @@ function isBrokenBlogPost(post: CalendarPost): boolean {
 
 /** True when the post is a generated blog (rewriteable via Cheryl's pipeline). */
 function isBlogPost(post: CalendarPost): boolean {
-  if (!post.content) return false;
-  let parsed: Record<string, unknown> | null = null;
-  if (typeof post.content === "string") {
-    try {
-      parsed = JSON.parse(post.content);
-    } catch {
-      return false;
-    }
-  } else if (typeof post.content === "object") {
-    parsed = post.content as Record<string, unknown>;
-  }
+  const parsed = parsePostContent(post);
   return parsed?.type === "blog";
 }
 
@@ -383,6 +386,73 @@ export default function ContentCalendar({
   const [rewriteFeedback, setRewriteFeedback] = useState("");
   const [retrying, setRetrying] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
+
+  // ---- Lazy body hydration (P0 calendar perf) ----
+  // List queries ship only the small JSON keys (type/title/caption/aeoGeo);
+  // the full blog body loads once, when the detail modal opens. Loaded bodies
+  // are cached per post id so re-opening is instant and the 8s poll never
+  // refetches them.
+  const [hydratedBodies, setHydratedBodies] = useState<
+    Record<string, Record<string, unknown>>
+  >({});
+  const [bodyError, setBodyError] = useState<string | null>(null);
+  const [bodyRetryNonce, setBodyRetryNonce] = useState(0);
+  const fetchedBodiesRef = useRef<Set<string>>(new Set());
+
+  // Content passed to the modal: small keys from the list + hydrated body.
+  const modalContent = useMemo<Record<string, unknown> | null>(() => {
+    if (!selectedPost) return null;
+    const base = parsePostContent(selectedPost) ?? {};
+    const extra = hydratedBodies[selectedPost.id];
+    return extra ? { ...base, ...extra } : base;
+  }, [selectedPost, hydratedBodies]);
+
+  // The modal still awaits a body: a blog whose (merged) content has no body
+  // string yet. Drives the skeleton independent of fetch-state timing.
+  const modalNeedsBody = useMemo(() => {
+    const c = modalContent;
+    return !!c && c.type === "blog" && typeof c.body !== "string";
+  }, [modalContent]);
+
+  useEffect(() => {
+    setBodyError(null);
+    if (!selectedPost?.id) return;
+    const id = selectedPost.id;
+    const parsed = parsePostContent(selectedPost);
+    const needsBody =
+      parsed?.type === "blog" && typeof parsed.body !== "string";
+    if (!needsBody || fetchedBodiesRef.current.has(id)) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/posts/${id}`, { credentials: "include" });
+        if (!res.ok) throw new Error(`Failed to load content (${res.status})`);
+        const data = await res.json();
+        if (cancelled) return;
+        fetchedBodiesRef.current.add(id);
+        const content =
+          data?.post?.content != null && typeof data.post.content === "object"
+            ? (data.post.content as Record<string, unknown>)
+            : typeof data?.post?.content === "string"
+              ? (JSON.parse(data.post.content) as Record<string, unknown>)
+              : {};
+        setHydratedBodies((prev) => ({ ...prev, [id]: content }));
+      } catch (err) {
+        if (!cancelled)
+          setBodyError(
+            err instanceof Error ? err.message : "Failed to load content"
+          );
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedPost?.id, selectedPost?.content, bodyRetryNonce]);
+
+  const retryBodyLoad = useCallback(
+    () => setBodyRetryNonce((n) => n + 1),
+    []
+  );
 
   // Retry a failed publish — targets the platform of the last failed attempt
   // so the user can see the exact error and try again without leaving the page.
@@ -1013,11 +1083,35 @@ export default function ContentCalendar({
                   </div>
                 )}
 
-                {/* Content — blog bodies render as markdown so images display */}
+                {/* Content — blog bodies render as markdown so images display.
+                    The body lazy-loads (skeleton) when the modal opens; list
+                    queries stay slim so the calendar stays fast. */}
                 <div>
                   <h4 className="text-sm font-medium mb-1">Content</h4>
                   <div className="text-sm text-muted-foreground bg-muted/50 rounded-md p-3 max-h-48 overflow-y-auto">
-                    <PostContent content={selectedPost.content} />
+                    {bodyError ? (
+                      <div className="text-destructive text-xs">
+                        {bodyError}{" "}
+                        <button
+                          type="button"
+                          className="underline"
+                          onClick={retryBodyLoad}
+                        >
+                          Retry
+                        </button>
+                      </div>
+                    ) : modalNeedsBody ? (
+                      <div className="space-y-2 animate-pulse" aria-label="Loading content">
+                        <div className="h-3.5 bg-muted rounded w-1/2" />
+                        <div className="h-3 bg-muted rounded w-full" />
+                        <div className="h-3 bg-muted rounded w-11/12" />
+                        <div className="h-3 bg-muted rounded w-10/12" />
+                        <div className="h-3 bg-muted rounded w-9/12" />
+                        <div className="h-3 bg-muted rounded w-2/3" />
+                      </div>
+                    ) : (
+                      <PostContent content={modalContent} />
+                    )}
                   </div>
                 </div>
 
@@ -1372,7 +1466,7 @@ export default function ContentCalendar({
               </>
             )}
             {selectedPost?.status === "draft" &&
-              isBrokenBlogPost(selectedPost) && (
+              (selectedPost.brokenBlog ?? isBrokenBlogPost(selectedPost)) && (
                 <Button
                   variant="outline"
                   onClick={() => void regeneratePost()}

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantId, requireRole } from "@/lib/auth";
 import { uploadStoredFile } from "@/lib/media/storage";
+import { safeFormData, unsupportedMediaResponse, internalErrorResponse } from "@/lib/api-http";
 
 /**
  * POST /api/cms/upload — multipart image upload for the page builder.
@@ -16,7 +17,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Authentication required" }, { status: 401 });
     }
 
-    const form = await request.formData();
+    const form = await safeFormData(request);
+    if (!form) return unsupportedMediaResponse();
     const file = form.get("file");
     if (!(file instanceof File)) {
       return NextResponse.json({ error: "file is required" }, { status: 400 });
@@ -36,6 +38,6 @@ export async function POST(request: NextRequest) {
     }
     return NextResponse.json({ url, alt: file.name.replace(/\.[^.]+$/, "") });
   } catch (err: any) {
-    return NextResponse.json({ error: err?.message ?? "Internal error" }, { status: 500 });
+    return internalErrorResponse(err, "cms/upload");
   }
 }

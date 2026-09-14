@@ -125,3 +125,70 @@ jobs:
       - name: Skip notice (Supabase secrets not configured)
         if: env.SUPABASE_SERVICE_ROLE_KEY == ''
         run: echo "Asset-integrity check skipped — set SUPABASE_SERVICE_ROLE_KEY and NEXT_PUBLIC_SUPABASE_URL (vars/secrets) in repo settings to enable it."
+
+  # ────────────────────────────────────────────────────────────────
+  # 5. E2E technical & security audit (Playwright)
+  #    Drives core flows in a real browser, captures 4xx/5xx +
+  #    console/page errors, probes BOLA across endpoints, and races
+  #    the batch API. Findings land in tests/e2e/audit-findings.json
+  #    (uploaded as an artifact on every run). Authed suites self-skip
+  #    when dev login is unavailable, so the job stays green on PRs
+  #    from forks — the anonymous/security coverage always runs.
+  # ────────────────────────────────────────────────────────────────
+  e2e-audit:
+    name: E2E audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Start dev server
+        env:
+          # Real values are wired as GitHub Actions vars/secrets (repo settings).
+          NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          NEXT_PUBLIC_SITE_URL: ${{ vars.NEXT_PUBLIC_SITE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          ALLOW_DEV_LOGIN=true PORT=3100 nohup npm run dev -- --port 3100 > /tmp/next-dev.log 2>&1 &
+          for i in $(seq 1 60); do
+            if curl -sf -o /dev/null http://localhost:3100/api/version; then
+              echo "dev server up after ${i}s"; break
+            fi
+            sleep 1
+          done
+          curl -sf -o /dev/null http://localhost:3100/api/version || (tail -50 /tmp/next-dev.log && exit 1)
+
+      - name: Run audit suite
+        env:
+          ALLOW_DEV_LOGIN: "true"
+          AUDIT_BASE_URL: http://localhost:3100
+          NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          NEXT_PUBLIC_SITE_URL: ${{ vars.NEXT_PUBLIC_SITE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: npx playwright test
+
+      - name: Upload audit findings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: audit-findings
+          path: |
+            tests/e2e/audit-findings.json
+            test-results/
+          retention-days: 14
+          if-no-files-found: ignore

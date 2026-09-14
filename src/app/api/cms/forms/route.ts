@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase/server";
 import { sendEmail } from "@/lib/notifications";
+import { safeFormData, unsupportedMediaResponse, internalErrorResponse } from "@/lib/api-http";
 
 /**
  * POST /api/cms/forms
@@ -10,7 +11,8 @@ import { sendEmail } from "@/lib/notifications";
  */
 export async function POST(request: NextRequest) {
   try {
-    const form = await request.formData();
+    const form = await safeFormData(request);
+    if (!form) return unsupportedMediaResponse();
     const pageId = String(form.get("page_id") ?? "");
     const blockId = String(form.get("block_id") ?? "");
 
@@ -82,9 +84,6 @@ export async function POST(request: NextRequest) {
         : "Thank you — your submission has been received.",
     });
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Internal error" },
-      { status: 500 }
-    );
+    return internalErrorResponse(error, "cms/forms");
   }
 }

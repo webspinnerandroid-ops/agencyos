@@ -380,25 +380,22 @@ export default function CalendarPage() {
         </div>
       )}
 
-      {loading && posts.length === 0 ? (
-        <div className="flex items-center justify-center py-24 text-muted-foreground">
-          <div className="animate-spin rounded-full size-8 border-2 border-primary border-t-transparent mr-3" />
-          Loading posts…
-        </div>
-      ) : (
-        <ContentCalendar
-          posts={posts}
-          proposedItems={proposedItems}
-          clients={clients}
-          selectedClientId={selectedClientId}
-          selectedStatuses={selectedStatuses}
-          onClientChange={setSelectedClientId}
-          onStatusesChange={setSelectedStatuses}
-          onPostUpdate={handlePostUpdate}
-          onApproveProposed={handleApproveProposed}
-          onRefresh={handleRefresh}
-        />
-      )}
+      {/* Skeleton staging: always render the real calendar — during the
+          first load the grid shows skeleton pills per day (see the
+          component) instead of a blank spinner screen. */}
+      <ContentCalendar
+        posts={posts}
+        proposedItems={proposedItems}
+        clients={clients}
+        selectedClientId={selectedClientId}
+        selectedStatuses={selectedStatuses}
+        onClientChange={setSelectedClientId}
+        onStatusesChange={setSelectedStatuses}
+        onPostUpdate={handlePostUpdate}
+        onApproveProposed={handleApproveProposed}
+        onRefresh={handleRefresh}
+        loadingFirst={loading && posts.length === 0}
+      />
     </div>
   );
 }

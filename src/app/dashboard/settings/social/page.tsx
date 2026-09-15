@@ -20,7 +20,7 @@ import {
   Send,
 } from "lucide-react";
 
-import type { SocialAccount, OAuthConfigStatus, MakeRelayStatus } from "./actions";
+import type { SocialAccount, OAuthConfigStatus, MakeRelayStatus, ClientRelayStatus } from "./actions";
 import {
   checkOAuthConfig,
   getSupportedPlatforms,
@@ -34,6 +34,10 @@ import {
   saveMakeRelayUrl,
   toggleMakeRelay,
   testMakeRelay,
+  getClientRelayStatuses,
+  saveClientRelay,
+  toggleClientRelay,
+  removeClientRelay,
 } from "./actions";
 import {
   Dialog,
@@ -124,6 +128,65 @@ export default function SocialAccountsPage() {
   }, [loadData]);
 
   const connectedPlatforms = new Set(accounts.map((a) => a.platform));
+
+  // ---- Per-client relay overrides (migration 114) ------------------------
+  const [clientRelays, setClientRelays] = useState<ClientRelayStatus[]>([]);
+  const [clientRelayUrl, setClientRelayUrl] = useState<Record<string, string>>({});
+  const [clientRelayBusy, setClientRelayBusy] = useState<string | null>(null);
+
+  const loadClientRelays = useCallback(async () => {
+    const res = await getClientRelayStatuses();
+    if (res.success && res.data) setClientRelays(res.data);
+  }, []);
+
+  useEffect(() => {
+    loadClientRelays();
+  }, [loadClientRelays]);
+
+  const handleClientRelaySave = async (clientId: string) => {
+    setClientRelayBusy(clientId);
+    setFeedback(null);
+    const res = await saveClientRelay(clientId, (clientRelayUrl[clientId] ?? "").trim());
+    if (res.success) {
+      setFeedback({ type: "success", message: "Client webhook saved — client posts will use this scenario first." });
+      setClientRelayUrl((prev) => ({ ...prev, [clientId]: "" }));
+      await loadClientRelays();
+    } else {
+      setFeedback({ type: "error", message: res.error ?? "Failed to save the client webhook" });
+    }
+    setClientRelayBusy(null);
+  };
+
+  const handleClientRelayToggle = async (clientId: string, enabled: boolean) => {
+    setClientRelayBusy(clientId);
+    await toggleClientRelay(clientId, enabled);
+    await loadClientRelays();
+    setClientRelayBusy(null);
+  };
+
+  const handleClientRelayRemove = async (clientId: string) => {
+    setClientRelayBusy(clientId);
+    await removeClientRelay(clientId);
+    await loadClientRelays();
+    setClientRelayBusy(null);
+  };
+
+  const handleClientRelayTest = async (clientId: string) => {
+    setClientRelayBusy(clientId);
+    setFeedback(null);
+    const res = await testMakeRelay(clientId);
+    if (res.success && res.data) {
+      setFeedback(
+        res.data.ok
+          ? { type: "success", message: "Test delivered to the client's webhook — check Make's history." }
+          : { type: "error", message: `Test failed: ${res.data.error ?? "webhook did not accept the payload"}` }
+      );
+    } else {
+      setFeedback({ type: "error", message: res.error ?? "Test failed" });
+    }
+    await loadClientRelays();
+    setClientRelayBusy(null);
+  };
 
   const handleRelaySave = async () => {
     setRelayBusy("save");
@@ -332,6 +395,80 @@ export default function SocialAccountsPage() {
             shown only as its last 8 characters. X (Twitter) and YouTube keep using their direct connections regardless of
             this setting.
           </p>
+
+          {/* ---- Per-client webhook overrides ---- */}
+          {clientRelays.length > 0 && (
+            <div className="pt-2 border-t">
+              <p className="text-sm font-medium mb-1">Per-client webhooks (optional)</p>
+              <p className="text-xs text-muted-foreground mb-3">
+                Give a client its own Make scenario — its posts go to that webhook first, and everything else falls back
+                to the tenant-wide URL above. Each payload carries the clientId, so one shared scenario can also route by
+                client (see docs/make-com-multi-client.md).
+              </p>
+              <div className="space-y-2">
+                {clientRelays.map((cr) => (
+                  <div key={cr.clientId} className="rounded-md border p-2.5 space-y-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-medium">{cr.clientName}</span>
+                      {cr.configured && (
+                        <Badge
+                          className={`text-[10px] ${cr.enabled ? "bg-green-100 text-green-700 dark:bg-green-950 dark:text-green-300" : "bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300"}`}
+                        >
+                          {cr.enabled ? "own webhook" : "paused"}
+                        </Badge>
+                      )}
+                      {cr.configured ? (
+                        <>
+                          <code className="text-xs bg-muted px-2 py-0.5 rounded">{cr.urlHint}</code>
+                          {cr.lastTestAt && (
+                            <span className="text-xs text-muted-foreground">
+                              Last test {new Date(cr.lastTestAt).toLocaleString()}
+                              {cr.lastTestOk === false ? " — failed" : " — ok"}
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">uses the tenant-wide webhook</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Input
+                        type="url"
+                        placeholder="https://hook.eu2.make.com/…"
+                        value={clientRelayUrl[cr.clientId] ?? ""}
+                        onChange={(e) =>
+                          setClientRelayUrl((prev) => ({ ...prev, [cr.clientId]: e.target.value }))
+                        }
+                        className="max-w-sm h-8 text-xs"
+                      />
+                      <Button
+                        size="sm"
+                        className="h-8"
+                        onClick={() => handleClientRelaySave(cr.clientId)}
+                        disabled={clientRelayBusy !== null || (clientRelayUrl[cr.clientId] ?? "").trim().length === 0}
+                      >
+                        {clientRelayBusy === cr.clientId ? <Loader2 className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
+                        Save
+                      </Button>
+                      {cr.configured && (
+                        <>
+                          <Button variant="outline" size="sm" className="h-8" onClick={() => handleClientRelayTest(cr.clientId)} disabled={clientRelayBusy !== null}>
+                            <Send className="size-3.5" /> Test
+                          </Button>
+                          <Button variant="outline" size="sm" className="h-8" onClick={() => handleClientRelayToggle(cr.clientId, !cr.enabled)} disabled={clientRelayBusy !== null}>
+                            {cr.enabled ? "Pause" : "Enable"}
+                          </Button>
+                          <Button variant="ghost" size="sm" className="h-8 text-destructive" onClick={() => handleClientRelayRemove(cr.clientId)} disabled={clientRelayBusy !== null}>
+                            <Trash2 className="size-3.5" />
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 

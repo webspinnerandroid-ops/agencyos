@@ -162,6 +162,10 @@ jobs:
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
           NEXT_PUBLIC_SITE_URL: ${{ vars.NEXT_PUBLIC_SITE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # The login page renders the Dev sign-in button only when this is
+          # "true" (inlined at build time — it must be set for the dev server
+          # process, not just the test step).
+          NEXT_PUBLIC_DEV_LOGIN: "true"
         run: |
           ALLOW_DEV_LOGIN=true PORT=3100 nohup npm run dev -- --port 3100 > /tmp/next-dev.log 2>&1 &
           for i in $(seq 1 60); do
@@ -175,6 +179,7 @@ jobs:
       - name: Run audit suite
         env:
           ALLOW_DEV_LOGIN: "true"
+          NEXT_PUBLIC_DEV_LOGIN: "true"
           AUDIT_BASE_URL: http://localhost:3100
           NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}

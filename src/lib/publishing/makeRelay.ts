@@ -18,13 +18,19 @@
  *                                      // (Make "Sleep" module or scheduler)
  *     postPlatformId: string,          // post_platforms.id — echo it back or
  *                                      // match in Make's history for tracing
- *     tenantId:       string           // tracing only
+ *     tenantId:       string,          // tracing only
+ *     clientId:       string | null,   // WHICH client the post is for — the
+ *                                      // scenario's Router filters on this
+ *                                      // to hit that client's accounts
+ *     clientName:     string | null    // human-readable, for Make history
  *   }
  *
  * Config lives in make_relay_config (one row per tenant, webhook URL
- * encrypted at rest with the same scheme as tenant API keys). No URL or
- * disabled relay → publishRelay() returns a clean skip so callers fall
- * back to the direct platform publisher without any special casing.
+ * encrypted at rest with the same scheme as tenant API keys), with optional
+ * per-client overrides in make_relay_client_overrides (migration 114):
+ * resolution order is client override → tenant-wide URL. No URL or disabled
+ * relay → publishRelay() returns a clean skip so callers fall back to the
+ * direct platform publisher without any special casing.
  */
 import { createClient } from "@supabase/supabase-js";
 import { fetchWithTimeout } from "@/lib/fetch-with-timeout";
@@ -47,6 +53,10 @@ export interface RelayPayload {
   scheduledAt: string | null;
   postPlatformId: string;
   tenantId: string;
+  /** The client this post belongs to — Make scenarios route on it. */
+  clientId: string | null;
+  /** Human-readable client name for Make's history / filter display. */
+  clientName: string | null;
 }
 
 export interface RelayConfig {
@@ -114,8 +124,27 @@ export async function getRelayConfig(
 
 /** Resolve the tenant's decrypted webhook URL, or null when unset/disabled. */
 export async function getRelayWebhookUrl(
-  tenantId: string
+  tenantId: string,
+  clientId?: string | null
 ): Promise<string | null> {
+  // Per-client override wins (migration 114) — one Make scenario per client
+  // is the cleanest isolation. Disabled or unset override → tenant-wide URL.
+  if (clientId) {
+    const supabase = createServiceSupabase();
+    const { data: override } = await supabase
+      .from("make_relay_client_overrides")
+      .select("encrypted_url, enabled")
+      .eq("tenant_id", tenantId)
+      .eq("client_id", clientId)
+      .maybeSingle();
+    if (override?.encrypted_url && override.enabled !== false) {
+      const stored = String(override.encrypted_url).replace(/^\\x/, "");
+      const url = await decryptUrl(stored);
+      if (url) return url;
+      // Undecryptable override — fall through to the tenant-wide URL rather
+      // than silently dropping the delivery.
+    }
+  }
   const supabase = createServiceSupabase();
   const { data } = await supabase
     .from("make_relay_config")
@@ -213,6 +242,121 @@ export async function recordRelayTest(
     .eq("tenant_id", tenantId);
 }
 
+// ------------------------------------------------------------------
+// Per-client overrides (migration 114)
+// ------------------------------------------------------------------
+
+export interface ClientRelayOverride {
+  clientId: string;
+  enabled: boolean;
+  urlHint: string | null;
+  lastTestAt: string | null;
+  lastTestOk: boolean | null;
+  lastTestError: string | null;
+}
+
+/** All per-client overrides for a tenant (display hints only, no decrypt). */
+export async function getClientRelayOverrides(
+  tenantId: string
+): Promise<ClientRelayOverride[]> {
+  const supabase = createServiceSupabase();
+  const { data } = await supabase
+    .from("make_relay_client_overrides")
+    .select(
+      "client_id, enabled, url_hint, last_test_at, last_test_ok, last_test_error"
+    )
+    .eq("tenant_id", tenantId);
+  return (data ?? []).map((r) => ({
+    clientId: r.client_id,
+    enabled: r.enabled,
+    urlHint: r.url_hint ?? null,
+    lastTestAt: r.last_test_at ?? null,
+    lastTestOk: r.last_test_ok ?? null,
+    lastTestError: r.last_test_error ?? null,
+  }));
+}
+
+/** Encrypt + upsert one client's webhook URL (the Settings save action). */
+export async function saveClientRelayUrl(
+  tenantId: string,
+  clientId: string,
+  rawUrl: string
+): Promise<{ ok: boolean; error?: string; urlHint?: string }> {
+  const url = rawUrl.trim();
+  if (!isValidRelayUrl(url)) {
+    return {
+      ok: false,
+      error:
+        "That doesn't look like a Make.com webhook URL (expected https://hook…make.com/…).",
+    };
+  }
+  const supabase = createServiceSupabase();
+  const { encrypt } = await import("@/lib/encryption");
+  const { error } = await supabase
+    .from("make_relay_client_overrides")
+    .upsert(
+      {
+        tenant_id: tenantId,
+        client_id: clientId,
+        encrypted_url: encrypt(url),
+        url_hint: "…" + url.slice(-8),
+        enabled: true,
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "tenant_id,client_id" }
+    );
+  if (error) return { ok: false, error: error.message };
+  return { ok: true, urlHint: "…" + url.slice(-8) };
+}
+
+/** Soft-disable/enable one client's override without deleting the URL. */
+export async function setClientRelayEnabled(
+  tenantId: string,
+  clientId: string,
+  enabled: boolean
+): Promise<{ ok: boolean; error?: string }> {
+  const supabase = createServiceSupabase();
+  const { error } = await supabase
+    .from("make_relay_client_overrides")
+    .update({ enabled, updated_at: new Date().toISOString() })
+    .eq("tenant_id", tenantId)
+    .eq("client_id", clientId);
+  return error ? { ok: false, error: error.message } : { ok: true };
+}
+
+/** Delete one client's override — deliveries fall back to the tenant URL. */
+export async function removeClientRelayUrl(
+  tenantId: string,
+  clientId: string
+): Promise<{ ok: boolean; error?: string }> {
+  const supabase = createServiceSupabase();
+  const { error } = await supabase
+    .from("make_relay_client_overrides")
+    .delete()
+    .eq("tenant_id", tenantId)
+    .eq("client_id", clientId);
+  return error ? { ok: false, error: error.message } : { ok: true };
+}
+
+/** Record a per-override test-send outcome. */
+export async function recordClientRelayTest(
+  tenantId: string,
+  clientId: string,
+  ok: boolean,
+  error?: string
+): Promise<void> {
+  const supabase = createServiceSupabase();
+  await supabase
+    .from("make_relay_client_overrides")
+    .update({
+      last_test_at: new Date().toISOString(),
+      last_test_ok: ok,
+      last_test_error: error ?? null,
+    })
+    .eq("tenant_id", tenantId)
+    .eq("client_id", clientId);
+}
+
 /**
  * Deliver one platform payload to the tenant's Make webhook.
  * Returns a PublishResult-compatible shape. A missing/disabled config is a
@@ -226,7 +370,8 @@ export async function publishViaRelay(
   platformPostUrl?: string;
   errorMessage?: string;
 }> {
-  const url = await getRelayWebhookUrl(payload.tenantId);
+  // Client override first, then the tenant-wide URL.
+  const url = await getRelayWebhookUrl(payload.tenantId, payload.clientId);
   if (!url) {
     return { status: "skipped", errorMessage: "Make relay not configured" };
   }

@@ -13,6 +13,11 @@ import {
   publishViaRelay,
   recordRelayTest,
   isValidRelayUrl,
+  getClientRelayOverrides,
+  saveClientRelayUrl,
+  setClientRelayEnabled,
+  removeClientRelayUrl,
+  recordClientRelayTest,
 } from "@/lib/publishing/makeRelay";
 
 // ------------------------------------------------------------------
@@ -204,12 +209,25 @@ export async function toggleMakeRelay(
 /**
  * Send a harmless test payload to the configured webhook so the tenant can
  * verify their Make scenario end to end (Make's history shows the run).
+ * With a clientId, tests that CLIENT's override webhook; without, the
+ * tenant-wide one.
  */
-export async function testMakeRelay(): Promise<
-  ActionResponse<{ ok: boolean; error?: string }>
-> {
+export async function testMakeRelay(
+  clientId?: string
+): Promise<ActionResponse<{ ok: boolean; error?: string }>> {
   try {
     const tenantId = await getTenantId();
+    let clientName: string | null = null;
+    if (clientId) {
+      const supabase = await createServiceClient();
+      const { data: client } = await supabase
+        .from("clients")
+        .select("name")
+        .eq("id", clientId)
+        .eq("tenant_id", tenantId)
+        .maybeSingle();
+      clientName = client?.name ?? null;
+    }
     const res = await publishViaRelay({
       platform: "test",
       caption:
@@ -218,12 +236,127 @@ export async function testMakeRelay(): Promise<
       scheduledAt: null,
       postPlatformId: "relay-test",
       tenantId,
+      clientId: clientId ?? null,
+      clientName,
     });
     const ok = res.status === "published";
     const error = res.status === "failed" ? res.errorMessage : undefined;
-    await recordRelayTest(tenantId, ok, error);
+    if (clientId) {
+      await recordClientRelayTest(tenantId, clientId, ok, error);
+    } else {
+      await recordRelayTest(tenantId, ok, error);
+    }
     revalidatePath("/dashboard/settings/social");
     return { success: true, data: { ok, error } };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+// ------------------------------------------------------------------
+// Per-client Make relay overrides (migration 114)
+// ------------------------------------------------------------------
+
+export interface ClientRelayStatus {
+  clientId: string;
+  clientName: string;
+  configured: boolean;
+  enabled: boolean;
+  urlHint: string | null;
+  lastTestAt: string | null;
+  lastTestOk: boolean | null;
+  lastTestError: string | null;
+}
+
+/** Every client in the tenant joined with its relay override (if any). */
+export async function getClientRelayStatuses(): Promise<
+  ActionResponse<ClientRelayStatus[]>
+> {
+  try {
+    const tenantId = await getTenantId();
+    const supabase = await createServiceClient();
+    const [{ data: clients }, overrides] = await Promise.all([
+      supabase
+        .from("clients")
+        .select("id, name")
+        .eq("tenant_id", tenantId)
+        .order("name"),
+      getClientRelayOverrides(tenantId),
+    ]);
+    const byClient = new Map(overrides.map((o) => [o.clientId, o]));
+    return {
+      success: true,
+      data: (clients ?? []).map((c) => {
+        const o = byClient.get(c.id);
+        return {
+          clientId: c.id,
+          clientName: c.name,
+          configured: !!o,
+          enabled: o?.enabled ?? false,
+          urlHint: o?.urlHint ?? null,
+          lastTestAt: o?.lastTestAt ?? null,
+          lastTestOk: o?.lastTestOk ?? null,
+          lastTestError: o?.lastTestError ?? null,
+        };
+      }),
+    };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+/** Save (or replace) one client's relay webhook URL. */
+export async function saveClientRelay(
+  clientId: string,
+  rawUrl: string
+): Promise<ActionResponse<{ urlHint: string }>> {
+  try {
+    const tenantId = await getTenantId();
+    // Ownership check: the client must belong to this tenant.
+    const supabase = await createServiceClient();
+    const { data: client } = await supabase
+      .from("clients")
+      .select("id")
+      .eq("id", clientId)
+      .eq("tenant_id", tenantId)
+      .maybeSingle();
+    if (!client) {
+      return { success: false, error: "Client not found in this workspace." };
+    }
+    const r = await saveClientRelayUrl(tenantId, clientId, rawUrl);
+    if (!r.ok) return { success: false, error: r.error };
+    revalidatePath("/dashboard/settings/social");
+    return { success: true, data: { urlHint: r.urlHint ?? "" } };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+/** Enable/disable or remove one client's relay override. */
+export async function toggleClientRelay(
+  clientId: string,
+  enabled: boolean
+): Promise<ActionResponse> {
+  try {
+    const tenantId = await getTenantId();
+    const r = await setClientRelayEnabled(tenantId, clientId, enabled);
+    if (!r.ok) return { success: false, error: r.error };
+    revalidatePath("/dashboard/settings/social");
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: (err as Error).message };
+  }
+}
+
+export async function removeClientRelay(
+  clientId: string
+): Promise<ActionResponse> {
+  try {
+    const tenantId = await getTenantId();
+    const r = await removeClientRelayUrl(tenantId, clientId);
+    if (!r.ok) return { success: false, error: r.error };
+    revalidatePath("/dashboard/settings/social");
+    return { success: true };
   } catch (err) {
     return { success: false, error: (err as Error).message };
   }

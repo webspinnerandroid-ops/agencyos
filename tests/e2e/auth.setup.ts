@@ -91,6 +91,11 @@ setup("authenticate once", async ({ page }) => {
       "test-results/.audit-auth-missing.json",
       JSON.stringify({ authenticated: false, savedAt: new Date().toISOString() })
     );
+    // ALWAYS write the storage-state file: the chromium project declares it
+    // as its storageState, and a missing file hard-crashes EVERY test in
+    // the project (ENOENT) — including the public ones. An empty state is
+    // a normal anonymous session; authed suites self-skip via the marker.
+    fs.writeFileSync(STORAGE_FILE, JSON.stringify({ cookies: [], origins: [] }));
     console.log("[audit-setup] could not authenticate — authed suites will skip");
   }
 });

@@ -29,6 +29,10 @@ export interface PublishTarget {
   mediaUrls: string[];
   tenantId?: string; // needed for the Make relay path
   scheduledAt?: string | null; // requested publish time (relay holds via Make)
+  // Client identity for the Make relay payload — per-client Make scenarios
+  // route on clientId; clientName labels runs in Make's history.
+  clientId?: string | null;
+  clientName?: string | null;
 }
 
 export interface PublishResult {
@@ -108,6 +112,8 @@ async function publishToPlatform(
       scheduledAt: target.scheduledAt ?? null,
       postPlatformId: target.postPlatformId,
       tenantId: target.tenantId ?? "",
+      clientId: target.clientId ?? null,
+      clientName: target.clientName ?? null,
     });
     if (relay.status === "published") {
       return {
@@ -227,6 +233,8 @@ export async function publishPost(
       media_urls,
       scheduled_at,
       tenant_id,
+      client_id,
+      clients ( name ),
       post_platforms (
         id,
         social_account_id,
@@ -295,6 +303,13 @@ export async function publishPost(
       mediaUrls: post.media_urls ?? [],
       tenantId,
       scheduledAt: post.scheduled_at ?? null,
+      clientId: post.client_id ?? null,
+      clientName:
+        (post.clients as { name: string } | { name: string }[] | null | undefined) !== null
+          ? Array.isArray(post.clients)
+            ? (post.clients as { name: string }[])[0]?.name ?? null
+            : (post.clients as { name: string }).name ?? null
+          : null,
     });
 
     const result: PublishResult = {

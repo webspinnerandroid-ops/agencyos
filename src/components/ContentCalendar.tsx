@@ -353,6 +353,13 @@ interface ContentCalendarProps {
   ) => Promise<void>;
   onApproveProposed: (item: ProposedItem, mediaKind: "image" | "video") => Promise<void>;
   onRefresh: () => void;
+  /**
+   * First load: posts haven't arrived yet. The real calendar grid still
+   * renders (same month, same layout) with skeleton pills in every day
+   * cell, so switching months and the overall frame feel instant instead
+   * of staring at a spinner.
+   */
+  loadingFirst?: boolean;
 }
 
 export default function ContentCalendar({
@@ -366,6 +373,7 @@ export default function ContentCalendar({
   onPostUpdate,
   onApproveProposed,
   onRefresh,
+  loadingFirst = false,
 }: ContentCalendarProps) {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedPost, setSelectedPost] = useState<CalendarPost | null>(null);
@@ -890,8 +898,11 @@ export default function ContentCalendar({
         <div className="grid grid-cols-7 border-l border-t">
             {days.map((day) => {
               const dateKey = format(day, "yyyy-MM-dd");
-              const dayPosts = postsByDay.get(dateKey) ?? [];
-              const dayProposed = proposedByDay.get(dateKey) ?? [];
+              // Skeleton staging: during the FIRST load the real grid renders
+              // (same month/layout) with placeholder pills per day, so the
+              // frame is up instantly and month switches stay client-side.
+              const dayPosts = loadingFirst ? [] : (postsByDay.get(dateKey) ?? []);
+              const dayProposed = loadingFirst ? [] : (proposedByDay.get(dateKey) ?? []);
               const isCurrentMonth = isSameMonth(day, currentMonth);
               const isToday = isSameDay(day, new Date());
 
@@ -915,6 +926,20 @@ export default function ContentCalendar({
                   </span>
 
                   <div className="space-y-0.5">
+                    {/* Skeleton pills while the first fetch is in flight —
+                        the grid frame is already on screen, so these just
+                        fill the empty cells until real posts arrive. */}
+                    {loadingFirst &&
+                      [0, 1].map((i) => (
+                        <div
+                          key={`skeleton-${i}`}
+                          aria-hidden="true"
+                          className="bg-muted animate-pulse rounded-md px-2 py-1.5"
+                        >
+                          <div className="h-2 w-3/4 rounded bg-muted-foreground/20" />
+                          <div className="mt-1 h-2 w-1/2 rounded bg-muted-foreground/10" />
+                        </div>
+                      ))}
                     {dayPosts.map((post) => {
                       const platforms = getPlatformsForPost(post);
                       return (

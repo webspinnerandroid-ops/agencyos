@@ -162,6 +162,8 @@ jobs:
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
           NEXT_PUBLIC_SITE_URL: ${{ vars.NEXT_PUBLIC_SITE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          # The owner account whose Supabase magic link dev-login mints.
+          DEV_ADMIN_EMAIL: ${{ secrets.DEV_ADMIN_EMAIL }}
           # The login page renders the Dev sign-in button only when this is
           # "true" (inlined at build time — it must be set for the dev server
           # process, not just the test step).
@@ -180,6 +182,7 @@ jobs:
         env:
           ALLOW_DEV_LOGIN: "true"
           NEXT_PUBLIC_DEV_LOGIN: "true"
+          DEV_ADMIN_EMAIL: ${{ secrets.DEV_ADMIN_EMAIL }}
           AUDIT_BASE_URL: http://localhost:3100
           NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
           NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}

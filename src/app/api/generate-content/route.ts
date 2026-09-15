@@ -396,6 +396,7 @@ export async function POST(request: NextRequest) {
       imageCount = MAX_BLOG_IMAGES,
       imageAuto,
       socialOnly,
+      fiction,
       uploadedImages,
       schemaTypes = "auto",
       // Preferred external sources (optional — empty means none provided).
@@ -522,6 +523,168 @@ export async function POST(request: NextRequest) {
       if (!plan.allowed) {
         return NextResponse.json({ error: plan.reason ?? "Monthly social-post limit reached" }, { status: 429 });
       }
+    }
+
+    // ------------------------------------------------------------------
+    // 2.35. Fiction mode — creative stories, gate SKIPPED (explicit opt-in)
+    // ------------------------------------------------------------------
+    // The Content Map defaults every row to the full SEO/AEO/GEO score gate;
+    // `fiction` is a per-row override (row selector or CSV Mode column) for
+    // fun/creative stories where keyword scoring and answer-engine readiness
+    // don't apply. Everything else is identical to the scored pipeline —
+    // brand voice, research, images, social captions, persistence, usage
+    // metering — the draft just skips scoring, the gate loop, internal/
+    // external linking, and SEO schema/meta, and saves with mode: "fiction"
+    // (no aeoGeo key → aeo_geo_score stays NULL via the migration-100
+    // trigger).
+    if (fiction) {
+      const fictionSystem =
+        `You are a creative fiction writer. Write an engaging, original story-style blog post.
+Story premise: "${workingTopic}".${title ? ` The story's title is: "${title}".` : ""}${
+          brandVoice ? ` Write in this voice: ${brandVoice}.` : ""
+        }
+Creative-fiction rules (this post is explicitly EXEMPT from SEO/AEO/GEO optimization):
+- NO keyword stuffing or SEO phrasing — write like a human storyteller.
+- NO internal/external links, NO meta description, NO FAQ schema.
+- DO use vivid scenes, character, and narrative flow; entertain first.
+- Keep it substantial (at least 800 words) with a few section headings.`;
+      const fictionUser = `Write the story now.${
+        keywords && keywords.length > 0
+          ? ` Loose inspiration themes (do NOT force them in): ${keywords.join(", ")}.`
+          : ""
+      }`;
+
+      const fictionPost = await generateStructuredOutput<BlogPostResult>(
+        "blog_generation" as AITask,
+        fictionSystem,
+        fictionUser,
+        tenantId,
+        getBlogPostSchema(imageAuto ? null : imageCount),
+        { clientId, functionName: "generate_blog_post" }
+      );
+
+      const fictionBody = typeof fictionPost.body === "string" ? fictionPost.body : "";
+      const fictionImages: BlogImageSpec[] = Array.isArray(fictionPost.images)
+        ? fictionPost.images
+        : [];
+      const fictionPlaceholders = extractImagePlaceholders(fictionBody);
+      const specs: BlogImageSpec[] =
+        fictionImages.length > 0
+          ? fictionImages
+          : [
+              {
+                prompt: `Atmospheric featured illustration for the story "${fictionPost.title ?? workingTopic}". Evocative, painterly, on-brand.`,
+                placement: "featured" as const,
+                sectionTitle: "",
+                description: `Featured illustration for ${fictionPost.title ?? workingTopic}`,
+              },
+              ...fictionPlaceholders.map((ph) => ({
+                prompt: `Story illustration: ${ph.alt}. Evocative, painterly, on-brand.`,
+                placement: "inline" as const,
+                sectionTitle: "",
+                description: ph.alt || `Story illustration ${ph.index}`,
+              })),
+            ];
+
+      const fictionImagesGenerated: GeneratedBlogImage[] =
+        uploadedImages && uploadedImages.length > 0
+          ? await (async () => {
+              const attached = attachUploadedImages(uploadedImages, specs);
+              await persistUploadedImages(tenantId, clientId, attached, fictionPost.title);
+              return attached;
+            })()
+          : await generateBlogImages(tenantId, clientId, specs, fictionPost.title, imageCount);
+
+      const fictionBodyWithImages = injectImagesIntoBody(fictionBody, fictionImagesGenerated);
+
+      // Same persistence contract as the scored path (same insert + response
+      // shape), minus scores/gate/linking/schema — so the Content Map batch
+      // runner, calendar, and modals treat fiction drafts exactly like any
+      // other draft. `mode: "fiction"` marks the exemption; no aeoGeo key
+      // keeps aeo_geo_score NULL (migration 100's trigger).
+      const supabase = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL!,
+        process.env.SUPABASE_SERVICE_ROLE_KEY!,
+        { auth: { autoRefreshToken: false, persistSession: false } }
+      );
+      const fictionWorkspaceId = await getCurrentWorkspaceId().catch(() => null);
+      const fictionInsert = () =>
+        supabase
+          .from("posts")
+          .insert({
+            tenant_id: tenantId,
+            client_id: clientId ?? null,
+            workspace_id: fictionWorkspaceId,
+            content: {
+              type: "blog",
+              mode: "fiction",
+              title: fictionPost.title,
+              slug: fictionPost.slug,
+              metaDescription: "",
+              headings: Array.isArray(fictionPost.headings) ? fictionPost.headings : [],
+              body: fictionBodyWithImages,
+              images: fictionImagesGenerated.map((img) => ({
+                url: img.url,
+                prompt: img.spec.prompt,
+                placement: img.spec.placement,
+                sectionTitle: img.spec.sectionTitle,
+                description: img.spec.description,
+              })),
+              suggestedImagePrompt: fictionPost.suggestedImagePrompt ?? "",
+              topic,
+              brandVoice,
+            },
+            status: "draft",
+            scheduled_at: scheduledAt ?? null,
+            ai_generated: true,
+          })
+          .select("id")
+          .single();
+      const { data: fictionRow, error: fictionError } = await fictionInsert();
+      if (fictionError || !fictionRow) {
+        console.error("[generate-content] Error saving fiction post:", fictionError);
+        return NextResponse.json(
+          { error: "Failed to save fiction post", details: fictionError?.message },
+          { status: 500 }
+        );
+      }
+
+      // Social captions ride along exactly as on the scored path.
+      const socialResults = await Promise.all(
+        platforms.map((platform) =>
+          generateSocialCaptionFor(platform, {
+            tenantId,
+            clientId,
+            workspaceId: null,
+            brandVoice,
+            topic: workingTopic,
+            blog: {
+              title: fictionPost.title,
+              slug: fictionPost.slug,
+              metaDescription: "",
+              summary: fictionBodyWithImages.substring(0, 800),
+            },
+          })
+        )
+      );
+
+      void incrementUsage(tenantId, "blog_posts", 1);
+      void incrementUsage(tenantId, "ai_tokens", 4000);
+
+      return NextResponse.json({
+        success: true,
+        fiction: true,
+        topic: workingTopic,
+        blogPost: {
+          id: fictionRow.id,
+          title: fictionPost.title,
+          slug: fictionPost.slug,
+        },
+        socialPosts: socialResults.map(({ platform, caption }) => ({
+          platform,
+          ...caption,
+        })),
+      });
     }
 
     // ------------------------------------------------------------------

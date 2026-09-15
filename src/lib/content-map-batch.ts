@@ -296,7 +296,7 @@ async function generateOne(state: RunnerState, itemId: string): Promise<void> {
   let itemQuery = supabase
     .from("content_map_items")
     .select(
-      "id, title, topic, keywords, content_type, platforms, external_links, scheduled_at, auto_publish, client_id"
+      "id, title, topic, keywords, content_type, mode, platforms, external_links, scheduled_at, auto_publish, client_id"
     )
     .eq("tenant_id", state.tenantId)
     .eq("id", itemId);
@@ -343,6 +343,10 @@ async function generateOne(state: RunnerState, itemId: string): Promise<void> {
         platforms: item.content_type === "social" ? item.platforms ?? [] : [],
         externalLinks: (item.external_links ?? []).length > 0 ? item.external_links : undefined,
         socialOnly: item.content_type === "social",
+        // Row mode: 'gate' (default, scored) or 'fiction' (creative stories,
+        // skips the gate). Fiction rows still generate a full draft + images;
+        // they simply aren't keyword-scored or gated.
+        fiction: item.mode === "fiction" || undefined,
         imageAuto: state.imagePref === "auto" || undefined,
         imageCount: state.imagePref === "auto" ? undefined : state.imagePref,
         // The CSV's / row's suggested publish time — stored on the draft as a

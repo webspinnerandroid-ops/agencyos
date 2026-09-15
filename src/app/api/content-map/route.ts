@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
     let query = supabase
       .from("content_map_items")
       .select(
-        "id, source_row, title, keywords, topic, content_type, platforms, external_links, scheduled_at, auto_publish, status, linked_post_id, gate, error, import_note, created_at, updated_at"
+        "id, source_row, title, keywords, topic, content_type, mode, platforms, external_links, scheduled_at, auto_publish, status, linked_post_id, gate, error, import_note, created_at, updated_at"
       )
       .eq("tenant_id", tenantId)
       .order("created_at", { ascending: true });
@@ -268,6 +268,8 @@ export async function POST(request: NextRequest) {
           keywords: r.keywords.slice(0, 12),
           topic: r.topic.slice(0, 1000),
           content_type: r.contentType,
+          // "gate" (default) or "fiction" (creative mode, skips the gate).
+          mode: r.mode,
           platforms: r.platforms.slice(0, 6),
           external_links: r.externalLinks.slice(0, 5),
           // The CSV's suggested publish date (null when absent — optional).

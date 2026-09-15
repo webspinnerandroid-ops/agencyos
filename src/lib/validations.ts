@@ -20,6 +20,11 @@ export const generateContentSchema = z
     // entirely and writes one platform-native post per social platform from
     // the topic/keywords/brand voice.
     socialOnly: z.boolean().optional(),
+    // Creative fiction mode — explicit per-row opt-in (Content Map mode
+    // selector / CSV Mode column). Skips scoring, the SEO/AEO/GEO gate loop,
+    // and linking/schema meta; still generates a full draft with images.
+    // Absent/false = the scored gate pipeline, exactly as before.
+    fiction: z.boolean().optional(),
     // Preferred external sources to cite (optional; up to 5). Empty/absent is
     // normal — the model then picks its own reputable sources. Internal links
     // are never provided here; they come from the workspace knowledge base.

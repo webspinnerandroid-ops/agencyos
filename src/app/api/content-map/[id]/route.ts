@@ -34,13 +34,15 @@ export async function PATCH(
       title?: string;
       topic?: string;
       keywords?: string[];
+      /** Generation mode: 'gate' (default, scored) or 'fiction' (no gate). */
+      mode?: string;
     };
 
     // Inline row editing (bulk editor): update the row's title/topic/keywords
     // so placeholder rows can be given real topics before generating. Partial
     // — only the provided fields change. Strings are trimmed and capped to
     // mirror the import caps.
-    if (!body.action && (body.title !== undefined || body.topic !== undefined || body.keywords !== undefined)) {
+    if (!body.action && (body.title !== undefined || body.topic !== undefined || body.keywords !== undefined || body.mode !== undefined)) {
       const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
       if (body.title !== undefined) {
         const t = body.title.trim().slice(0, 300);
@@ -60,6 +62,18 @@ export async function PATCH(
           .map((k) => String(k).trim())
           .filter(Boolean)
           .slice(0, 12);
+      }
+      if (body.mode !== undefined) {
+        // Row mode: only two legal values — gate (default, scored) or
+        // fiction (creative stories, skips the gate by design).
+        const m = String(body.mode).toLowerCase();
+        if (m !== "gate" && m !== "fiction") {
+          return NextResponse.json(
+            { error: "mode must be 'gate' or 'fiction'." },
+            { status: 400 }
+          );
+        }
+        patch.mode = m;
       }
       const { error } = await supabase
         .from("content_map_items")

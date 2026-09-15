@@ -49,6 +49,8 @@ interface MapItem {
   keywords: string[];
   topic: string | null;
   content_type: "blog" | "social";
+  /** Generation mode: 'gate' (default, scored) or 'fiction' (no gate). */
+  mode?: "gate" | "fiction" | null;
   platforms: string[];
   /** Preferred external sources (optional CSV column). Empty = none. */
   external_links: string[];
@@ -173,7 +175,7 @@ export default function ContentMapPage() {
   const [view, setView] = useState<"list" | "timeline">("list");
   // ---- Bulk row editor: rows with local edits (staged until Save). ----
   const [editing, setEditing] = useState<
-    Record<string, { title: string; topic: string; keywords: string }>
+    Record<string, { title: string; topic: string; keywords: string; mode: string }>
   >({});
   const [savingEdits, setSavingEdits] = useState(false);
   // ---- Dry-run: preview of what "Generate all" would do. ----
@@ -314,8 +316,12 @@ export default function ContentMapPage() {
       title: item.title,
       topic: item.topic ?? "",
       keywords: item.keywords.join(", "),
+      mode: item.mode ?? "gate",
     };
-  const setEditValue = (id: string, patch: Partial<{ title: string; topic: string; keywords: string }>) =>
+  const setEditValue = (
+    id: string,
+    patch: Partial<{ title: string; topic: string; keywords: string; mode: string }>
+  ) =>
     setEditing((prev) => ({
       ...prev,
       [id]: { ...editValue(items.find((i) => i.id === id) as MapItem), ...patch },
@@ -334,6 +340,7 @@ export default function ContentMapPage() {
             title: item.title,
             topic: item.topic ?? "",
             keywords: item.keywords.join(", "),
+            mode: item.mode ?? "gate",
           };
         }
       }
@@ -355,6 +362,7 @@ export default function ContentMapPage() {
               .split(",")
               .map((k) => k.trim())
               .filter(Boolean),
+            mode: val.mode,
           }),
         });
         if (!res.ok) {
@@ -973,6 +981,14 @@ export default function ContentMapPage() {
                           social
                         </span>
                       )}
+                      {item.mode === "fiction" && (
+                        <span
+                          className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300"
+                          title="Fiction mode — creative story, skips the SEO/AEO/GEO gate by design"
+                        >
+                          fiction · no gate
+                        </span>
+                      )}
                       {item.auto_publish === "wordpress" && (
                         <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300">
                           auto → WordPress
@@ -1021,6 +1037,14 @@ export default function ContentMapPage() {
                     {item.content_type === "social" && (
                       <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground capitalize">
                         social · {item.platforms.join(", ")} · generates platform-native posts (no blog)
+                      </span>
+                    )}
+                    {item.mode === "fiction" && (
+                      <span
+                        className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 dark:bg-purple-950 dark:text-purple-300"
+                        title="Fiction mode — creative story, skips the SEO/AEO/GEO gate by design"
+                      >
+                        fiction · no gate
                       </span>
                     )}
                     {item.auto_publish === "wordpress" && (
@@ -1105,6 +1129,20 @@ export default function ContentMapPage() {
                           onChange={(e) => setEditValue(item.id, { keywords: e.target.value })}
                           placeholder="focus keyword, secondary, tertiary"
                         />
+                      </div>
+                      <div className="space-y-1">
+                        <Label className="text-[10px] text-muted-foreground">
+                          Mode
+                        </Label>
+                        <select
+                          className="h-7 text-xs rounded-md border bg-transparent px-1"
+                          value={editValue(item).mode}
+                          onChange={(e) => setEditValue(item.id, { mode: e.target.value })}
+                          title="Gate (default) scores and enforces SEO/AEO/GEO ≥ 80; Fiction writes creative stories with no gate"
+                        >
+                          <option value="gate">Gate — SEO/AEO/GEO scored (default)</option>
+                          <option value="fiction">Fiction — creative story, no gate</option>
+                        </select>
                       </div>
                     </div>
                   ) : (

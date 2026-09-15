@@ -288,3 +288,40 @@ describe("Auto Publish column", () => {
     expect(rows[0].importNote).toContain("unknown auto-publish target");
   });
 });
+
+describe("Mode column (gate vs fiction)", () => {
+  it("defaults every row to 'gate' when the column is absent — the scored pipeline is unchanged", () => {
+    const { rows } = mapped("Title,Topic\nPlain SEO Post,a topic\n");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].mode).toBe("gate");
+    expect(rows[0].importNote ?? "").not.toContain("fiction");
+  });
+
+  it("maps empty and 'gate' values to 'gate'", () => {
+    const { rows } = mapped("Title,Mode\nA,gate\nB,\n");
+    expect(rows[0].mode).toBe("gate");
+    expect(rows[1].mode).toBe("gate");
+  });
+
+  it("maps 'fiction'/'story'/'creative*' to 'fiction' with a visible note", () => {
+    const { rows } = mapped(
+      "Title,Mode\nGhost Story,fiction\nSea Tale,story\nFable,creative writing\n"
+    );
+    expect(rows.map((r) => r.mode)).toEqual(["fiction", "fiction", "fiction"]);
+    for (const r of rows) {
+      expect(r.importNote).toContain("fiction");
+      expect(r.importNote).toContain("skips the SEO/AEO/GEO gate");
+    }
+  });
+
+  it("notes unknown mode values instead of silently accepting them", () => {
+    const { rows } = mapped("Title,Mode\nA,poem\n");
+    expect(rows[0].mode).toBe("gate");
+    expect(rows[0].importNote).toContain("unknown mode");
+  });
+
+  it("accepts 'Writing Mode' as a header alias", () => {
+    const { rows } = mapped("Title,Writing Mode\nA,fiction\n");
+    expect(rows[0].mode).toBe("fiction");
+  });
+});

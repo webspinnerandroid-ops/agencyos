@@ -1,7 +1,8 @@
-Title,Keywords,Topic,Type,Platforms,Publish Date,External Links,Auto Publish
-"Cloud Storage for Small Teams: What to Compare Before You Buy","cloud storage for small teams,file sharing,business plans","cloud storage for small teams",blog,,2026-10-15T09:00,https://www.nist.gov/itl/smallbusinesscyber,
-"How to Back Up a Laptop Properly (Without Losing Photos)","backup laptop,3-2-1 backup rule","how to back up a laptop properly",blog,,2026-11-05 14:30,,
-"Wi-Fi Dead Zones: Why Your Office Loses Signal and How to Fix It","wifi dead zones,mesh wifi","why wifi has dead zones in offices",blog,,May 1, 2026,,
-"Spring Hiking Checklist: What to Pack for the Shoulder Season","spring hiking checklist,day hike packing list","spring hiking checklist",blog,,2026-04-01T08:00,,wordpress
-"Our Favorite Mountain Photo Spots","mountain photography,scenic overlooks","the best photo spots around the lodge",social,instagram,2026-04-10T17:00,,
-"Meet the Team: Front Desk Stories","none yet — edit this row","the people who make the lodge feel like home",social,"facebook,twitter",2026-04-22T12:00,,
+Title,Keywords,Topic,Type,Mode,Platforms,Publish Date,External Links,Auto Publish
+"Cloud Storage for Small Teams: What to Compare Before You Buy","cloud storage for small teams,file sharing,business plans","cloud storage for small teams",blog,gate,,2026-10-15T09:00,https://www.nist.gov/itl/smallbusinesscyber,
+"How to Back Up a Laptop Properly (Without Losing Photos)","backup laptop,3-2-1 backup rule","how to back up a laptop properly",blog,gate,,2026-11-05 14:30,,
+"Wi-Fi Dead Zones: Why Your Office Loses Signal and How to Fix It","wifi dead zones,mesh wifi","why wifi has dead zones in offices",blog,gate,,"May 1, 2026",,
+"Spring Hiking Checklist: What to Pack for the Shoulder Season","spring hiking checklist,day hike packing list","spring hiking checklist",blog,gate,,2026-04-01T08:00,,wordpress
+"Our Favorite Mountain Photo Spots","mountain photography,scenic overlooks","the best photo spots around the lodge",social,gate,instagram,2026-04-10T17:00,,
+"Meet the Team: Front Desk Stories","none yet — edit this row","the people who make the lodge feel like home",social,gate,"facebook,twitter",2026-04-22T12:00,,
+"The Lighthouse Keeper's Last Letter","coastal legends,lighthouse mysteries","a fictional story about a lighthouse keeper's final letter to the sea",blog,fiction,,2026-12-24T18:00,,

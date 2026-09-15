@@ -9,6 +9,10 @@
  *   Keywords       — comma-separated; the FIRST keyword is the FOCUS keyword
  *   Topic*         — what the content is about (falls back to Title when absent)
  *   Type           — "blog" or "social" (default: blog)
+ *   Mode           — "gate" (default) or "fiction"/"story"/"creative*".
+ *                    Fiction rows generate creative stories WITHOUT the
+ *                    SEO/AEO/GEO score gate; everything else runs the
+ *                    scored gate pipeline exactly as always. Optional.
  *   Platforms      — comma-separated social platforms (ignored for blog rows)
  *   Destination    — accepted as an alias of Platforms (the destination(s)
  *                    the post is bound for). Also optional.
@@ -205,6 +209,13 @@ export interface MappedRow {
   keywords: string[];
   topic: string;
   contentType: "blog" | "social";
+  /**
+   * Generation mode. "gate" (default) runs the full SEO/AEO/GEO score
+   * gate exactly as always; "fiction" is an explicit per-row opt-in for
+   * creative stories — still generates a full draft with images, but skips
+   * scoring, the gate loop, linking, and SEO/schema meta.
+   */
+  mode: "gate" | "fiction";
   platforms: string[];
   /** Preferred external sources to cite. Empty = none provided (fine). */
   externalLinks: string[];
@@ -288,6 +299,11 @@ export function mapCsvRows(parse: CsvParseResult): MapRowsResult {
   const focusCol = col("focuskeyword");
   const topicCol = col("topic");
   const typeCol = col("type");
+  // Generation mode: "gate" (default) or "fiction" (creative stories).
+  // Header aliases accepted; first match wins.
+  const modeCol = ["mode", "writingmode", "contentmode", "generationmode"]
+    .map(col)
+    .find((i) => i >= 0) ?? -1;
   // "Destination" is an alias of Platforms: the destination(s) the post is
   // bound for. When both columns exist, Platforms wins (they're merged).
   const platformsCol = col("platforms");
@@ -358,6 +374,19 @@ export function mapCsvRows(parse: CsvParseResult): MapRowsResult {
       } else if (!rawType.includes("blog") && !rawType.includes("article")) {
         notes.push(`unknown type "${rawType}" — treated as blog`);
       }
+    }
+
+    // Mode: gate (default) or fiction. "fiction"/"story"/"creative*" →
+    // fiction; anything else (incl. empty) → gate. A note makes the
+    // non-default choice visible on the import result card.
+    const rawMode = at(modeCol).toLowerCase();
+    const mode: MappedRow["mode"] = /^(fiction|story|creative)/.test(rawMode)
+      ? "fiction"
+      : "gate";
+    if (mode === "fiction") {
+      notes.push("fiction mode — this row skips the SEO/AEO/GEO gate by design");
+    } else if (rawMode && !/^(gate|seo|standard|default)/.test(rawMode)) {
+      notes.push(`unknown mode "${rawMode}" — treated as gate (scored)`);
     }
 
     // Platforms/Destination (only meaningful for social rows). Both column
@@ -438,6 +467,7 @@ export function mapCsvRows(parse: CsvParseResult): MapRowsResult {
       keywords,
       topic: topic || title,
       contentType,
+      mode,
       platforms,
       externalLinks: cappedLinks,
       scheduledAt,

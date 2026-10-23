@@ -65,9 +65,23 @@ next-env.d.ts
 /*.js
 /*.cmd
 /*.bat
+/*.sh
 /*.txt
 /*.log
+/*.err
 *.bak*
+
+# ---------------------------------------------------------------------------
+# Archived one-off tooling and run logs (hygiene pass, 2026-10-23).
+# The deploy/diag/verify scripts from the Aug 2026 VPS rounds now live in
+# scripts/legacy/, and their output logs in docs/archive/run-logs/. They encode
+# a deploy pattern the project no longer uses and several contain live
+# credentials, so both stay local and ignored. Real tooling lives in /scripts.
+# See docs/HYGIENE-2026-10-23.md.
+# ---------------------------------------------------------------------------
+/scripts/legacy/
+/docs/archive/
+scripts/*.pid
 
 # screenshot capture session cookies (contains the logged-in dev session)
 scripts/.session-cookies.json

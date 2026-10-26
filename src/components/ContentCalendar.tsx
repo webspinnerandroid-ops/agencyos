@@ -922,13 +922,31 @@ export default function ContentCalendar({
   const openingMonthKey = useMemo(() => format(new Date(), "yyyy-MM"), []);
   const autoJumpDoneRef = useRef(false);
 
+  // ---- Auto-jump re-arm ----
+  // On a client switch the rearm effect runs in the same commit where the
+  // page's posts state still holds the PREVIOUS client's list (the refetch
+  // effect only starts after this render). Evaluating against that stale
+  // list marks the jump done before the new client's posts ever arrive —
+  // the old client's current-month post suppresses a jump the new client
+  // (whose next work can be months away) should get. Gate the evaluation on
+  // seeing a posts array that differs from the one captured at selection
+  // change: the refetch's setPosts breaks the reference equality exactly
+  // once new, correctly-scoped data has landed.
+  const postsAtSelectionRef = useRef(posts);
   useEffect(() => {
     userNavigatedRef.current = false;
     autoJumpDoneRef.current = false;
+    postsAtSelectionRef.current = posts;
   }, [selectedClientId]);
 
   useEffect(() => {
-    if (loadingFirst || autoJumpDoneRef.current || userNavigatedRef.current) return;
+    if (
+      loadingFirst ||
+      posts === postsAtSelectionRef.current ||
+      autoJumpDoneRef.current ||
+      userNavigatedRef.current
+    )
+      return;
     const currentKey = format(currentMonth, "yyyy-MM");
     if (currentKey !== openingMonthKey) {
       // The view is no longer on the month it opened with — nothing to fix up.
@@ -957,7 +975,7 @@ export default function ContentCalendar({
       autoJumpDoneRef.current = true;
       setCurrentMonth(parseISO(`${nextKey}-01T00:00:00`));
     }
-  }, [posts, proposedItems, currentMonth, loadingFirst, openingMonthKey]);
+  }, [posts, proposedItems, currentMonth, loadingFirst, openingMonthKey, selectedClientId]);
 
   // ---- Status toggle ----
   const toggleStatus = useCallback(

@@ -83,13 +83,22 @@ export default function MobileNav({
     };
   }, [open, close]);
 
-  // Lock body scroll while the drawer is open.
+  // Lock page scroll while the drawer is open.
+  // body overflow: hidden alone does NOT lock the viewport here: the global
+  // stylesheet gives <html> a non-visible overflow-x (clip), and once the root
+  // element carries any non-visible overflow the CSS overflow-propagation rule
+  // stops forwarding body's overflow to the viewport — the html scroller
+  // (document.scrollingElement) stays scrollable and the page slides behind
+  // the drawer. Locking html directly covers the viewport scroller.
   useEffect(() => {
     if (!open) return;
-    const prev = document.body.style.overflow;
+    const prevBody = document.body.style.overflow;
+    const prevHtml = document.documentElement.style.overflow;
     document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
     return () => {
-      document.body.style.overflow = prev;
+      document.body.style.overflow = prevBody;
+      document.documentElement.style.overflow = prevHtml;
     };
   }, [open]);
 

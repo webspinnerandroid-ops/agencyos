@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import type { DragEvent as ReactDragEvent } from "react";
 import {
   startOfMonth,
   endOfMonth,
@@ -55,6 +56,10 @@ import {
 } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import {
+  normalizeScheduledAt,
+  offsetMinutesForLocalDateTime,
+} from "@/lib/scheduling";
 import PostContent from "@/components/BlogContent";
 import ScoreBadge from "@/components/ScoreBadge";
 
@@ -335,6 +340,29 @@ function formatNumber(n: number): string {
   return n.toString();
 }
 
+/**
+ * Compute a moved post's new scheduled_at when dropped on another day.
+ *
+ * The calendar groups posts by the VIEWER's local day (format(parseISO(…))),
+ * so a drop target is a local date. Moving keeps the post's local wall-clock
+ * time of day and changes only the date — and the stored UTC instant must be
+ * computed with the offset in force ON THE NEW DATE, not the offset today.
+ * Using `new Date().getTimezoneOffset()` here would put a November 2nd slot
+ * one hour off for agencies in DST zones; offsetMinutesForLocalDateTime
+ * resolves the offset for the target date itself.
+ *
+ * Returns null for unscheduled posts and same-day drops (no-op).
+ */
+function rescheduleToDay(post: CalendarPost, dateKey: string): string | null {
+  if (!post.scheduled_at) return null;
+  const old = parseISO(post.scheduled_at);
+  if (format(old, "yyyy-MM-dd") === dateKey) return null;
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const naive = `${dateKey}T${pad(old.getHours())}:${pad(old.getMinutes())}`;
+  const offset = offsetMinutesForLocalDateTime(naive);
+  return normalizeScheduledAt(naive, offset);
+}
+
 // ------------------------------------------------------------------
 // Component
 // ------------------------------------------------------------------
@@ -351,6 +379,13 @@ interface ContentCalendarProps {
     postId: string,
     data: Partial<Pick<CalendarPost, "status" | "revision_reason">>
   ) => Promise<void>;
+  /**
+   * Drag-to-reschedule: move a post to another day on the grid. The component
+   * computes the new UTC instant (same local wall-clock time of day) and the
+   * caller persists it via PATCH /api/posts/[id]. Optional — when absent the
+   * chips are not draggable (e.g. portals that mirror the status config only).
+   */
+  onPostMove?: (postId: string, newScheduledAt: string) => Promise<void>;
   onApproveProposed: (item: ProposedItem, mediaKind: "image" | "video") => Promise<void>;
   onRefresh: () => void;
   /**
@@ -371,6 +406,7 @@ export default function ContentCalendar({
   onClientChange,
   onStatusesChange,
   onPostUpdate,
+  onPostMove,
   onApproveProposed,
   onRefresh,
   loadingFirst = false,
@@ -394,6 +430,10 @@ export default function ContentCalendar({
   const [rewriteFeedback, setRewriteFeedback] = useState("");
   const [retrying, setRetrying] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
+
+  // ---- Drag-to-reschedule (HTML5 DnD) ----
+  const [dragPostId, setDragPostId] = useState<string | null>(null);
+  const [dragOverDay, setDragOverDay] = useState<string | null>(null);
 
   // ---- Lazy body hydration (P0 calendar perf) ----
   // List queries ship only the small JSON keys (type/title/caption/aeoGeo);
@@ -420,6 +460,13 @@ export default function ContentCalendar({
   const modalNeedsBody = useMemo(() => {
     const c = modalContent;
     return !!c && c.type === "blog" && typeof c.body !== "string";
+  }, [modalContent]);
+
+  // The dialog's own heading is a generic "Post Detail", so the post's title is
+  // rendered in the body — that is what identifies which post is open.
+  const modalTitle = useMemo(() => {
+    const t = modalContent?.title;
+    return typeof t === "string" && t.trim().length > 0 ? t.trim() : null;
   }, [modalContent]);
 
   useEffect(() => {
@@ -663,6 +710,46 @@ export default function ContentCalendar({
       }
     },
     [selectedStatuses, onStatusesChange]
+  );
+
+  // ---- Drag-to-reschedule handlers ----
+  const handleDragStart = useCallback(
+    (post: CalendarPost, e: ReactDragEvent<HTMLDivElement>) => {
+      setDragPostId(post.id);
+      // Required by Firefox: a drag needs payload data to actually start.
+      e.dataTransfer.setData("text/plain", post.id);
+      e.dataTransfer.effectAllowed = "move";
+    },
+    []
+  );
+
+  const handleDragEnd = useCallback(() => {
+    setDragPostId(null);
+    setDragOverDay(null);
+  }, []);
+
+  const handleDragOverDay = useCallback(
+    (dateKey: string, e: ReactDragEvent<HTMLDivElement>) => {
+      if (dragPostId == null) return;
+      e.preventDefault(); // allow the drop
+      e.dataTransfer.dropEffect = "move";
+      if (dragOverDay !== dateKey) setDragOverDay(dateKey);
+    },
+    [dragPostId, dragOverDay]
+  );
+
+  const handleDropOnDay = useCallback(
+    async (dateKey: string) => {
+      const id = dragPostId;
+      setDragPostId(null);
+      setDragOverDay(null);
+      if (!id || !onPostMove) return;
+      const post = posts.find((p) => p.id === id);
+      const newIso = post ? rescheduleToDay(post, dateKey) : null;
+      if (!newIso) return;
+      await onPostMove(id, newIso);
+    },
+    [dragPostId, posts, onPostMove]
   );
 
   // ---- Per-post analytics state ----
@@ -912,8 +999,18 @@ export default function ContentCalendar({
                   className={cn(
                     "min-h-[110px] border-r border-b p-1.5 transition-colors",
                     !isCurrentMonth && "bg-muted/30 text-muted-foreground",
-                    isToday && "bg-accent/20"
+                    isToday && "bg-accent/20",
+                    dragPostId &&
+                      onPostMove &&
+                      (dragOverDay === dateKey
+                        ? "bg-primary/10 ring-2 ring-inset ring-primary/50"
+                        : "cursor-grab")
                   )}
+                  onDragOver={(e) => handleDragOverDay(dateKey, e)}
+                  onDragLeave={() =>
+                    setDragOverDay((d) => (d === dateKey ? null : d))
+                  }
+                  onDrop={() => void handleDropOnDay(dateKey)}
                 >
                   <span
                     className={cn(
@@ -942,10 +1039,19 @@ export default function ContentCalendar({
                       ))}
                     {dayPosts.map((post) => {
                       const platforms = getPlatformsForPost(post);
+                      const draggable = !!onPostMove && !!post.scheduled_at;
                       return (
                         <div
                           key={post.id}
-                          className="bg-card border rounded-md px-2 py-1.5 cursor-pointer hover:shadow-md transition-shadow text-xs"
+                          className={cn(
+                            "bg-card border rounded-md px-2 py-1.5 cursor-pointer hover:shadow-md transition-shadow text-xs",
+                            dragPostId === post.id && "opacity-50",
+                            draggable && "cursor-grab active:cursor-grabbing"
+                          )}
+                          draggable={draggable}
+                          onDragStart={(e) => handleDragStart(post, e)}
+                          onDragEnd={handleDragEnd}
+                          onDrop={(e) => e.stopPropagation()}
                           onClick={() => setSelectedPost(post)}
                         >
                           <div className="flex items-center gap-1 mb-0.5">
@@ -1068,6 +1174,10 @@ export default function ContentCalendar({
 
               {/* ---- Details Tab ---- */}
               <TabsContent value="details" className="space-y-4 mt-4">
+                {modalTitle && (
+                  <p className="text-sm font-semibold leading-snug">{modalTitle}</p>
+                )}
+
                 {/* Status badge */}
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium">Status:</span>

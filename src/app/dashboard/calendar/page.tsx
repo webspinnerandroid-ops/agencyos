@@ -221,6 +221,40 @@ export default function CalendarPage() {
     []
   );
 
+  // ---- Drag-to-reschedule (calendar grid drop) ----
+  // The component computes the new UTC instant (same local wall-clock time,
+  // offset resolved for the TARGET date so a drop across a DST boundary keeps
+  // the same wall time). Optimistically move the chip; a failed PATCH is
+  // reverted by refetching the authoritative list.
+  const handlePostMove = useCallback(
+    async (postId: string, newScheduledAt: string) => {
+      setPosts((prev) =>
+        prev.map((p) =>
+          p.id === postId ? { ...p, scheduled_at: newScheduledAt } : p
+        )
+      );
+      try {
+        const res = await fetch(`/api/posts/${postId}`, {
+          method: "PATCH",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ scheduled_at: newScheduledAt }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => null);
+          console.error(
+            "[calendar] reschedule failed:",
+            (err as { error?: string })?.error ?? res.status
+          );
+          await fetchPosts(); // revert optimistic move
+        }
+      } catch {
+        await fetchPosts(); // network failure — revert
+      }
+    },
+    [fetchPosts]
+  );
+
   // ---- Approve a proposed campaign item (creates a draft post) ----
   const handleApproveProposed = useCallback(
     async (item: ProposedItem, mediaKind: "image" | "video" = "image") => {
@@ -392,6 +426,7 @@ export default function CalendarPage() {
         onClientChange={setSelectedClientId}
         onStatusesChange={setSelectedStatuses}
         onPostUpdate={handlePostUpdate}
+        onPostMove={handlePostMove}
         onApproveProposed={handleApproveProposed}
         onRefresh={handleRefresh}
         loadingFirst={loading && posts.length === 0}

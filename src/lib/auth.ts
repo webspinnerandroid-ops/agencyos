@@ -1,5 +1,4 @@
 import { cookies } from "next/headers"
-import { createServerClient } from "@supabase/ssr"
 import { verifyAuthValue } from "./auth-signature"
 
 // ------------------------------------------------------------------
@@ -140,54 +139,9 @@ export async function requireRole(minimumRole: UserRole): Promise<void> {
   }
 }
 
-// ------------------------------------------------------------------
-// getSupabaseWithTenant
-// Returns a Supabase client that automatically scopes queries to the
-// current tenant by reading the x-tenant-id header. Use this in Route
-// Handlers where you want RLS-compatible queries that are guaranteed
-// to stay within the caller's tenant.
-//
-// IMPORTANT: This does NOT set a custom claim on the JWT. It simply
-// injects the tenant_id into the `app_metadata` claim of the client
-// session so that RLS policies referencing
-//   auth.jwt() -> app_metadata -> tenant_id
-// can function properly. If your RLS policies instead rely on the
-// user_roles table directly, just use the standard server client
-// and add `.eq("tenant_id", await getTenantId())` to your queries.
-// ------------------------------------------------------------------
-export async function getSupabaseWithTenant() {
-  const cookieStore = await cookies()
-  const tenantId = await getTenantId()
-
-  const client = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll()
-        },
-        setAll(cookiesToSet) {
-          try {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options)
-            )
-          } catch {
-            // setAll called from a Server Component — safe to ignore
-          }
-        },
-      },
-    }
-  )
-
-  /**
-   * Usage pattern — always scope queries by tenantId explicitly:
-   *
-   *   const { client, tenantId } = await getSupabaseWithTenant()
-   *   await client.from("projects").select().eq("tenant_id", tenantId)
-   *
-   * Explicit filtering is safer than relying on RLS alone, especially
-   * in server-side contexts where the service_role key may be in play.
-   */
-  return { client, tenantId }
-}
+// (Removed: `getSupabaseWithTenant`.) It claimed to return a client whose
+// queries were "guaranteed to stay within the caller's tenant" through RLS, but
+// the policies key on a top-level `tenant_id` JWT claim that no code ever sets —
+// see the Multi-Tenant Isolation section of ARCHITECTURE.md. The helper had no
+// callers; tenant scope comes from `.eq("tenant_id", await getTenantId())` on a
+// service-role client, which `scripts/audit-tenant-scope.cjs` enforces in CI.

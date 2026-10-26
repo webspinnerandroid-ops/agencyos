@@ -12,7 +12,29 @@
 
 ## Multi-Tenant Isolation
 
-Every table carries a `tenant_id` column. The app layer enforces isolation via explicit `.eq("tenant_id", tenantId)` on every query — never rely on RLS alone.
+Every tenant table carries a `tenant_id` column, and **the app layer is the enforcement point**: every service-role query filters `.eq("tenant_id", tenantId)` (or sets `tenant_id` on the payload) using the HMAC-signed `x-tenant-id` cookie minted by `src/proxy.ts`. `scripts/audit-tenant-scope.cjs` fails CI on any service-role query against a tenant table that lacks that scope, so a new route cannot quietly read across tenants.
+
+### What RLS does and does not do here (read this before trusting it)
+
+The repo defines `tenant_isolation` policies on ~40 tables shaped like
+`tenant_id = (auth.jwt() ->> 'tenant_id')::uuid`.
+
+**That claim is never set.** There is no custom access-token hook, and Supabase's
+JWTs do not carry a top-level `tenant_id`. So for anon/authenticated tokens the
+predicate evaluates to `tenant_id = NULL` and the policies **deny every row**.
+That is a deny-by-default backstop, not isolation: a leak is prevented by the
+app's own filter, never by RLS.
+
+Consequences, so nobody re-learns them the hard way:
+
+- The service role bypasses RLS entirely — which is why the CI audit, not the
+  database, is the control that matters.
+- A signed-in tenant user reading through PostgREST gets **zero rows** (verified:
+  the QA suite asserts it), so client-side direct Supabase reads will look
+  "empty", not "forbidden". Route everything through the app.
+- If RLS is ever wanted as a real second line, the fix is a Supabase auth hook
+  that stamps `tenant_id` into the JWT, plus removing `service_role` from
+  request paths. Until then this document does not claim RLS gives isolation.
 
 **Cookie-based auth context** (set by `src/proxy.ts` middleware, HMAC-signed):
 
@@ -360,7 +382,7 @@ All routes live under `src/app/api/`. **Auth** = requires valid session cookie (
 
 ## Database Schema
 
-94 numbered migrations in `supabase/migrations/`. Every multi-tenant table has `tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE` plus a `tenant_isolation` RLS policy (defense-in-depth — app layer enforces via `.eq("tenant_id")`).
+114 numbered migrations in `supabase/migrations/`. Every multi-tenant table has `tenant_id UUID REFERENCES tenants(id) ON DELETE CASCADE` plus a `tenant_isolation` RLS policy. The policy is deny-by-default only — the JWT claim it tests is never issued (see [What RLS does and does not do here](#what-rls-does-and-does-not-do-here-read-this-before-trusting-it)); isolation is enforced by `.eq("tenant_id")` in the app and checked by `scripts/audit-tenant-scope.cjs` in CI.
 
 ### Core Tables
 

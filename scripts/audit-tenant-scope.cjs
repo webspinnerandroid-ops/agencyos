@@ -12,6 +12,13 @@
  * legitimately operate across tenants, auth helpers, tenant creation).
  * Treat flags as review candidates — confirm each in code.
  *
+ * Two kinds of exemption, deliberately different in blast radius:
+ *   IGNORE   — whole file is cross-tenant by design (job workers, webhooks).
+ *   REVIEWED — one `<file>::<table>` pair, with the reason it is safe. The rest
+ *              of that file (and every other query in it) stays audited.
+ * Anything neither scoped nor exempt fails the run (exit 1) — this is a CI
+ * gate, see .github/workflows/ci.yml.
+ *
  * Usage: node scripts/audit-tenant-scope.cjs [--json]
  */
 
@@ -35,6 +42,20 @@ const TENANT_TABLES = new Set([
   "call_logs", "tenant_usage", "tenant_ai_employees",
   "team_chats", "team_messages", "campaign_plans",
   "campaign_plan_items",
+
+  // Tables added by later migrations (100+) that carry tenant_id. They were
+  // missing from this list, which meant the gate silently did not cover the
+  // newest — and least reviewed — code in the repo.
+  "activity", "approval_receipts", "client_subsystems", "workflow_state",
+  "email_classifications", "email_rule_feedback", "machine_api_keys",
+  "content_map_items", "content_map_imports", "content_opportunities",
+  "asset_folders", "cms_form_submissions", "cms_site_settings", "nav_config",
+  "notifications", "gbp_alert_webhooks", "gbp_reviews", "gbp_sync_state",
+  "keyword_rankings", "license_audit_log", "make_relay_client_overrides",
+  "make_relay_config", "outreach_targets", "sign_requests", "site_domains",
+  "site_pages", "site_settings", "tenant_balances", "tenant_connections",
+  "tenant_settings", "token_ledger", "traffic_snapshots", "workspace_members",
+  "client_onboarding",
 ]);
 
 // Files where unscoped service-role access is by design. Each entry is a
@@ -261,6 +282,80 @@ const IGNORE = new Set([
   "src/lib/workspace-team.ts",
 ]);
 
+// ---------------------------------------------------------------------------
+// Reviewed exceptions, keyed `<file>::<table>`.
+//
+// This is stricter than IGNORE: the file keeps being audited, only the specific
+// table inside it is exempt. Every entry was read in code (Oct 2026 sweep) and
+// the reason records WHY the heuristic cannot see the scoping. Anything not
+// listed here still fails the gate, including new queries in these files.
+// ---------------------------------------------------------------------------
+const REVIEWED = new Map([
+  // ---- platform singletons: one global row (id = 1), no tenant dimension ----
+  ["src/app/api/admin/page-builder/pricing/route.ts::site_settings",
+    "platform pricing row id=1; super_admin only (page-builder admin)"],
+  ["src/app/api/admin/page-builder/route.ts::site_settings",
+    "platform landing row id=1; super_admin only"],
+  ["src/app/dashboard/settings/actions.ts::site_settings",
+    "platform hero row id=1; requireSuperAdmin() before every read/write"],
+  ["src/app/page.tsx::site_settings",
+    "public marketing page reads the platform row id=1"],
+  ["src/lib/landing-content-server.ts::site_settings",
+    "server-side read of the platform landing row id=1"],
+
+  // ---- updates/deletes by a row id that came from a tenant-scoped read ----
+  ["src/app/api/analytics/route.ts::tenant_connections",
+    "conn resolved by .eq(tenant_id) a few lines above; the write is keyed by conn.id"],
+  ["src/app/api/media-assets/[id]/drive/route.ts::tenant_connections",
+    "conn resolved by .eq(tenant_id) above; write keyed by conn.id"],
+  ["src/app/api/seo/rankings/route.ts::tenant_connections",
+    "conn resolved by .eq(tenant_id) above; write keyed by conn.id"],
+  ["src/app/dashboard/connections/actions.ts::tenant_connections",
+    "getConnection(tenantId) / scoped list feeds every write, keyed by conn.id"],
+  ["src/lib/drive-sync.ts::tenant_connections",
+    "conn loaded per tenant; token refreshes write back to that same row id"],
+  ["src/lib/content-map-batch.ts::content_map_items",
+    "ids come from a .eq(tenant_id) select in the same function before .in(id, ids)"],
+  ["src/lib/workspace.ts::workspace_members",
+    "filtered by workspace_id, and the workspace is resolved for the caller's tenant"],
+
+  // ---- payloads the scanner cannot read (variable, not an inline literal) ----
+  ["src/app/api/publish/route.ts::site_pages",
+    "patch object carries tenant_id/workspace_id/client_id; update also re-filters"],
+  ["src/app/api/cms/settings/route.ts::cms_site_settings",
+    "record carries tenant_id + workspace_id; update keyed by the scoped row's id"],
+  ["src/app/api/analytics/sync/route.ts::traffic_snapshots",
+    "rows are mapped with tenant_id from the session; upsert conflicts on it"],
+  ["src/app/api/analytics/sync/route.ts::tenant_connections",
+    "conn resolved by .eq(tenant_id) above; write keyed by conn.id"],
+  ["src/lib/ai/orchestrator.ts::token_ledger",
+    "ledger rows are built with tenant_id (metering must record who spent what)"],
+  ["src/lib/nav-config.ts::nav_config",
+    "select filters tenant_id; the record payload carries tenant_id"],
+
+  // ---- capability tokens: the row id/token is the credential ----
+  ["src/app/api/gbp/digest-reply/route.ts::gbp_reviews",
+    "[Re:#<id8>] token from the signed digest; ambiguous prefixes are refused"],
+  ["src/app/api/outreach/reply-webhook/route.ts::outreach_targets",
+    "unguessable target UUID + optional OUTREACH_WEBHOOK_SECRET header"],
+  ["src/lib/agency/api-keys.ts::machine_api_keys",
+    "lookup by key_hash (the bearer credential); inserts set tenant_id"],
+  ["src/lib/agency/workflow.ts::workflow_state",
+    "idempotency key / approval token capabilities; the escalation sweep is cross-tenant by design"],
+  ["src/lib/agency/workflow.ts::approval_receipts",
+    "receipts keyed by the state id resolved from an approval token"],
+  ["src/lib/inngest/functions/onboardClient.ts::sign_requests",
+    "lookup by the signing token (capability), not by tenant"],
+  ["src/lib/inngest/functions/onboardClient.ts::workflow_state",
+    "workflow row keyed by its own id/idempotency key; tenant set at insert"],
+
+  // ---- public-by-design surfaces ----
+  ["src/app/site/[slug]/page.tsx::site_pages",
+    "public site page by slug; drafts require the preview token"],
+  ["src/app/api/cms/forms/route.ts::site_pages",
+    "public form widget: tenant is derived from the page row, never from the caller"],
+]);
+
 const CHAIN_WINDOW = 900; // chars after .from(...) — enough for chained filters
 
 // Find the end of a `.from(...) ... .method(...)` chain by tracking paren
@@ -301,6 +396,9 @@ const fromRe = /\.from\(\s*["'`]([a-z_]+)["'`]\s*\)/g;
 
 function audit() {
   const flagged = [];
+  let scopedCount = 0;
+  let reviewedCount = 0;
+  let ignoredFilesCount = 0;
   for (const file of walk(SRC)) {
     const rel = path.relative(ROOT, file).replace(/\\/g, "/");
     if (rel.includes(".test.")) continue;
@@ -324,7 +422,13 @@ function audit() {
       //    (an update payload setting tenant_id would write it to ALL rows —
       //    that is not scoping, so it is never accepted for writes).
       const scoped = hasInsert ? hasPayloadTenant : hasEqFilter;
-      if (!scoped && !IGNORE.has(rel)) {
+      if (scoped) {
+        scopedCount++;
+      } else if (IGNORE.has(rel)) {
+        ignoredFilesCount++;
+      } else if (REVIEWED.has(`${rel}::${table}`)) {
+        reviewedCount++;
+      } else {
         flagged.push({
           file: rel,
           table,
@@ -333,16 +437,24 @@ function audit() {
       }
     }
   }
-  return flagged;
+  return { flagged, scopedCount, reviewedCount, ignoredFilesCount };
 }
 
-const flagged = audit();
+const { flagged, scopedCount, reviewedCount, ignoredFilesCount } = audit();
 if (process.argv.includes("--json")) {
   console.log(JSON.stringify(flagged, null, 2));
 } else {
-  console.log(`Service-role queries on tenant tables WITHOUT tenant scope: ${flagged.length}`);
+  console.log(
+    `Tenant-scope audit — scoped: ${scopedCount} · reviewed: ${reviewedCount} · cross-tenant files (allowlisted): ${ignoredFilesCount} · unscoped: ${flagged.length}`
+  );
   for (const f of flagged) {
     console.log(`- ${f.file} :: ${f.table} :: ${f.snippet}...`);
+  }
+  if (flagged.length > 0) {
+    console.log(
+      "\nFix the query (add .eq(\"tenant_id\", tenantId) or set tenant_id on the payload), " +
+        "or add a reviewed exception with a reason if the scoping is real but invisible to this scan."
+    );
   }
 }
 process.exit(flagged.length > 0 ? 1 : 0);

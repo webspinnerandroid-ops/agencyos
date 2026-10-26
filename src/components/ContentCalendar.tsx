@@ -704,14 +704,15 @@ export default function ContentCalendar({
     setCurrentMonth(new Date());
   }, []);
 
-  // ---- Auto-jump to the next month with scheduled posts ----
+  // ---- Auto-jump to the next non-empty month ----
   // The view opens on today's month. When that month is empty but a LATER
-  // month has scheduled posts, jump forward once so the first thing an
-  // operator sees is actual scheduled work (today's month empties out every
-  // time planning runs ahead of the calendar). Manual navigation via the
-  // arrows or "Today" permanently disables the jump for the session — no
-  // surprise teleports while the user is browsing. Switching client re-arms
-  // it, because the new client's posts can be months away.
+  // month has something to show — scheduled posts OR proposed campaign items
+  // (the dashed chips) — jump forward once so the first thing an operator
+  // sees is actual planned work (today's month empties out every time
+  // planning runs ahead of the calendar). Manual navigation via the arrows
+  // or "Today" permanently disables the jump for the session — no surprise
+  // teleports while the user is browsing. Switching client re-arms it,
+  // because the new client's posts can be months away.
   const openingMonthKey = useMemo(() => format(new Date(), "yyyy-MM"), []);
   const autoJumpDoneRef = useRef(false);
 
@@ -728,12 +729,15 @@ export default function ContentCalendar({
       autoJumpDoneRef.current = true;
       return;
     }
-    // Month keys (yyyy-MM) holding at least one scheduled post.
+    // Month keys (yyyy-MM) holding at least one scheduled post, or at least
+    // one proposed campaign item (ProposedItem.date is "yyyy-MM-dd"), since a
+    // month is not visually empty when either renders on the grid.
     const monthKeys = new Set<string>();
     for (const post of posts) {
       if (!post.scheduled_at) continue;
       monthKeys.add(format(parseISO(post.scheduled_at), "yyyy-MM"));
     }
+    for (const item of proposedItems) monthKeys.add(item.date.slice(0, 7));
     if (monthKeys.has(currentKey)) {
       autoJumpDoneRef.current = true;
       return;
@@ -747,7 +751,7 @@ export default function ContentCalendar({
       autoJumpDoneRef.current = true;
       setCurrentMonth(parseISO(`${nextKey}-01T00:00:00`));
     }
-  }, [posts, currentMonth, loadingFirst, openingMonthKey]);
+  }, [posts, proposedItems, currentMonth, loadingFirst, openingMonthKey]);
 
   // ---- Status toggle ----
   const toggleStatus = useCallback(

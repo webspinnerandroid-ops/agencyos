@@ -106,3 +106,6 @@ scripts/*.cjs
 .bliss/
 # Private pasted credentials — local only
 .secrets/
+# Playwright run artifacts (error contexts, screenshots, auth storage states)
+test-results/
+playwright-report/

@@ -1,0 +1,62 @@
+[
+  {
+    "kind": "latency",
+    "severity": "info",
+    "where": "GET /dashboard",
+    "detail": "200 in 1171ms"
+  },
+  {
+    "kind": "latency",
+    "severity": "info",
+    "where": "GET /dashboard/content-map",
+    "detail": "200 in 304ms"
+  },
+  {
+    "kind": "latency",
+    "severity": "info",
+    "where": "GET /dashboard/posts",
+    "detail": "200 in 1253ms"
+  },
+  {
+    "kind": "latency",
+    "severity": "info",
+    "where": "GET /dashboard/clients",
+    "detail": "200 in 598ms"
+  },
+  {
+    "kind": "latency",
+    "severity": "info",
+    "where": "GET /dashboard/calendar",
+    "detail": "200 in 331ms"
+  },
+  {
+    "kind": "latency",
+    "severity": "info",
+    "where": "GET /dashboard/settings/ai",
+    "detail": "200 in 1372ms"
+  },
+  {
+    "kind": "latency",
+    "severity": "info",
+    "where": "GET /dashboard/workspaces",
+    "detail": "200 in 300ms"
+  },
+  {
+    "kind": "security",
+    "severity": "critical",
+    "where": "POST /api/content-map",
+    "detail": "foreign-id probe returned 415: {\"error\":\"Expected a multipart/form-data (or urlencoded) request body\"}"
+  },
+  {
+    "kind": "race",
+    "severity": "info",
+    "where": "POST /api/content-map/batch ×5 parallel",
+    "detail": "responses=[{\"started\":false,\"reason\":\"nothing_planned\"},{\"started\":false,\"reason\":\"nothing_planned\"},{\"started\":false,\"reason\":\"nothing_planned\"},{\"started\":false,\"reason\":\"nothing_planned\"},{\"started\":false,\"reason\":\"nothing_planned\"}] totalClaimed=0"
+  },
+  {
+    "kind": "race",
+    "severity": "info",
+    "where": "parallel login sessions",
+    "detail": "outcomes=[true,true]"
+  }
+]

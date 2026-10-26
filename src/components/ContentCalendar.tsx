@@ -1,7 +1,10 @@
 "use client";
 
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
-import type { DragEvent as ReactDragEvent } from "react";
+import type {
+  DragEvent as ReactDragEvent,
+  PointerEvent as ReactPointerEvent,
+} from "react";
 import {
   startOfMonth,
   endOfMonth,
@@ -11,6 +14,7 @@ import {
   format,
   isSameDay,
   isSameMonth,
+  addDays,
   addMonths,
   subMonths,
   parseISO,
@@ -364,6 +368,165 @@ function rescheduleToDay(post: CalendarPost, dateKey: string): string | null {
 }
 
 // ------------------------------------------------------------------
+// Day contents — the chip stack one calendar day renders (skeleton pills,
+// post chips, proposed campaign chips). Shared by the month-grid cells and
+// the mobile week-strip rows so both views expose identical markup and the
+// same drag-and-drop affordances.
+// ------------------------------------------------------------------
+
+interface ChipEventHandlers {
+  /** Desktop mice use native HTML5 DnD (cells read the drop event). */
+  onDragStart: (post: CalendarPost, e: ReactDragEvent<HTMLDivElement>) => void;
+  onDragEnd: (e: ReactDragEvent<HTMLDivElement>) => void;
+  /**
+   * Touch fallback: mobile browsers never start a native HTML5 drag, so a
+   * captured pointer gesture replays the same handleDropOnDay path when the
+   * finger lifts over a [data-drop-day] target.
+   */
+  onPointerDown: (post: CalendarPost, e: ReactPointerEvent<HTMLDivElement>) => void;
+  onPointerMove: (e: ReactPointerEvent<HTMLDivElement>) => void;
+  onPointerUp: (e: ReactPointerEvent<HTMLDivElement>) => void;
+  onPointerCancel: (e: ReactPointerEvent<HTMLDivElement>) => void;
+  onOpen: (post: CalendarPost) => void;
+  onOpenProposed: (item: ProposedItem) => void;
+  /** The post id whose chip is currently being dragged (both paths). */
+  dragPostId: string | null;
+  /** Whether reschedule drags are enabled at all (onPostMove present). */
+  draggingEnabled: boolean;
+}
+
+function DayContents({
+  dayPosts,
+  dayProposed,
+  loading,
+  chips,
+}: {
+  dayPosts: CalendarPost[];
+  dayProposed: ProposedItem[];
+  loading: boolean;
+  chips: ChipEventHandlers;
+}) {
+  return (
+    <div className="space-y-0.5">
+      {/* Skeleton pills while the first fetch is in flight — the grid
+          frame is already on screen, so these just fill the empty cells
+          until real posts arrive. */}
+      {loading &&
+        [0, 1].map((i) => (
+          <div
+            key={`skeleton-${i}`}
+            aria-hidden="true"
+            className="bg-muted animate-pulse rounded-md px-2 py-1.5"
+          >
+            <div className="h-2 w-3/4 rounded bg-muted-foreground/20" />
+            <div className="mt-1 h-2 w-1/2 rounded bg-muted-foreground/10" />
+          </div>
+        ))}
+      {dayPosts.map((post) => {
+        const platforms = getPlatformsForPost(post);
+        const draggable = chips.draggingEnabled && !!post.scheduled_at;
+        return (
+          <div
+            key={post.id}
+            className={cn(
+              "bg-card border rounded-md px-2 py-1.5 cursor-pointer hover:shadow-md transition-shadow text-xs",
+              chips.dragPostId === post.id && "opacity-50",
+              // touch-none: on touch devices this gesture belongs to the
+              // drag (touch scrolling still works everywhere else).
+              draggable && "cursor-grab active:cursor-grabbing touch-none"
+            )}
+            draggable={draggable}
+            {...(draggable
+              ? {
+                  onDragStart: (e: ReactDragEvent<HTMLDivElement>) =>
+                    chips.onDragStart(post, e),
+                  onDragEnd: chips.onDragEnd,
+                  onPointerDown: (e: ReactPointerEvent<HTMLDivElement>) =>
+                    chips.onPointerDown(post, e),
+                  onPointerMove: chips.onPointerMove,
+                  onPointerUp: chips.onPointerUp,
+                  onPointerCancel: chips.onPointerCancel,
+                }
+              : {})}
+            onDrop={(e) => e.stopPropagation()}
+            onClick={() => chips.onOpen(post)}
+          >
+            <div className="flex items-center gap-1 mb-0.5">
+              {platforms.map((p) => (
+                <span
+                  key={p}
+                  title={p}
+                  className="text-[10px] leading-none"
+                >
+                  {PLATFORM_ICONS[p] ?? p}
+                </span>
+              ))}
+            </div>
+            <p className="truncate text-muted-foreground leading-tight">
+              {excerptFromContent(post.content)}
+            </p>
+            <span
+              className={cn(
+                "inline-block mt-1 px-1.5 py-px rounded-full text-[10px] font-medium",
+                STATUS_CONFIG[post.status]?.className ??
+                  "bg-gray-100 text-gray-700"
+              )}
+            >
+              {STATUS_CONFIG[post.status]?.label ?? post.status}
+            </span>
+          </div>
+        );
+      })}
+
+      {/* Proposed pieces from campaign plans — dashed until approved. */}
+      {dayProposed.map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          title={`${item.planTitle} — proposed ${item.kind}. Click to open.`}
+          onClick={() => chips.onOpenProposed(item)}
+          className="w-full text-left border border-dashed rounded-md px-2 py-1 text-xs opacity-80 hover:opacity-100 hover:border-violet-400 hover:bg-violet-50 dark:hover:bg-violet-950/40 cursor-pointer transition-colors"
+        >
+          <div className="flex items-center gap-1 mb-0.5">
+            <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              {item.kind === "website"
+                ? "🌐"
+                : item.kind === "research"
+                  ? "🔎"
+                  : item.kind === "blog"
+                    ? "📝"
+                    : (PLATFORM_ICONS[item.platform ?? ""] ?? "📣")}
+            </span>
+            <span className="text-[10px] font-medium text-muted-foreground">
+              {item.kind === "website"
+                ? "Proposed website build"
+                : item.kind === "research"
+                  ? "Research checkpoint"
+                  : item.kind === "blog"
+                    ? "Proposed blog"
+                    : "Proposed social"}
+            </span>
+          </div>
+          <p className="truncate text-muted-foreground leading-tight">
+            {item.title}
+          </p>
+          <span className="inline-flex items-center gap-1.5 mt-1">
+            <span className="px-1.5 py-px rounded-full text-[10px] font-medium bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300">
+              Proposed
+            </span>
+            {item.owner && (
+              <span className="px-1.5 py-px rounded-full text-[10px] font-medium bg-muted text-muted-foreground">
+                {OWNER_NAMES[item.owner] ?? item.owner}
+              </span>
+            )}
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------
 // Component
 // ------------------------------------------------------------------
 
@@ -431,9 +594,36 @@ export default function ContentCalendar({
   const [retrying, setRetrying] = useState(false);
   const [publishError, setPublishError] = useState<string | null>(null);
 
-  // ---- Drag-to-reschedule (HTML5 DnD) ----
+  // ---- Drag-to-reschedule (HTML5 DnD on desktop, pointer gesture on touch) ----
   const [dragPostId, setDragPostId] = useState<string | null>(null);
   const [dragOverDay, setDragOverDay] = useState<string | null>(null);
+
+  // ---- Month grid ↔ week strip (mobile) ----
+  // Narrow viewports open on the week strip — one drop row per day — while
+  // wide screens keep the 6-row month grid. Both views render the SAME
+  // DayContents chips inside [data-drop-day] targets, so drag-to-reschedule
+  // behaves identically in either view.
+  const [viewMode, setViewMode] = useState<"month" | "week">("month");
+  const [weekAnchor, setWeekAnchor] = useState<Date>(() =>
+    startOfWeek(new Date(), { weekStartsOn: 0 })
+  );
+  const weekDays = useMemo(
+    () =>
+      eachDayOfInterval({
+        start: startOfWeek(weekAnchor, { weekStartsOn: 0 }),
+        end: endOfWeek(weekAnchor, { weekStartsOn: 0 }),
+      }),
+    [weekAnchor]
+  );
+  // Seed once after mount so narrow screens open on the strip; an effect
+  // keeps the server-rendered first paint untouched (no hydration flash on
+  // wide screens).
+  const viewSeedRef = useRef(false);
+  useEffect(() => {
+    if (viewSeedRef.current) return;
+    viewSeedRef.current = true;
+    if (window.matchMedia?.("(max-width: 767px)").matches) setViewMode("week");
+  }, []);
 
   // ---- Lazy body hydration (P0 calendar perf) ----
   // List queries ship only the small JSON keys (type/title/caption/aeoGeo);
@@ -689,20 +879,36 @@ export default function ContentCalendar({
 
   // ---- Navigation ----
   const userNavigatedRef = useRef(false);
-  const prevMonth = useCallback(() => {
+  const goPrev = useCallback(() => {
     userNavigatedRef.current = true;
-    setCurrentMonth((m) => subMonths(m, 1));
-  }, []);
+    if (viewMode === "week") setWeekAnchor((w) => addDays(w, -7));
+    else setCurrentMonth((m) => subMonths(m, 1));
+  }, [viewMode]);
 
-  const nextMonth = useCallback(() => {
+  const goNext = useCallback(() => {
     userNavigatedRef.current = true;
-    setCurrentMonth((m) => addMonths(m, 1));
-  }, []);
+    if (viewMode === "week") setWeekAnchor((w) => addDays(w, 7));
+    else setCurrentMonth((m) => addMonths(m, 1));
+  }, [viewMode]);
 
   const goToToday = useCallback(() => {
     userNavigatedRef.current = true;
     setCurrentMonth(new Date());
+    setWeekAnchor(startOfWeek(new Date(), { weekStartsOn: 0 }));
   }, []);
+
+  // Toggle between the two views; entering the week strip shows the week
+  // containing the month the operator is already looking at.
+  const switchView = useCallback(
+    (mode: "month" | "week") => {
+      userNavigatedRef.current = true;
+      setViewMode(mode);
+      if (mode === "week") {
+        setWeekAnchor(startOfWeek(currentMonth, { weekStartsOn: 0 }));
+      }
+    },
+    [currentMonth]
+  );
 
   // ---- Auto-jump to the next non-empty month ----
   // The view opens on today's month. When that month is empty but a LATER
@@ -804,6 +1010,116 @@ export default function ContentCalendar({
     },
     [dragPostId, posts, onPostMove]
   );
+
+  // ---- Pointer drag (touch) ----
+  // Mobile browsers never start a native HTML5 drag, so draggable chips also
+  // track a captured pointer gesture. Crossing a small movement threshold
+  // enters the same visual state as HTML5 dragging; releasing over a
+  // [data-drop-day] target replays handleDropOnDay — identical semantics in
+  // the month grid and the week strip. Mice are ignored here: once native
+  // DnD begins, the browser stops emitting pointermove on a draggable
+  // element, so this path stays dormant on desktop.
+  const pointerDragRef = useRef<{
+    postId: string;
+    pointerId: number;
+    startX: number;
+    startY: number;
+    active: boolean;
+  } | null>(null);
+  const suppressClickUntilRef = useRef(0);
+
+  const dayKeyFromPoint = useCallback((x: number, y: number): string | null => {
+    const el = document.elementFromPoint(x, y);
+    const cell = el instanceof Element ? el.closest("[data-drop-day]") : null;
+    return cell?.getAttribute("data-drop-day") ?? null;
+  }, []);
+
+  const handleChipPointerDown = useCallback(
+    (post: CalendarPost, e: ReactPointerEvent<HTMLDivElement>) => {
+      if (!onPostMove || !post.scheduled_at || e.pointerType === "mouse") return;
+      pointerDragRef.current = {
+        postId: post.id,
+        pointerId: e.pointerId,
+        startX: e.clientX,
+        startY: e.clientY,
+        active: false,
+      };
+      // Capture so moves keep arriving while the finger travels off-chip.
+      // A already-released pointer (quick taps, synthetic events) throws —
+      // drop the capture instead of aborting the gesture.
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        /* moves will bubble from the chip instead; still works on-touch */
+      }
+    },
+    [onPostMove]
+  );
+
+  const handleChipPointerMove = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      const st = pointerDragRef.current;
+      if (!st || st.pointerId !== e.pointerId) return;
+      if (!st.active) {
+        if (Math.hypot(e.clientX - st.startX, e.clientY - st.startY) < 8) return;
+        st.active = true;
+        setDragPostId(st.postId);
+      }
+      // Suppress selection/scroll defaults only once the gesture is a drag.
+      e.preventDefault();
+      const target = dayKeyFromPoint(e.clientX, e.clientY);
+      setDragOverDay((d) => (d === target ? d : target));
+    },
+    [dayKeyFromPoint]
+  );
+
+  const handleChipPointerUp = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      const st = pointerDragRef.current;
+      if (!st || st.pointerId !== e.pointerId) return;
+      pointerDragRef.current = null;
+      if (!st.active) return;
+      // The click that follows a real drag must not open the post dialog.
+      suppressClickUntilRef.current = Date.now();
+      const target = dayKeyFromPoint(e.clientX, e.clientY);
+      setDragPostId(null);
+      setDragOverDay(null);
+      if (target) void handleDropOnDay(target);
+    },
+    [dayKeyFromPoint, handleDropOnDay]
+  );
+
+  const handleChipPointerCancel = useCallback(() => {
+    if (!pointerDragRef.current) return;
+    pointerDragRef.current = null;
+    setDragPostId(null);
+    setDragOverDay(null);
+  }, []);
+
+  const openPostFromChip = useCallback((post: CalendarPost) => {
+    // A taps under the drag threshold fall through to the click; one right
+    // after a completed drag must not.
+    if (Date.now() - suppressClickUntilRef.current < 250) return;
+    setSelectedPost(post);
+  }, []);
+
+  const openProposedFromChip = useCallback(
+    (item: ProposedItem) => setSelectedProposed(item),
+    []
+  );
+
+  const chipHandlers: ChipEventHandlers = {
+    draggingEnabled: !!onPostMove,
+    dragPostId,
+    onDragStart: handleDragStart,
+    onDragEnd: handleDragEnd,
+    onPointerDown: handleChipPointerDown,
+    onPointerMove: handleChipPointerMove,
+    onPointerUp: handleChipPointerUp,
+    onPointerCancel: handleChipPointerCancel,
+    onOpen: openPostFromChip,
+    onOpenProposed: openProposedFromChip,
+  };
 
   // ---- Per-post analytics state ----
   const [postAnalytics, setPostAnalytics] = useState<AnalyticsSnapshot[] | null>(null);
@@ -1007,34 +1323,65 @@ export default function ContentCalendar({
         {/* Header */}
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-3">
-            <Button variant="outline" size="icon" onClick={prevMonth}>
+            <Button variant="outline" size="icon" onClick={goPrev}>
               <ChevronLeft className="size-4" />
             </Button>
             <h2 className="text-xl font-bold min-w-[180px] text-center">
-              {format(currentMonth, "MMMM yyyy")}
+              {viewMode === "week"
+                ? `${format(weekDays[0], "MMM d")} – ${format(weekDays[6], "MMM d, yyyy")}`
+                : format(currentMonth, "MMMM yyyy")}
             </h2>
-            <Button variant="outline" size="icon" onClick={nextMonth}>
+            <Button variant="outline" size="icon" onClick={goNext}>
               <ChevronRight className="size-4" />
             </Button>
           </div>
-          <Button variant="ghost" size="sm" onClick={goToToday}>
-            <CalendarIcon className="size-4 mr-1" />
-            Today
-          </Button>
+          <div className="flex items-center gap-2">
+            <div
+              className="flex items-center rounded-md border p-0.5"
+              role="group"
+              aria-label="Calendar view"
+            >
+              <Button
+                variant={viewMode === "month" ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => switchView("month")}
+              >
+                Month
+              </Button>
+              <Button
+                variant={viewMode === "week" ? "secondary" : "ghost"}
+                size="sm"
+                onClick={() => switchView("week")}
+              >
+                Week
+              </Button>
+            </div>
+            <Button variant="ghost" size="sm" onClick={goToToday}>
+              <CalendarIcon className="size-4 mr-1" />
+              Today
+            </Button>
+          </div>
         </div>
 
         {/* Day-of-week header */}
-        <div className="grid grid-cols-7 mb-1">
-          {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
-            <div
-              key={d}
-              className="text-center text-xs font-semibold text-muted-foreground py-2 border-b"
-            >
-              {d}
-            </div>
-          ))}
-        </div>
+        {viewMode === "month" && (
+          <div className="grid grid-cols-7 mb-1">
+            {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((d) => (
+              <div
+                key={d}
+                className="text-center text-xs font-semibold text-muted-foreground py-2 border-b"
+              >
+                {d}
+              </div>
+            ))}
+          </div>
+        )}
 
+        {/* Only the ACTIVE view renders — the month grid and the week strip
+            never coexist in the DOM. A phone in the week strip therefore has
+            exactly one set of chips and drop targets, and drag-and-drop
+            touches the same [data-drop-day] targets in either view. */}
+        {viewMode === "month" && (
         <div className="grid grid-cols-7 border-l border-t">
             {days.map((day) => {
               const dateKey = format(day, "yyyy-MM-dd");
@@ -1049,6 +1396,7 @@ export default function ContentCalendar({
               return (
                 <div
                   key={dateKey}
+                  data-drop-day={dateKey}
                   className={cn(
                     "min-h-[110px] border-r border-b p-1.5 transition-colors",
                     !isCurrentMonth && "bg-muted/30 text-muted-foreground",
@@ -1075,115 +1423,82 @@ export default function ContentCalendar({
                     {format(day, "d")}
                   </span>
 
-                  <div className="space-y-0.5">
-                    {/* Skeleton pills while the first fetch is in flight —
-                        the grid frame is already on screen, so these just
-                        fill the empty cells until real posts arrive. */}
-                    {loadingFirst &&
-                      [0, 1].map((i) => (
-                        <div
-                          key={`skeleton-${i}`}
-                          aria-hidden="true"
-                          className="bg-muted animate-pulse rounded-md px-2 py-1.5"
-                        >
-                          <div className="h-2 w-3/4 rounded bg-muted-foreground/20" />
-                          <div className="mt-1 h-2 w-1/2 rounded bg-muted-foreground/10" />
-                        </div>
-                      ))}
-                    {dayPosts.map((post) => {
-                      const platforms = getPlatformsForPost(post);
-                      const draggable = !!onPostMove && !!post.scheduled_at;
-                      return (
-                        <div
-                          key={post.id}
-                          className={cn(
-                            "bg-card border rounded-md px-2 py-1.5 cursor-pointer hover:shadow-md transition-shadow text-xs",
-                            dragPostId === post.id && "opacity-50",
-                            draggable && "cursor-grab active:cursor-grabbing"
-                          )}
-                          draggable={draggable}
-                          onDragStart={(e) => handleDragStart(post, e)}
-                          onDragEnd={handleDragEnd}
-                          onDrop={(e) => e.stopPropagation()}
-                          onClick={() => setSelectedPost(post)}
-                        >
-                          <div className="flex items-center gap-1 mb-0.5">
-                            {platforms.map((p) => (
-                              <span
-                                key={p}
-                                title={p}
-                                className="text-[10px] leading-none"
-                              >
-                                {PLATFORM_ICONS[p] ?? p}
-                              </span>
-                            ))}
-                          </div>
-                          <p className="truncate text-muted-foreground leading-tight">
-                            {excerptFromContent(post.content)}
-                          </p>
-                          <span
-                            className={cn(
-                              "inline-block mt-1 px-1.5 py-px rounded-full text-[10px] font-medium",
-                              STATUS_CONFIG[post.status]?.className ??
-                                "bg-gray-100 text-gray-700"
-                            )}
-                          >
-                            {STATUS_CONFIG[post.status]?.label ??
-                              post.status}
-                          </span>
-                        </div>
-                      );
-                    })}
-
-                        {/* Proposed pieces from campaign plans — dashed until approved. */}
-                        {dayProposed.map((item) => (
-                          <button
-                            key={item.id}
-                            type="button"
-                            title={`${item.planTitle} — proposed ${item.kind}. Click to open.`}
-                            onClick={() => setSelectedProposed(item)}
-                            className="w-full text-left border border-dashed rounded-md px-2 py-1 text-xs opacity-80 hover:opacity-100 hover:border-violet-400 hover:bg-violet-50 dark:hover:bg-violet-950/40 cursor-pointer transition-colors"
-                          >
-                            <div className="flex items-center gap-1 mb-0.5">
-                              <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                                {item.kind === "website"
-                                  ? "🌐"
-                                  : item.kind === "research"
-                                    ? "🔎"
-                                    : item.kind === "blog"
-                                      ? "📝"
-                                      : (PLATFORM_ICONS[item.platform ?? ""] ?? "📣")}
-                              </span>
-                              <span className="text-[10px] font-medium text-muted-foreground">
-                                {item.kind === "website"
-                                  ? "Proposed website build"
-                                  : item.kind === "research"
-                                    ? "Research checkpoint"
-                                    : item.kind === "blog"
-                                      ? "Proposed blog"
-                                      : "Proposed social"}
-                              </span>
-                            </div>
-                            <p className="truncate text-muted-foreground leading-tight">
-                              {item.title}
-                            </p>
-                            <span className="inline-flex items-center gap-1.5 mt-1">
-                              <span className="px-1.5 py-px rounded-full text-[10px] font-medium bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300">
-                                Proposed
-                              </span>
-                              {item.owner && (
-                                <span className="px-1.5 py-px rounded-full text-[10px] font-medium bg-muted text-muted-foreground">
-                                  {OWNER_NAMES[item.owner] ?? item.owner}
-                                </span>
-                              )}
-                            </span>
-                          </button>
-                        ))}
-                      </div>
+                  <DayContents
+                    dayPosts={dayPosts}
+                    dayProposed={dayProposed}
+                    loading={loadingFirst}
+                    chips={chipHandlers}
+                  />
                   </div>
                 );
               })}
             </div>
+        )}
+        {/* Week strip (mobile) — one drop row per day, reusing the same
+            DayContents chips and the same [data-drop-day] wiring as the
+            month grid, so drag-to-reschedule works identically here. */}
+        {viewMode === "week" && (
+          <div className="border-l border-t">
+            {weekDays.map((day) => {
+              const dateKey = format(day, "yyyy-MM-dd");
+              const dayPosts = loadingFirst
+                ? []
+                : (postsByDay.get(dateKey) ?? []);
+              const dayProposed = loadingFirst
+                ? []
+                : (proposedByDay.get(dateKey) ?? []);
+              const isToday = isSameDay(day, new Date());
+
+              return (
+                <div
+                  key={dateKey}
+                  data-drop-day={dateKey}
+                  className={cn(
+                    "flex items-start gap-2 border-r border-b p-2 transition-colors",
+                    isToday && "bg-accent/20",
+                    dragPostId &&
+                      onPostMove &&
+                      (dragOverDay === dateKey
+                        ? "bg-primary/10 ring-2 ring-inset ring-primary/50"
+                        : "cursor-grab")
+                  )}
+                  onDragOver={(e) => handleDragOverDay(dateKey, e)}
+                  onDragLeave={() =>
+                    setDragOverDay((d) => (d === dateKey ? null : d))
+                  }
+                  onDrop={() => void handleDropOnDay(dateKey)}
+                >
+                  <div className="w-12 shrink-0 text-center pt-0.5">
+                    <p
+                      className={cn(
+                        "text-[10px] font-semibold uppercase text-muted-foreground",
+                        isToday && "text-primary"
+                      )}
+                    >
+                      {format(day, "EEE")}
+                    </p>
+                    <span
+                      className={cn(
+                        "inline-block text-xs font-medium px-1 py-0.5 rounded",
+                        isToday && "bg-primary text-primary-foreground"
+                      )}
+                    >
+                      {format(day, "d")}
+                    </span>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <DayContents
+                      dayPosts={dayPosts}
+                      dayProposed={dayProposed}
+                      loading={loadingFirst}
+                      chips={chipHandlers}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
 
         {/* Legend */}
         <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">

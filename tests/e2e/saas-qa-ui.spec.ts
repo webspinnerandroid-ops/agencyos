@@ -53,6 +53,41 @@ async function horizontalOverflow(page: Page): Promise<number> {
   });
 }
 
+/** Disposable probe post in the tenant the suite session is browsing. */
+async function createProbePost(title: string, scheduledIso: string): Promise<string> {
+  const { db } = adminClient();
+  const { tenantId, workspaceId } = sessionIds();
+  if (!tenantId) throw new Error("could not read the session tenant cookie");
+  if (!workspaceId) throw new Error("the suite session has no workspace_id cookie");
+  const post = await db
+    .from("posts")
+    .insert({
+      tenant_id: tenantId,
+      workspace_id: workspaceId,
+      title,
+      type: "blog",
+      status: "scheduled",
+      scheduled_at: scheduledIso,
+      content: { type: "blog", title, body: "Probe." },
+    })
+    .select("id")
+    .single();
+  if (post.error) throw new Error(`probe post insert failed: ${post.error.message}`);
+  return post.data!.id as string;
+}
+
+async function deleteProbePost(id: string | null): Promise<void> {
+  if (!id) return;
+  const { db } = adminClient();
+  // Child rows (publishing_logs — the cron can sweep a past-due probe
+  // mid-run) block the post delete; remove them first, and surface delete
+  // errors: an unchecked { error } silently leaks probe rows into the
+  // tenant's calendar.
+  await db.from("publishing_logs").delete().eq("post_id", id);
+  const del = await db.from("posts").delete().eq("id", id);
+  if (del.error) throw new Error(`probe cleanup failed for ${id}: ${del.error.message}`);
+}
+
 test.describe("saas-qa-audit · responsive viewports", () => {
   test.describe.configure({ mode: "serial" });
   test.setTimeout(300_000);
@@ -192,14 +227,18 @@ test.describe("saas-qa-audit · calendar mechanics", () => {
     await db.from("posts").delete().eq("id", probePostId);
   });
 
-  // The post chip on the month grid. Located structurally: the label is only
-  // asserted in the chip test, so the rest of the suite does not depend on it.
-  // Post chip on the month grid, located structurally. The chip's class list
-  // goes through twMerge (cn()), so the drag refactor's conditional
-  // `cursor-grab` conflicts with and evicts `cursor-pointer` — dated scheduled
-  // chips render as cursor-grab only. Match either cursor class.
+  // Post chip on the active calendar view. The chip's class list goes
+  // through twMerge (cn()), so the drag refactor's conditional `cursor-grab`
+  // conflicts with and evicts `cursor-pointer` — scheduled chips render as
+  // cursor-grab only. Match either cursor class, and keep the result VISIBLE:
+  // stale failed runs hid a version of this page that rendered both views'
+  // markup with the inactive one display:none, which made `.first()` a
+  // hidden chip forever. Match out the display:none duplicates too.
   const chip = (page: Page) =>
-    page.locator("div.cursor-grab, div.cursor-pointer").first();
+    page
+      .locator("div.cursor-grab, div.cursor-pointer")
+      .filter({ visible: true })
+      .first();
 
   test("calendar renders the month and opens a post dialog in agency-local time", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -269,6 +308,61 @@ test.describe("saas-qa-audit · calendar mechanics", () => {
     expect(overflow, `calendar overflows by ${overflow}px on a 390px viewport`).toBeLessThanOrEqual(2);
   });
 
+  test("phone: drag-and-drop affordance is the same week strip and month grid", async ({ page }) => {
+    // 16:00Z is 10:00 America/Denver — always today's local calendar date,
+    // so the probe chip sits inside the week strip's default (current) week.
+    const at = new Date();
+    at.setUTCHours(16, 0, 0, 0);
+    const probeId = await createProbePost("QA-AUDIT phone drag probe", at.toISOString());
+    try {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.goto(`${BASE}/dashboard/calendar`, { waitUntil: "domcontentloaded" });
+
+      const probeChip = page
+        .locator("div.bg-card", { hasText: "QA-AUDIT phone drag probe" })
+        .filter({ visible: true })
+        .first();
+      const draggables = () => page.locator("div[draggable='true']").filter({ visible: true });
+      const dropTargets = () => page.locator("[data-drop-day]").filter({ visible: true });
+
+      // Phones open on the week strip: draggable chips over one drop row
+      // per day, wired with the same [data-drop-day] targets as the grid.
+      await expect(probeChip).toBeVisible({ timeout: 60_000 });
+      expect(
+        await draggables().count(),
+        "the week strip does not expose draggable chips"
+      ).toBeGreaterThan(0);
+      expect(
+        await dropTargets().count(),
+        "the week strip does not expose day drop targets"
+      ).toBe(7);
+
+      // Switching to the month grid must keep the SAME affordance: the same
+      // draggable chips over the same [data-drop-day] targets, page still
+      // fitting the viewport (drag targets must be reachable, not off-screen).
+      await page
+        .getByRole("group", { name: "Calendar view" })
+        .getByRole("button", { name: "Month" })
+        .click();
+      await expect(probeChip).toBeVisible({ timeout: 30_000 });
+      expect(
+        await draggables().count(),
+        "the month grid does not expose draggable chips"
+      ).toBeGreaterThan(0);
+      expect(
+        await dropTargets().count(),
+        "the month grid does not expose day drop targets"
+      ).toBeGreaterThanOrEqual(35);
+      const overflow = await horizontalOverflow(page);
+      expect(
+        overflow,
+        `the month grid overflows by ${overflow}px on a 390px viewport`
+      ).toBeLessThanOrEqual(2);
+    } finally {
+      await deleteProbePost(probeId);
+    }
+  });
+
   test("post chips on the month grid identify their post", async ({ page }) => {
     // /api/posts re-shapes rows into `post.content`, so the chip excerpt has a
     // title to render instead of falling back to "No content".
@@ -306,41 +400,6 @@ test.describe("saas-qa-audit · calendar mechanics", () => {
     title: string,
     at: "first" | "last" = "first"
   ) => cellByDay(page, day, at).locator("div.bg-card", { hasText: title }).first();
-
-  async function createProbePost(title: string, scheduledIso: string): Promise<string> {
-    const { db } = adminClient();
-    const { tenantId, workspaceId } = sessionIds();
-    if (!tenantId) throw new Error("could not read the session tenant cookie");
-    if (!workspaceId) throw new Error("the suite session has no workspace_id cookie");
-    const post = await db
-      .from("posts")
-      .insert({
-        tenant_id: tenantId,
-        workspace_id: workspaceId,
-        title,
-        type: "blog",
-        status: "scheduled",
-        scheduled_at: scheduledIso,
-        content: { type: "blog", title, body: "Probe." },
-      })
-      .select("id")
-      .single();
-    if (post.error) throw new Error(`probe post insert failed: ${post.error.message}`);
-    return post.data!.id as string;
-  }
-
-  async function deleteProbePost(id: string | null): Promise<void> {
-    if (!id) return;
-    const { db } = adminClient();
-    // Child rows (publishing_logs — the cron can sweep a past-due probe
-    // mid-run) block the post delete; remove them first, and surface delete
-    // errors: an unchecked { error } silently leaks probe rows into the
-    // tenant's calendar.
-    await db.from("publishing_logs").delete().eq("post_id", id);
-    const del = await db.from("posts").delete().eq("id", id);
-    if (del.error) throw new Error(`probe cleanup failed for ${id}: ${del.error.message}`);
-  }
-
   // The three drag scenarios run inside a nested describe set to
   // Europe/Berlin, so the DST boundary falls INSIDE the rendered month view:
   // Berlin's fall-back is Sunday Oct 25, 2026 — Oct 24 is CEST (UTC+2),

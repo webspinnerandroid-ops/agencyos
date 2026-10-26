@@ -688,17 +688,66 @@ export default function ContentCalendar({
   }, [proposedItems]);
 
   // ---- Navigation ----
+  const userNavigatedRef = useRef(false);
   const prevMonth = useCallback(() => {
+    userNavigatedRef.current = true;
     setCurrentMonth((m) => subMonths(m, 1));
   }, []);
 
   const nextMonth = useCallback(() => {
+    userNavigatedRef.current = true;
     setCurrentMonth((m) => addMonths(m, 1));
   }, []);
 
   const goToToday = useCallback(() => {
+    userNavigatedRef.current = true;
     setCurrentMonth(new Date());
   }, []);
+
+  // ---- Auto-jump to the next month with scheduled posts ----
+  // The view opens on today's month. When that month is empty but a LATER
+  // month has scheduled posts, jump forward once so the first thing an
+  // operator sees is actual scheduled work (today's month empties out every
+  // time planning runs ahead of the calendar). Manual navigation via the
+  // arrows or "Today" permanently disables the jump for the session — no
+  // surprise teleports while the user is browsing. Switching client re-arms
+  // it, because the new client's posts can be months away.
+  const openingMonthKey = useMemo(() => format(new Date(), "yyyy-MM"), []);
+  const autoJumpDoneRef = useRef(false);
+
+  useEffect(() => {
+    userNavigatedRef.current = false;
+    autoJumpDoneRef.current = false;
+  }, [selectedClientId]);
+
+  useEffect(() => {
+    if (loadingFirst || autoJumpDoneRef.current || userNavigatedRef.current) return;
+    const currentKey = format(currentMonth, "yyyy-MM");
+    if (currentKey !== openingMonthKey) {
+      // The view is no longer on the month it opened with — nothing to fix up.
+      autoJumpDoneRef.current = true;
+      return;
+    }
+    // Month keys (yyyy-MM) holding at least one scheduled post.
+    const monthKeys = new Set<string>();
+    for (const post of posts) {
+      if (!post.scheduled_at) continue;
+      monthKeys.add(format(parseISO(post.scheduled_at), "yyyy-MM"));
+    }
+    if (monthKeys.has(currentKey)) {
+      autoJumpDoneRef.current = true;
+      return;
+    }
+    // yyyy-MM keys compare lexically like calendar dates; take the earliest.
+    let nextKey: string | null = null;
+    for (const key of monthKeys) {
+      if (key > currentKey && (nextKey === null || key < nextKey)) nextKey = key;
+    }
+    if (nextKey) {
+      autoJumpDoneRef.current = true;
+      setCurrentMonth(parseISO(`${nextKey}-01T00:00:00`));
+    }
+  }, [posts, currentMonth, loadingFirst, openingMonthKey]);
 
   // ---- Status toggle ----
   const toggleStatus = useCallback(

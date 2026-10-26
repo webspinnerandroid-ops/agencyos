@@ -39,7 +39,59 @@ jobs:
         run: npm run lint
 
   # ────────────────────────────────────────────────────────────────
-  # 2. Test (unit + integration via Vitest)
+  # 2. Typecheck — next build only checks the modules it bundles, so test
+  #    files and unreachable modules need their own gate. This is the gate
+  #    that was red for weeks without CI noticing.
+  # ────────────────────────────────────────────────────────────────
+  typecheck:
+    name: Typecheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run TypeScript
+        run: npx tsc --noEmit
+
+  # ────────────────────────────────────────────────────────────────
+  # 3. Static audits — no database, no secrets, pure source scan.
+  #    a) tenancy: every service-role query on a tenant table must scope by
+  #       tenant_id. RLS is not the safety net (the app runs on the service
+  #       role), so a missing filter is a real cross-tenant leak.
+  #    b) body validation: a ratchet, so unvalidated write routes cannot grow
+  #       while route families migrate to parseJsonBody().
+  # ────────────────────────────────────────────────────────────────
+  static-audits:
+    name: Static audits
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Audit tenant scoping
+        run: node scripts/audit-tenant-scope.cjs
+
+      - name: Audit request-body validation
+        run: node scripts/audit-validation.cjs
+
+  # ────────────────────────────────────────────────────────────────
+  # 4. Test (unit + integration via Vitest)
   # ────────────────────────────────────────────────────────────────
   test:
     name: Test
@@ -62,7 +114,7 @@ jobs:
         run: npm test
 
   # ────────────────────────────────────────────────────────────────
-  # 3. Build (catches bundling, type, and Next.js issues)
+  # 5. Build (bundling + Next.js issues; types are covered by typecheck)
   # ────────────────────────────────────────────────────────────────
   build:
     name: Build
@@ -92,7 +144,7 @@ jobs:
           STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
         run: npm run build
   # ────────────────────────────────────────────────────────────────
-  # 4. Asset integrity — smoke-test every stored asset's bytes against
+  # 5. Asset integrity — smoke-test every stored asset's bytes against
   #    its extension (magic bytes + HTTP status + non-zero size). A
   #    migration or deploy that silently corrupts asset formats fails
   #    the check. Skipped (not failed) when the Supabase secrets haven't
@@ -127,7 +179,7 @@ jobs:
         run: echo "Asset-integrity check skipped — set SUPABASE_SERVICE_ROLE_KEY and NEXT_PUBLIC_SUPABASE_URL (vars/secrets) in repo settings to enable it."
 
   # ────────────────────────────────────────────────────────────────
-  # 5. E2E technical & security audit (Playwright)
+  # 6. E2E technical & security audit (Playwright)
   #    Drives core flows in a real browser, captures 4xx/5xx +
   #    console/page errors, probes BOLA across endpoints, and races
   #    the batch API. Findings land in tests/e2e/audit-findings.json

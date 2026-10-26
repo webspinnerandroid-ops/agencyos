@@ -78,15 +78,21 @@ vi.mock("@supabase/supabase-js", () => ({
 
 // Builder with only the chain pieces the relay module uses.
 function chain(table: string) {
-  const p: PromiseLike<{ data: unknown }> = {
-    then: (resolve) => resolve({ data: db[table] ?? null }),
-  };
+  // A lazy thenable: reads `db` at await time, so tests can arrange rows after
+  // building the chain. Cast once at the boundary — the real client returns a
+  // PostgREST promise, and only `await` is ever used on it.
+  const p = {
+    then: (resolve: (value: { data: unknown }) => unknown) =>
+      resolve({ data: db[table] ?? null }),
+  } as unknown as Promise<{ data: unknown }>;
   const obj: Record<string, unknown> = {
     maybeSingle: () => p,
     single: () => p,
   };
   return new Proxy(obj, {
     get(target, prop) {
+      // Symbols (e.g. Symbol.toPrimitive) must not be turned into chain methods.
+      if (typeof prop !== "string") return undefined;
       if (prop in target) return target[prop];
       // eq/order/limit etc. return the same chainable.
       target[prop] = () => obj;

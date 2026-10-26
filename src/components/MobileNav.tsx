@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Menu, X } from "lucide-react";
 import type { NavSection } from "./NavDropdown";
@@ -30,15 +30,58 @@ export default function MobileNav({
   bareIcon = false,
 }: MobileNavProps) {
   const [open, setOpen] = useState(false);
+  const titleId = useId();
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
 
-  // Close the drawer with Escape.
+  const close = useCallback(() => setOpen(false), []);
+
+  // Escape closes; Tab is trapped inside the panel while it is open (a drawer
+  // that swallows the page visually but lets focus wander behind it leaves
+  // keyboard and screen-reader users on controls they cannot see).
   useEffect(() => {
+    if (!open) return;
+    const panel = panelRef.current;
+
+    const focusable = () =>
+      Array.from(
+        panel?.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        ) ?? []
+      ).filter((el) => el.offsetParent !== null || el === document.activeElement);
+
+    // Move focus into the drawer (the close button) once it is mounted.
+    const first = focusable()[0];
+    first?.focus();
+
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape") {
+        e.preventDefault();
+        close();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const items = focusable();
+      if (items.length === 0) return;
+      const firstEl = items[0];
+      const lastEl = items[items.length - 1];
+      const active = document.activeElement as HTMLElement | null;
+      if (e.shiftKey && (active === firstEl || !active || !panel?.contains(active))) {
+        e.preventDefault();
+        lastEl.focus();
+      } else if (!e.shiftKey && active === lastEl) {
+        e.preventDefault();
+        firstEl.focus();
+      }
     };
+
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, []);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      // Return focus to the trigger that opened the drawer.
+      triggerRef.current?.focus();
+    };
+  }, [open, close]);
 
   // Lock body scroll while the drawer is open.
   useEffect(() => {
@@ -53,6 +96,7 @@ export default function MobileNav({
   return (
     <div className={`${breakpointClass} relative`}>
       <button
+        ref={triggerRef}
         onClick={() => setOpen((v) => !v)}
         className={
           bareIcon
@@ -61,6 +105,7 @@ export default function MobileNav({
         }
         aria-label="Toggle navigation menu"
         aria-expanded={open}
+        aria-haspopup="dialog"
       >
         {open ? <X className="size-5" /> : <Menu className="size-5" />}
       </button>
@@ -74,10 +119,14 @@ export default function MobileNav({
             <div
               className="fixed inset-0 z-[60] bg-black/30"
               style={{ position: "fixed", inset: 0, zIndex: 60, backgroundColor: "rgba(0,0,0,0.3)" }}
-              onClick={() => setOpen(false)}
+              onClick={close}
               aria-hidden="true"
             />
             <div
+              ref={panelRef}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby={titleId}
               className="fixed inset-y-0 right-0 z-[70] flex w-72 max-w-[85vw] flex-col overflow-y-auto border-l bg-popover shadow-xl"
               style={{
                 position: "fixed",
@@ -94,9 +143,11 @@ export default function MobileNav({
               }}
             >
               <div className="flex items-center justify-between border-b px-4 py-3">
-                <span className="text-sm font-semibold">Menu</span>
+                <span id={titleId} className="text-sm font-semibold">
+                  Menu
+                </span>
                 <button
-                  onClick={() => setOpen(false)}
+                  onClick={close}
                   className="rounded-md p-1.5 hover:bg-muted transition-colors"
                   aria-label="Close navigation menu"
                 >

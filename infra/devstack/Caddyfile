@@ -1,0 +1,23 @@
+# Devstack reverse proxy — one subdomain per service, auto-HTTPS via LE.
+# Replace yourdomain.com with the real domain (or set ROOT_DOMAIN and template it).
+
+{
+	email {$ACME_EMAIL}
+}
+
+git.yourdomain.com {
+	reverse_proxy gitea:3000
+}
+
+code.yourdomain.com {
+	# Enable when Authelia is live — admin UIs require forward-auth + own login:
+	# forward_auth authelia:9091 {
+	# 	path /api/verify
+	# 	copy_headers Remote-User Remote-Groups Remote-Email
+	# }
+	reverse_proxy code-server:8080
+}
+
+secrets.yourdomain.com {
+	reverse_proxy infisical:80
+}

@@ -1,0 +1,100 @@
+# ============================================================================
+# Netcup devstack — Plan v3 Phase 1 (ADR-006: Netcup = tooling, Contabo = prod)
+#
+# Brings up: Caddy (auto-HTTPS), Gitea (+ Postgres), code-server, Infisical
+# (+ Postgres + Redis). Copy .env.example → .env and fill in before first up.
+#
+# Forward-auth (Authelia) is wired in the Caddyfile but disabled until you
+# run `docker compose up -d authelia` once and set secrets — admin UIs must
+# not be reachable with only their own login (plan Phase 1 acceptance gate).
+#
+# All volumes are named volumes → covered by infra/backup/backup.sh.
+# ============================================================================
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [gitea, code-server, infisical]
+
+  # --- Enable after initial setup; see Caddyfile forward_auth blocks --------
+  # authelia:
+  #   image: authelia/authelia
+  #   restart: unless-stopped
+  #   volumes: [./authelia:/config]
+  #   environment:
+  #     - AUTHELIA_IDENTITY_VALIDATION_RESET_PASSWORD_JWT_SECRET_FILE=/config/secrets/jwt
+  #     ...
+
+  gitea:
+    image: gitea/gitea:latest
+    restart: unless-stopped
+    environment:
+      USER_UID: "1000"
+      USER_GID: "1000"
+      GITEA__database__DB_TYPE: postgres
+      GITEA__database__HOST: gitea_db:5432
+      GITEA__database__NAME: gitea
+      GITEA__database__USER: gitea
+      GITEA__database__PASSWD: ${GITEA_DB_PASSWORD}
+    volumes:
+      - gitea_data:/data
+    depends_on: [gitea_db]
+
+  gitea_db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: gitea
+      POSTGRES_PASSWORD: ${GITEA_DB_PASSWORD}
+      POSTGRES_DB: gitea
+    volumes: [gitea_db_data:/var/lib/postgresql/data]
+
+  code-server:
+    image: codercom/code-server:latest
+    restart: unless-stopped
+    environment:
+      DOCKER_USER: coder
+    volumes:
+      - code_server_data:/home/coder
+      - ${PROJECTS_HOST_DIR:-/srv/projects}:/home/coder/projects
+    command: code-server --bind-addr 0.0.0.0:8080 --auth password
+
+  infisical:
+    image: infisical/infisical:latest
+    restart: unless-stopped
+    environment:
+      DB_CONNECTION_URI: postgres://${INFISICAL_DB_USER}:${INFISICAL_DB_PASSWORD}@infisical_db:5432/infisical
+      REDIS_URL: redis://infisical_redis:6379
+      ENCRYPTION_KEY: ${INFISICAL_ENCRYPTION_KEY}
+      JWT_SECRET: ${INFISICAL_JWT_SECRET}
+      SITE_URL: https://secrets.${ROOT_DOMAIN}
+    depends_on: [infisical_db, infisical_redis]
+
+  infisical_db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${INFISICAL_DB_USER}
+      POSTGRES_PASSWORD: ${INFISICAL_DB_PASSWORD}
+      POSTGRES_DB: infisical
+    volumes: [infisical_db_data:/var/lib/postgresql/data]
+
+  infisical_redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:
+  gitea_data:
+  gitea_db_data:
+  code_server_data:
+  infisical_db_data:

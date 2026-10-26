@@ -15,16 +15,22 @@ export async function GET(request: NextRequest) {
 
     // PERF: never select the full `content` blob in a list query — blog bodies
     // are large and the calendar refetches this endpoint on an 8s poll while
-    // items generate. Instead select only the small JSON keys the calendar UI
-    // actually reads (type/title/caption/aeoGeo); the detail modal lazy-loads
-    // the full body from GET /api/posts/[id] when it opens.
+    // items generate. Instead select the small pieces the calendar UI actually
+    // reads: the denormalized `title`/`type` columns plus two JSON keys
+    // (caption/aeoGeo). The detail modal lazy-loads the full body from
+    // GET /api/posts/[id] when it opens.
+    //
+    // The response is then re-shaped into the `content` object clients read
+    // (`post.content.title`, `.type`, …). Returning the projected keys flat
+    // meant `post.content` was undefined for every consumer, which blanked the
+    // calendar chips and the post dialog.
     let query = supabase
       .from("posts")
       .select(
         `
         id,
-        content->type,
-        content->title,
+        title,
+        type,
         content->caption,
         content->aeoGeo,
         media_urls,
@@ -89,10 +95,19 @@ export async function GET(request: NextRequest) {
     const brokenBlogIds = new Set((brokenRows ?? []).map((r) => r.id));
 
     return NextResponse.json({
-      posts: (posts ?? []).map((p) => ({
-        ...p,
-        brokenBlog: brokenBlogIds.has(p.id),
-      })),
+      posts: (posts ?? []).map((p) => {
+        const { type, title, caption, aeoGeo, ...rest } = p as Record<string, unknown>;
+        return {
+          ...rest,
+          content: {
+            type: type ?? null,
+            title: title ?? null,
+            caption: caption ?? null,
+            aeoGeo: aeoGeo ?? null,
+          },
+          brokenBlog: brokenBlogIds.has(p.id),
+        };
+      }),
     });
   } catch (error) {
     const message =

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { rateLimitRequest } from "@/lib/rate-limit";
 import { isDisposableEmail } from "@/lib/disposable-email";
+import { ensureTenantBalance } from "@/lib/token-billing";
 
 export async function POST(request: NextRequest) {
   try {
@@ -110,6 +111,16 @@ export async function POST(request: NextRequest) {
       plan_id: planId || "starter",
       status: "trialing",
     });
+
+    // 5b. Provision the token-balance row (migration 077). Without it the
+    // tenant is "not enforced" forever: usage never lands against an allowance
+    // and the billing screens report nothing. Best-effort — a billing hiccup
+    // must never fail a signup that already has a user, tenant and workspace.
+    try {
+      await ensureTenantBalance(tenant.id, planId || "starter");
+    } catch (e) {
+      console.error("[register] balance provisioning failed:", e);
+    }
 
     // 6. Issue a trial license
     const licenseKey = `AOS-${Date.now().toString(36).toUpperCase()}-TRIAL`;

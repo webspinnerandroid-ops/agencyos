@@ -33,6 +33,70 @@ export interface BalanceCheckResult {
   reason?: string;
 }
 
+/**
+ * Rollout switch for the 402 gate. Usage is always metered into the ledger and
+ * tenant_balances regardless; this only controls whether an exhausted balance
+ * *blocks* generation. Opt-in (`TOKEN_ENFORCE_BILLING=true`) until every plan
+ * in `token_plans` carries a non-zero allowance — otherwise every tenant would
+ * be locked out the moment a balance row appears with allowance 0.
+ */
+function billingGateActive(): boolean {
+  return process.env.TOKEN_ENFORCE_BILLING === "true";
+}
+
+/**
+ * Provision a tenant's balance row. Idempotent: a tenant that already has one
+ * is left untouched (billing cycle resets own the allowance from then on).
+ * Allowance comes from the tenant's plan in `token_plans`; an unknown or empty
+ * plan yields 0, which means "metered but not yet granted" — never unlimited.
+ */
+export async function ensureTenantBalance(
+  tenantId: string,
+  planId?: string | null
+): Promise<void> {
+  const supabase = await createServiceClient();
+
+  const { data: existing } = await supabase
+    .from("tenant_balances")
+    .select("tenant_id")
+    .eq("tenant_id", tenantId)
+    .maybeSingle();
+  if (existing) return;
+
+  let plan = planId ?? null;
+  if (!plan) {
+    const { data: sub } = await supabase
+      .from("subscriptions")
+      .select("plan_id")
+      .eq("tenant_id", tenantId)
+      .maybeSingle();
+    plan = (sub as { plan_id: string | null } | null)?.plan_id ?? null;
+  }
+
+  let allowance = 0;
+  if (plan) {
+    const { data: planRow } = await supabase
+      .from("token_plans")
+      .select("monthly_token_allowance_usd")
+      .eq("plan_id", plan)
+      .maybeSingle();
+    allowance = Number(
+      (planRow as { monthly_token_allowance_usd: number | string } | null)
+        ?.monthly_token_allowance_usd ?? 0
+    );
+  }
+
+  const { error } = await supabase
+    .from("tenant_balances")
+    .insert({ tenant_id: tenantId, monthly_allowance_usd: allowance });
+
+  // Concurrent signup/provision → primary-key collision. The row exists either
+  // way, which is the postcondition we want.
+  if (error && !/duplicate key/i.test(error.message)) {
+    console.error("[token-billing] ensureTenantBalance failed:", error.message);
+  }
+}
+
 export async function getTokenBalance(tenantId: string): Promise<TokenBalance> {
   const supabase = await createServiceClient();
   const { data } = await supabase
@@ -83,10 +147,31 @@ export async function checkTokenBalance(
       balance: await getTokenBalance(tenantId),
     };
   }
-  const balance = await getTokenBalance(tenantId);
-  if (!balance.enforced) {
+  let balance = await getTokenBalance(tenantId);
+
+  // Self-heal: a tenant created before balance provisioning (or before
+  // migration 077) gets its row the first time it tries to generate.
+  if (!balance.enforced && tenantId) {
+    await ensureTenantBalance(tenantId);
+    balance = await getTokenBalance(tenantId);
+  }
+
+  if (!billingGateActive()) {
     return { allowed: true, balance };
   }
+
+  if (!balance.enforced) {
+    // Enforcement is on but we could not read/provision a balance (table
+    // missing, write denied). Fail closed: no balance means no spend.
+    return {
+      allowed: false,
+      balance,
+      reason:
+        "Billing is unavailable for this workspace, so generation is paused. " +
+        "Contact your administrator.",
+    };
+  }
+
   if (balance.remainingUsd > 0) {
     return { allowed: true, balance };
   }

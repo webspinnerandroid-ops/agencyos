@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   normalizeScheduledAt,
   formatScheduledAtLocal,
+  offsetMinutesForLocalDateTime,
 } from "./scheduling";
 import {
   LIFECYCLE_STEPS,
@@ -48,6 +49,47 @@ describe("normalizeScheduledAt", () => {
     expect(normalizeScheduledAt("")).toBeNull();
     expect(normalizeScheduledAt("not-a-date")).toBeNull();
     expect(normalizeScheduledAt(new Date("invalid"))).toBeNull();
+  });
+});
+
+describe("offsetMinutesForLocalDateTime", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("returns the offset in force on the picked date, not the offset today", () => {
+    // Pin "now" to mid-summer and schedule for December (and vice versa). In a
+    // timezone without DST both offsets are equal and this passes trivially; in
+    // one with DST the old `new Date().getTimezoneOffset()` call is an hour off.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(2026, 6, 1, 12, 0)); // 1 July 2026, local
+
+    const december = offsetMinutesForLocalDateTime("2026-12-15T09:00");
+    expect(december).toBe(new Date(2026, 11, 15, 9, 0).getTimezoneOffset());
+
+    const july = offsetMinutesForLocalDateTime("2026-07-15T09:00");
+    expect(july).toBe(new Date(2026, 6, 15, 9, 0).getTimezoneOffset());
+  });
+
+  it("round-trips a naive local time back to the same wall clock", () => {
+    // The invariant that matters: pick 09:00, store it, read it back as 09:00.
+    for (const local of ["2026-01-15T09:00", "2026-07-15T09:00", "2026-11-01T01:30"]) {
+      const iso = normalizeScheduledAt(local, offsetMinutesForLocalDateTime(local));
+      expect(iso, local).toBeTruthy();
+      const back = new Date(iso!);
+      const wall = `${back.getFullYear()}-${String(back.getMonth() + 1).padStart(2, "0")}-${String(back.getDate()).padStart(2, "0")}T${String(back.getHours()).padStart(2, "0")}:${String(back.getMinutes()).padStart(2, "0")}`;
+      expect(wall).toBe(local);
+    }
+  });
+
+  it("defaults to 9:00 for a bare date and falls back to today for garbage", () => {
+    expect(offsetMinutesForLocalDateTime("2026-12-15")).toBe(
+      new Date(2026, 11, 15, 9, 0).getTimezoneOffset()
+    );
+    expect(offsetMinutesForLocalDateTime("not-a-date")).toBe(
+      new Date().getTimezoneOffset()
+    );
+    expect(offsetMinutesForLocalDateTime(null)).toBe(new Date().getTimezoneOffset());
   });
 });
 

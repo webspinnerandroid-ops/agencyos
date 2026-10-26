@@ -70,6 +70,41 @@ export function normalizeScheduledAt(
 }
 
 /**
+ * The browser's UTC offset (same sign convention as getTimezoneOffset —
+ * positive when the client is behind UTC) **in force at a given naive local
+ * wall-clock time**, not at "now".
+ *
+ * Why this exists: a slot picked from a `datetime-local` input must be stored
+ * with the offset that applies on that date. Using `new Date()`'s offset means
+ * a December slot scheduled from a summer session (or vice versa) is stored an
+ * hour off wherever the agency observes DST.
+ *
+ * Falls back to the current offset when the input cannot be parsed.
+ */
+export function offsetMinutesForLocalDateTime(
+  local: string | null | undefined
+): number {
+  const fallback = new Date().getTimezoneOffset();
+  if (!local) return fallback;
+  const match = String(local)
+    .trim()
+    .match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?/);
+  if (!match) return fallback;
+
+  // Constructing through the local-time Date constructor asks the runtime for
+  // the offset in force at that instant, DST included.
+  const at = new Date(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+    match[4] ? Number(match[4]) : 9, // same 9:00 default as normalizeScheduledAt
+    match[5] ? Number(match[5]) : 0,
+    match[6] ? Number(match[6]) : 0
+  );
+  return Number.isNaN(at.getTime()) ? fallback : at.getTimezoneOffset();
+}
+
+/**
  * Describe a UTC ISO timestamp in the client's local timezone for display.
  * Returns a localized string like "Aug 10, 2026, 2:30 PM" or null.
  */

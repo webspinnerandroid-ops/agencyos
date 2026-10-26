@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Loader2, Send, Calendar, FolderTree, Globe } from "lucide-react";
+import { offsetMinutesForLocalDateTime } from "@/lib/scheduling";
 import ConnectedSitesPublishDialog, {
   type PublishablePost,
   type SitePublishTarget,
@@ -131,11 +132,14 @@ export default function PublishButton({ postId, postType, onPublished }: Publish
             action,
             scheduledAt: action === "schedule" ? scheduledDate : undefined,
             // The datetime-local value is naive local wall time — tell the
-            // server how far off UTC this browser is so the scheduled time
-            // is stored as the correct UTC instant (the Inngest cron
-            // publishes against UTC).
+            // server how far off UTC this browser is ON THE PICKED DATE (not
+            // today: that offset is an hour off across a DST boundary) so the
+            // scheduled time is stored as the correct UTC instant. The Inngest
+            // cron publishes against UTC.
             tzOffsetMinutes:
-              action === "schedule" ? new Date().getTimezoneOffset() : undefined,
+              action === "schedule"
+                ? offsetMinutesForLocalDateTime(scheduledDate)
+                : undefined,
             categoryId:
               platform === "wordpress" && wpCategoryId ? Number(wpCategoryId) : undefined,
           }),

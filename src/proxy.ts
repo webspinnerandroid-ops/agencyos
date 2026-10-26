@@ -66,6 +66,24 @@ function nextWithCsp(request: NextRequest): NextResponse {
   return response
 }
 
+/**
+ * API endpoints the client portal legitimately calls. Everything else under
+ * /api is agency-staff only. Method-scoped where the route supports several
+ * verbs (a client may approve its own proposal, never edit/delete a campaign).
+ */
+const CLIENT_PORTAL_API: Array<{ re: RegExp; methods?: string[] }> = [
+  { re: /^\/api\/me$/ },
+  // Self-service auth on the client's own account: session bootstrap, email
+  // confirmation resend, and 2FA enrolment/verification (a client with 2FA on
+  // must be able to finish signing in, and to turn it off again).
+  { re: /^\/api\/auth\/(set-session|resend-confirmation|2fa(\/|$))/ },
+  { re: /^\/api\/version$/ },
+  { re: /^\/api\/notifications(\/|$)/ },
+  { re: /^\/api\/push(\/|$)/ },
+  { re: /^\/api\/seo\/client-proposals$/, methods: ["GET"] },
+  { re: /^\/api\/seo\/campaigns\/[^/]+\/approve$/, methods: ["POST"] },
+]
+
 const PUBLIC_ROUTES = ["/login", "/register", "/forgot-password", "/reset-password", "/pending-approval", "/help", "/about", "/contact", "/privacy", "/data-deletion", "/export-data", "/terms", "/seo/proposal", "/audit", "/site", "/sign", "/p", "/blog", "/api/webhooks", "/api/auth/callback", "/api/auth/session", "/api/auth/dev-login", "/api/register", "/api/data-deletion", "/api/export-data", "/api/inngest", "/api/docusign/connect", "/api/seo/public-proposal", "/api/seo/public-audit", "/api/cms/forms", "/api/outreach/reply-webhook", "/api/gbp/digest-reply", "/api/sign", "/api/telegram/webhook", "/api/discord/webhook", "/api/version", "/_next", "/favicon.ico", "/robots.txt", "/sitemap.xml", "/og-image.png", "/"]
 
 function isPublicRoute(pathname: string): boolean {
@@ -503,6 +521,38 @@ export default async function middleware(request: NextRequest) {
     return NextResponse.redirect(pendingUrl)
   }
 
+  // -------------------------------------------------------------------------
+  // Role gate — the client portal is the only agency surface a `client` role
+  // may reach.
+  //
+  // Tenant scoping keeps clients inside their own agency, but that is not the
+  // same as keeping them out of agency tooling: 110 of 151 routes never call
+  // requireRole(), so a client could list clients, publish, or delete posts in
+  // its own tenant. Gating here closes the whole class in one place and fails
+  // closed for every route added later.
+  // -------------------------------------------------------------------------
+  if (auth.role === "client") {
+    const isPortalPage =
+      pathname === "/portal" || pathname.startsWith("/portal/")
+    const isAllowedApi = CLIENT_PORTAL_API.some(
+      (rule) =>
+        rule.re.test(pathname) &&
+        (!rule.methods || rule.methods.includes(request.method))
+    )
+    if (!isPortalPage && !isAllowedApi) {
+      if (pathname.startsWith("/api/") || isServerAction(request)) {
+        return NextResponse.json(
+          { error: "This area is for agency staff.", code: "client_role_blocked" },
+          { status: 403 }
+        )
+      }
+      const portalUrl = request.nextUrl.clone()
+      portalUrl.pathname = "/portal/dashboard"
+      portalUrl.search = ""
+      return NextResponse.redirect(portalUrl)
+    }
+  }
+
   // Tenant theme (cached per tenant; re-fetched at most once per 5 min)
   let encoded = cacheGet(themeCache, auth.tenantId)
   if (encoded === undefined) {
@@ -551,6 +601,10 @@ export default async function middleware(request: NextRequest) {
   response.cookies.set("x-user-email", signAuthValue(auth.email), authCookieOptions)
   if (auth.clientId) {
     response.cookies.set("x-client-id", signAuthValue(auth.clientId), authCookieOptions)
+  } else {
+    // A user who moved from `client` to staff must not keep carrying a signed
+    // client id (it would let portal-scoped helpers resolve the old client).
+    response.cookies.delete("x-client-id")
   }
   response.cookies.set("x-tenant-theme", encoded, tenantCookieOptions)
 

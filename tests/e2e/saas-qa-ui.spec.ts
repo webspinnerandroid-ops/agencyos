@@ -194,7 +194,12 @@ test.describe("saas-qa-audit · calendar mechanics", () => {
 
   // The post chip on the month grid. Located structurally: the label is only
   // asserted in the chip test, so the rest of the suite does not depend on it.
-  const chip = (page: Page) => page.locator("div.cursor-pointer").first();
+  // Post chip on the month grid, located structurally. The chip's class list
+  // goes through twMerge (cn()), so the drag refactor's conditional
+  // `cursor-grab` conflicts with and evicts `cursor-pointer` — dated scheduled
+  // chips render as cursor-grab only. Match either cursor class.
+  const chip = (page: Page) =>
+    page.locator("div.cursor-grab, div.cursor-pointer").first();
 
   test("calendar renders the month and opens a post dialog in agency-local time", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -216,8 +221,14 @@ test.describe("saas-qa-audit · calendar mechanics", () => {
     // GET /api/posts/[id] when the dialog opens.
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto(`${BASE}/dashboard/calendar`, { waitUntil: "domcontentloaded" });
-    await expect(chip(page)).toBeVisible({ timeout: 60_000 });
-    await chip(page).click();
+    // Scoped to the probe title: "first chip in DOM" depends on which other
+    // posts exist in the tenant on that day.
+    const probeChip = page
+      .locator("div.cursor-grab, div.cursor-pointer")
+      .filter({ hasText: "QA-AUDIT modal probe" })
+      .first();
+    await expect(probeChip).toBeVisible({ timeout: 60_000 });
+    await probeChip.click();
     const dialog = page.getByRole("dialog").last();
     await expect(dialog).toBeVisible({ timeout: 20_000 });
     await expect(dialog).toContainText(/QA-AUDIT modal probe/i, { timeout: 20_000 });
@@ -240,13 +251,14 @@ test.describe("saas-qa-audit · calendar mechanics", () => {
     expect(locked, "body is still scroll-locked after the dialog closed").toBe(false);
   });
 
-  test("DEFECT PIN: the month grid has no drag-to-reschedule affordance", async ({ page }) => {
+  test("the month grid exposes drag-to-reschedule (pin retired when the affordance shipped)", async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto(`${BASE}/dashboard/calendar`, { waitUntil: "domcontentloaded" });
     await expect(chip(page)).toBeVisible({ timeout: 60_000 });
-    // No element on the calendar is draggable and there are no drop handlers.
+    // The old pin (“no drag affordance”) inverted once drag-to-reschedule
+    // shipped: scheduled chips are draggable and the grid is droppable.
     const draggables = await page.locator("[draggable='true']").count();
-    expect(draggables, "drag-and-drop now exists — update this pin and the QA report").toBe(0);
+    expect(draggables, "scheduled chips are not draggable on the month grid").toBeGreaterThan(0);
   });
 
   test("phone: calendar does not overflow horizontally", async ({ page }) => {
@@ -262,8 +274,237 @@ test.describe("saas-qa-audit · calendar mechanics", () => {
     // title to render instead of falling back to "No content".
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto(`${BASE}/dashboard/calendar`, { waitUntil: "domcontentloaded" });
-    await expect(chip(page)).toBeVisible({ timeout: 60_000 });
-    expect(await chip(page).innerText()).toContain("QA-AUDIT modal probe");
+    // Scoped to the probe title: "first chip in DOM" depends on which other
+    // posts exist in the tenant on that day.
+    const probeChip = page
+      .locator("div.cursor-grab, div.cursor-pointer")
+      .filter({ hasText: "QA-AUDIT modal probe" })
+      .first();
+    await expect(probeChip).toBeVisible({ timeout: 60_000 });
+    expect(await probeChip.innerText()).toContain("QA-AUDIT modal probe");
+  });
+
+  // ---- Drag-to-reschedule QA (DST, undo, double-drop) ----
+
+  // The drop-cell and chip locators. Cells carry the day number in a direct
+  // child span; chips are the bg-card divs (one exceerpt + status pill).
+  // `at` picks the match when the same day number appears twice in October's
+  // view (e.g. Oct 2 mid-month vs the Nov 2 tail cell): the tail cell sits
+  // later in DOM order.
+  const cellByDay = (
+    page: Page,
+    day: string,
+    at: "first" | "last" = "first"
+  ) =>
+    page
+      .locator("div[class*='min-h-[110px]']")
+      .filter({ has: page.locator(`span:text-is("${day}")`) })
+      .locator(at === "first" ? "nth=0" : "nth=-1");
+  const chipIn = (
+    page: Page,
+    day: string,
+    title: string,
+    at: "first" | "last" = "first"
+  ) => cellByDay(page, day, at).locator("div.bg-card", { hasText: title }).first();
+
+  async function createProbePost(title: string, scheduledIso: string): Promise<string> {
+    const { db } = adminClient();
+    const { tenantId, workspaceId } = sessionIds();
+    if (!tenantId) throw new Error("could not read the session tenant cookie");
+    if (!workspaceId) throw new Error("the suite session has no workspace_id cookie");
+    const post = await db
+      .from("posts")
+      .insert({
+        tenant_id: tenantId,
+        workspace_id: workspaceId,
+        title,
+        type: "blog",
+        status: "scheduled",
+        scheduled_at: scheduledIso,
+        content: { type: "blog", title, body: "Probe." },
+      })
+      .select("id")
+      .single();
+    if (post.error) throw new Error(`probe post insert failed: ${post.error.message}`);
+    return post.data!.id as string;
+  }
+
+  async function deleteProbePost(id: string | null): Promise<void> {
+    if (!id) return;
+    const { db } = adminClient();
+    // Child rows (publishing_logs — the cron can sweep a past-due probe
+    // mid-run) block the post delete; remove them first, and surface delete
+    // errors: an unchecked { error } silently leaks probe rows into the
+    // tenant's calendar.
+    await db.from("publishing_logs").delete().eq("post_id", id);
+    const del = await db.from("posts").delete().eq("id", id);
+    if (del.error) throw new Error(`probe cleanup failed for ${id}: ${del.error.message}`);
+  }
+
+  // The three drag scenarios run inside a nested describe set to
+  // Europe/Berlin, so the DST boundary falls INSIDE the rendered month view:
+  // Berlin's fall-back is Sunday Oct 25, 2026 — Oct 24 is CEST (UTC+2),
+  // Oct 26 is CET (UTC+1), and both days sit on the same visible week row.
+  // An Oct 31 → Nov 2 drag (America/Denver) is impossible to stage here
+  // because the month grid renders no trailing adjacent-month days.
+  //
+  // The wall clock is 10:00 local on both dates. Correct behavior — the
+  // offset resolved for the TARGET date — stores 08:00Z for the Oct 24 drop.
+  // The regression this guards (using "today's" offset instead: Oct 26 is
+  // CET, so −60) would store 09:00Z — a silent one-hour wall-clock drift.
+  //
+  // They also require the view's open month to be October 2026, so they
+  // skip outside that window. Run the suite during October 2026 to
+  // exercise them.
+  test.describe("drag mechanics at a DST boundary inside the view", () => {
+    test.describe.configure({ mode: "serial" });
+    test.use({ timezoneId: "Europe/Berlin" });
+
+    const DST_WINDOW = (() => {
+      const now = new Date();
+      return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}` === "2026-10";
+    })();
+
+    test("drag across the DST boundary keeps the same local wall time", async ({ page }) => {
+      test.skip(!DST_WINDOW, "hardcodes the Oct 24→26 2026 Berlin DST boundary; run in October 2026");
+      test.setTimeout(240_000);
+      const probeId = await createProbePost("QA-AUDIT DST probe", "2026-10-26T09:00:00Z"); // 10:00 CET
+      try {
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await page.goto(`${BASE}/dashboard/calendar`, { waitUntil: "domcontentloaded" });
+        const chip = chipIn(page, "26", "QA-AUDIT DST probe");
+        await expect(chip).toBeVisible({ timeout: 90_000 });
+
+        const pageErrors: string[] = [];
+        page.on("pageerror", (err) => pageErrors.push(err.message));
+
+        const patchBodies: string[] = [];
+        await page.route(`**/api/posts/${probeId}`, async (route) => {
+          const req = route.request();
+          if (req.method() === "PATCH") {
+            const body = (req.postDataJSON() as { scheduled_at?: string }) ?? {};
+            patchBodies.push(body.scheduled_at ?? "");
+          }
+          await route.continue();
+        });
+
+        await chip.dragTo(cellByDay(page, "24").locator("span").first());
+
+        await expect.poll(() => patchBodies.length).toBeGreaterThan(0);
+        expect(new Date(patchBodies[0]).toISOString()).toBe("2026-10-24T08:00:00.000Z");
+        // The chip itself lands on the target day.
+        await expect(chipIn(page, "24", "QA-AUDIT DST probe")).toBeVisible();
+        // A dropped drop must not crash the page.
+        expect(pageErrors, `page errors during drag:\n${pageErrors.join("\n")}`).toEqual([]);
+      } finally {
+        await deleteProbePost(probeId);
+      }
+    });
+
+    test("drag to the wrong day offers Undo, which restores the previous exact instant", async ({ page }) => {
+      test.skip(!DST_WINDOW, "hardcodes the Oct 24→26 2026 Berlin DST boundary; run in October 2026");
+      test.setTimeout(240_000);
+      const probeId = await createProbePost("QA-AUDIT Undo probe", "2026-10-26T09:00:00Z");
+      try {
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await page.goto(`${BASE}/dashboard/calendar`, { waitUntil: "domcontentloaded" });
+        const chip = chipIn(page, "26", "QA-AUDIT Undo probe");
+        await expect(chip).toBeVisible({ timeout: 90_000 });
+
+        const patchBodies: string[] = [];
+        await page.route(`**/api/posts/${probeId}`, async (route) => {
+          const req = route.request();
+          if (req.method() === "PATCH") {
+            patchBodies.push(
+              ((req.postDataJSON() as { scheduled_at?: string }) ?? {}).scheduled_at ?? ""
+            );
+            // Hold the response briefly so the chip visibly moves optimistically
+            // before the banner appears (the banner is success-gated).
+            await new Promise((r) => setTimeout(r, 1_200));
+          }
+          await route.continue();
+        });
+
+        await chip.dragTo(cellByDay(page, "24").locator("span").first());
+
+        const banner = page.getByTestId("post-move-undo");
+        await expect(banner).toBeVisible({ timeout: 20_000 });
+        await expect(banner).toContainText("QA-AUDIT Undo probe");
+        await expect(banner).toContainText(/Oct\s*24/);
+
+        await banner.getByRole("button", { name: /undo/i }).click();
+        // The undo is itself a move: second PATCH carries the exact instant the
+        // row had before the drop — restored verbatim, no offset recomputation.
+        await expect.poll(() => patchBodies.length).toBe(2);
+        expect(new Date(patchBodies[1]).toISOString()).toBe("2026-10-26T09:00:00.000Z");
+        await expect(chipIn(page, "26", "QA-AUDIT Undo probe")).toBeVisible();
+        await expect(banner).toBeHidden();
+      } finally {
+        await deleteProbePost(probeId);
+      }
+    });
+
+    test("double drop: the reverse re-drop waits for the in-flight PATCH, then applies exactly (last drop wins)", async ({ page }) => {
+      test.skip(!DST_WINDOW, "hardcodes the Oct 24→26 2026 Berlin DST boundary; run in October 2026");
+      test.setTimeout(240_000);
+      const probeId = await createProbePost("QA-AUDIT double-drop probe", "2026-10-26T09:00:00Z");
+      try {
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await page.goto(`${BASE}/dashboard/calendar`, { waitUntil: "domcontentloaded" });
+        const chip = chipIn(page, "26", "QA-AUDIT double-drop probe");
+        await expect(chip).toBeVisible({ timeout: 90_000 });
+
+        const patchBodies: string[] = [];
+        let releaseFirst!: () => void;
+        const firstHeld = new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        });
+        await page.route(`**/api/posts/${probeId}`, async (route) => {
+          const req = route.request();
+          if (req.method() !== "PATCH") return route.continue();
+          patchBodies.push(
+            ((req.postDataJSON() as { scheduled_at?: string }) ?? {}).scheduled_at ?? ""
+          );
+          if (patchBodies.length === 1) {
+            await firstHeld; // keep the first PATCH in flight while the test acts
+            await new Promise((r) => setTimeout(r, 400));
+          }
+          await route.continue();
+        });
+
+        // Drop 1: Oct 26 → Oct 24, response held by the gate.
+        await chip.dragTo(cellByDay(page, "24").locator("span").first());
+        await expect.poll(() => patchBodies.length).toBe(1);
+
+      // The reverse move is dropped while drop 1 is still in flight. Its PATCH
+      // must NOT be sent until the first completes (per-post serialization) —
+      // otherwise the slower first write could land last and strand the row at
+      // the earlier instant while the UI shows the later day.
+      await chipIn(page, "24", "QA-AUDIT double-drop probe")
+        .dragTo(cellByDay(page, "26").locator("span").first());
+      await page.waitForTimeout(700);
+      expect(
+        patchBodies.length,
+        "the reverse move's PATCH was sent while the first was still in flight"
+      ).toBe(1);
+
+      releaseFirst();
+      await expect.poll(() => patchBodies.length).toBe(2);
+      // Serialized in drop order; the final write is the reverse move's exact
+      // value, and the chip ends where the user last dropped it.
+      expect(new Date(patchBodies[0]).toISOString()).toBe("2026-10-24T08:00:00.000Z");
+      expect(new Date(patchBodies[1]).toISOString()).toBe("2026-10-26T09:00:00.000Z");
+      await expect(chipIn(page, "26", "QA-AUDIT double-drop probe")).toBeVisible();
+
+      // A drop on the post's own day is a no-op: no third PATCH.
+      await chipIn(page, "26", "QA-AUDIT double-drop probe")
+        .dragTo(cellByDay(page, "26").locator("span").first());
+      await page.waitForTimeout(500);
+      expect(patchBodies.length, "same-day drop fired a reschedule").toBe(2);
+      } finally {
+        await deleteProbePost(probeId);
+      }
+    });
   });
 });
 

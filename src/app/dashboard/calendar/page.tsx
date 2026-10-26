@@ -1,12 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
 import ContentCalendar, {
   type CalendarPost,
   type PostStatus,
   type ProposedItem,
 } from "@/components/ContentCalendar";
-import { CalendarRange, Map, Sparkles, Loader2 } from "lucide-react";
+import { CalendarRange, Map as MapIcon, Sparkles, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 // ------------------------------------------------------------------
 // Types
@@ -36,6 +36,35 @@ interface CampaignPlan {
     internal_link: string | null;
     external_links: string[] | null;
   }[];
+}
+
+/**
+ * Best-effort title for the undo banner. Post list rows carry the small JSON
+ * keys as `content` (object or serialized JSON string) — `title` when present,
+ * else a raw excerpt, else "Untitled post".
+ */
+function contentTitleFrom(post: CalendarPost): string {
+  const raw = post.content;
+  let content: Record<string, unknown> | null = null;
+  if (typeof raw === "object" && raw !== null) {
+    content = raw as Record<string, unknown>;
+  } else if (typeof raw === "string" && raw.trim()) {
+    try {
+      content = JSON.parse(raw) as Record<string, unknown>;
+    } catch {
+      content = null;
+    }
+  }
+  const title =
+    typeof content?.title === "string" && content.title.trim()
+      ? content.title.trim()
+      : null;
+  if (title) return title;
+  const caption =
+    typeof content?.caption === "string" && content.caption.trim()
+      ? content.caption.trim()
+      : null;
+  return caption ?? "Untitled post";
 }
 
 const DEFAULT_STATUSES: PostStatus[] = [
@@ -226,13 +255,24 @@ export default function CalendarPage() {
   // offset resolved for the TARGET date so a drop across a DST boundary keeps
   // the same wall time). Optimistically move the chip; a failed PATCH is
   // reverted by refetching the authoritative list.
-  const handlePostMove = useCallback(
-    async (postId: string, newScheduledAt: string) => {
-      setPosts((prev) =>
-        prev.map((p) =>
-          p.id === postId ? { ...p, scheduled_at: newScheduledAt } : p
-        )
-      );
+  const postsRef = useRef<CalendarPost[]>([]);
+  useEffect(() => {
+    postsRef.current = posts;
+  }, [posts]);
+
+  // Double-drop protection, two layers:
+  //   1. Per-post move serialization — reschedule PATCHes for one post are
+  //      queued behind each other, so a rapid re-drop cannot have its earlier,
+  //      slower PATCH land after the later one and strand the row at the
+  //      older instant while the UI shows the newer day.
+  //   2. Duplicate-target guard — while a move is still being written, an
+  //      identical (postId, target) drop is a stray repeat, not a decision.
+  // A completed move can always be repeated (e.g. after a failed PATCH).
+  const moveQueuesRef = useRef<Map<string, Promise<void>>>(new Map());
+  const moveInFlightRef = useRef<Map<string, string>>(new Map());
+
+  const performMove = useCallback(
+    async (postId: string, newScheduledAt: string): Promise<boolean> => {
       try {
         const res = await fetch(`/api/posts/${postId}`, {
           method: "PATCH",
@@ -247,13 +287,101 @@ export default function CalendarPage() {
             (err as { error?: string })?.error ?? res.status
           );
           await fetchPosts(); // revert optimistic move
+          return false;
         }
+        // Re-assert the applied instant: an interleaved refetch (sibling
+        // failure or cleanup poll) must not repaint an older date.
+        setPosts((prev) =>
+          prev.map((p) =>
+            p.id === postId ? { ...p, scheduled_at: newScheduledAt } : p
+          )
+        );
+        return true;
       } catch {
         await fetchPosts(); // network failure — revert
+        return false;
       }
     },
     [fetchPosts]
   );
+
+  const handlePostMove = useCallback(
+    (postId: string, newScheduledAt: string, options?: { silent?: boolean }) => {
+      if (moveInFlightRef.current.get(postId) === newScheduledAt) {
+        return Promise.resolve(); // duplicate drop of the move already in flight
+      }
+      const post = postsRef.current.find((p) => p.id === postId);
+      const previousScheduledAt = post?.scheduled_at ?? null;
+      if (!previousScheduledAt || !post) return Promise.resolve();
+
+      const queue = (
+        moveQueuesRef.current.get(postId) ?? Promise.resolve()
+      ).catch(() => {});
+      const next = queue.then(async () => {
+        moveInFlightRef.current.set(postId, newScheduledAt);
+        // Optimistic: the chip jumps to the target day immediately, in drop
+        // order — the serial queue only orders the writes.
+        setPosts((prev) =>
+          prev.map((p) =>
+            p.id === postId ? { ...p, scheduled_at: newScheduledAt } : p
+          )
+        );
+        const ok = await performMove(postId, newScheduledAt);
+        if (ok) {
+          if (!options?.silent) {
+            setUndoMove({
+              postId,
+              previousScheduledAt,
+              movedToIso: newScheduledAt,
+              title: contentTitleFrom(post),
+            });
+          }
+        } else {
+          setUndoMove(null); // a failed drop has nothing to undo
+        }
+      });
+      moveQueuesRef.current.set(
+        postId,
+        next.finally(() => {
+          if (moveInFlightRef.current.get(postId) === newScheduledAt) {
+            moveInFlightRef.current.delete(postId);
+          }
+        })
+      );
+      return next;
+    },
+    [performMove]
+  );
+
+  // ---- Undo after a wrong drop ----
+  // The last successful move is offered back for a few seconds. Also a move
+  // itself: the exact previous UTC instant is restored verbatim (no offset
+  // recomputation, so a DST-crossing undo is safe by construction).
+  const [undoMove, setUndoMove] = useState<
+    |
+      {
+        postId: string;
+        previousScheduledAt: string;
+        movedToIso: string;
+        title: string;
+      }
+    | null
+  >(null);
+
+  useEffect(() => {
+    if (!undoMove) return;
+    const t = setTimeout(() => setUndoMove(null), 8_000);
+    return () => clearTimeout(t);
+  }, [undoMove]);
+
+  const handleUndoMove = useCallback(async () => {
+    const notice = undoMove;
+    if (!notice) return;
+    setUndoMove(null);
+    await handlePostMove(notice.postId, notice.previousScheduledAt, {
+      silent: true,
+    });
+  }, [undoMove, handlePostMove]);
 
   // ---- Approve a proposed campaign item (creates a draft post) ----
   const handleApproveProposed = useCallback(
@@ -347,11 +475,40 @@ export default function CalendarPage() {
         </div>
       )}
 
+      {undoMove && (
+        <div
+          role="status"
+          aria-live="polite"
+          data-testid="post-move-undo"
+          className="flex items-center gap-3 rounded-md border bg-card px-4 py-3 text-sm"
+        >
+          <span className="text-muted-foreground">
+            Moved{" "}
+            <span className="font-medium text-foreground">
+              “{undoMove.title}”
+            </span>{" "}
+            to{" "}
+            {new Date(undoMove.movedToIso).toLocaleDateString(undefined, {
+              month: "short",
+              day: "numeric",
+            })}
+            .
+          </span>
+          <button
+            type="button"
+            onClick={() => void handleUndoMove()}
+            className="rounded-md border border-primary/40 px-2 py-1 text-xs font-medium text-primary hover:bg-primary/10 transition-colors"
+          >
+            Undo
+          </button>
+        </div>
+      )}
+
       {/* Campaign plans from the AI team — the proposed side of the calendar */}
       {campaignPlans.length > 0 && (
         <div className="rounded-xl border bg-card p-4">
           <div className="flex items-center gap-2 mb-3">
-            <Map className="size-4 text-primary" />
+            <MapIcon className="size-4 text-primary" />
             <h2 className="font-semibold">Campaign plans</h2>
             <span className="text-xs text-muted-foreground">
               Mapped out by the AI team — proposed pieces appear on the calendar as dashed entries

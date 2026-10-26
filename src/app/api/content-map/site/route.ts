@@ -3,6 +3,8 @@ import { getTenantId, requireRole } from "@/lib/auth";
 import { getCurrentWorkspaceId } from "@/lib/workspace";
 import { rateLimitRequest } from "@/lib/rate-limit";
 import { addUrlItem, getWorkspaceLinkablePages } from "@/lib/knowledgebase";
+import { parseJsonBody } from "@/lib/api-validate";
+import { contentMapSiteSchema } from "@/lib/validations";
 
 /**
  * POST /api/content-map/site  { url }
@@ -55,8 +57,9 @@ export async function POST(request: NextRequest) {
     await requireRole("agency_editor");
     const workspaceId = await getCurrentWorkspaceId();
 
-    const body = (await request.json().catch(() => ({}))) as { url?: string };
-    const rawUrl = body.url?.trim();
+    const body = await parseJsonBody(request, contentMapSiteSchema);
+    if (!body.ok) return body.response;
+    const rawUrl = body.data.url.trim();
     if (!rawUrl) {
       return NextResponse.json({ error: "Provide the site's URL." }, { status: 400 });
     }

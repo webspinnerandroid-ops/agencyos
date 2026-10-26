@@ -3,6 +3,8 @@ import { getTenantId, requireRole } from "@/lib/auth";
 import { getCurrentWorkspaceId } from "@/lib/workspace";
 import { createServiceClient } from "@/lib/supabase/server";
 import { cancelAutoPublish } from "@/lib/content-map-autopublish";
+import { parseJsonBody } from "@/lib/api-validate";
+import { contentMapRowPatchSchema } from "@/lib/validations";
 
 /**
  * PATCH /api/content-map/:id
@@ -22,58 +24,40 @@ export async function PATCH(
     const workspaceId = await getCurrentWorkspaceId();
 
     const { id } = await params;
-    const body = (await request.json().catch(() => ({}))) as {
-      action?: string;
-      postId?: string;
-      seo?: number | null;
-      aeoGeo?: number | null;
-      gate?: unknown;
-      /** ISO datetime — the row's planned publish slot (date picker). */
-      scheduledAt?: string | null;
-      /** Inline row editor: the row's real fields. */
-      title?: string;
-      topic?: string;
-      keywords?: string[];
-      /** Generation mode: 'gate' (default, scored) or 'fiction' (no gate). */
-      mode?: string;
-    };
+    const body = await parseJsonBody(request, contentMapRowPatchSchema);
+    if (!body.ok) return body.response;
+    const data = body.data;
 
     // Inline row editing (bulk editor): update the row's title/topic/keywords
     // so placeholder rows can be given real topics before generating. Partial
     // — only the provided fields change. Strings are trimmed and capped to
     // mirror the import caps.
-    if (!body.action && (body.title !== undefined || body.topic !== undefined || body.keywords !== undefined || body.mode !== undefined)) {
+    if (!data.action && (data.title !== undefined || data.topic !== undefined || data.keywords !== undefined || data.mode !== undefined)) {
       const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
-      if (body.title !== undefined) {
-        const t = body.title.trim().slice(0, 300);
+      if (data.title !== undefined) {
+        const t = data.title.trim().slice(0, 300);
         if (!t) {
           return NextResponse.json({ error: "Title cannot be empty." }, { status: 400 });
         }
         patch.title = t;
       }
-      if (body.topic !== undefined) {
-        patch.topic = body.topic.trim().slice(0, 1000);
+      if (data.topic !== undefined) {
+        patch.topic = data.topic.trim().slice(0, 1000);
       }
-      if (body.keywords !== undefined) {
-        if (!Array.isArray(body.keywords)) {
+      if (data.keywords !== undefined) {
+        if (!Array.isArray(data.keywords)) {
           return NextResponse.json({ error: "keywords must be an array of strings." }, { status: 400 });
         }
-        patch.keywords = body.keywords
+        patch.keywords = data.keywords
           .map((k) => String(k).trim())
           .filter(Boolean)
           .slice(0, 12);
       }
-      if (body.mode !== undefined) {
+      if (data.mode !== undefined) {
         // Row mode: only two legal values — gate (default, scored) or
-        // fiction (creative stories, skips the gate by design).
-        const m = String(body.mode).toLowerCase();
-        if (m !== "gate" && m !== "fiction") {
-          return NextResponse.json(
-            { error: "mode must be 'gate' or 'fiction'." },
-            { status: 400 }
-          );
-        }
-        patch.mode = m;
+        // fiction (creative stories, skips the gate by design). The schema
+        // has already normalized + validated this.
+        patch.mode = data.mode;
       }
       const { error } = await supabase
         .from("content_map_items")
@@ -91,15 +75,15 @@ export async function PATCH(
 
     // Scheduling a row: set/clear its planned publish time. Works on any row
     // regardless of status (plan the date before or after generating).
-    if (body.scheduledAt !== undefined && !body.action) {
+    if (data.scheduledAt !== undefined && !data.action) {
       const iso =
-        body.scheduledAt === null
+        data.scheduledAt === null
           ? null
           : (() => {
-              const d = new Date(body.scheduledAt as string);
+              const d = new Date(data.scheduledAt as string);
               return isNaN(d.getTime()) ? undefined : d.toISOString();
             })();
-      if (body.scheduledAt !== null && iso === undefined) {
+      if (data.scheduledAt !== null && iso === undefined) {
         return NextResponse.json(
           { error: "scheduledAt must be an ISO datetime or null" },
           { status: 400 }
@@ -134,7 +118,7 @@ export async function PATCH(
 
     // Cancel the 15-minute auto-publish hold on this row's linked draft.
     // The draft is kept (status stays draft) — only the automation stops.
-    if (body.action === "cancel_auto_publish") {
+    if (data.action === "cancel_auto_publish") {
       const { data: row } = await supabase
         .from("content_map_items")
         .select("linked_post_id")
@@ -157,16 +141,16 @@ export async function PATCH(
       return NextResponse.json({ success: true });
     }
 
-    if (body.action === "link") {
-      if (!body.postId) {
+    if (data.action === "link") {
+      if (!data.postId) {
         return NextResponse.json({ error: "postId is required to link." }, { status: 400 });
       }
       const { error } = await supabase
         .from("content_map_items")
         .update({
           status: "done",
-          linked_post_id: body.postId,
-          gate: (body.gate ?? null) as Record<string, unknown> | null,
+          linked_post_id: data.postId,
+          gate: (data.gate ?? null) as Record<string, unknown> | null,
           error: null,
           updated_at: new Date().toISOString(),
         })
@@ -178,11 +162,11 @@ export async function PATCH(
       return NextResponse.json({ success: true });
     }
 
-    if (body.action === "dismiss" || body.action === "restore") {
+    if (data.action === "dismiss" || data.action === "restore") {
       const { error } = await supabase
         .from("content_map_items")
         .update({
-          status: body.action === "dismiss" ? "dismissed" : "planned",
+          status: data.action === "dismiss" ? "dismissed" : "planned",
           error: null,
           updated_at: new Date().toISOString(),
         })

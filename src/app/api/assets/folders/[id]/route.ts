@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantId } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
+import { parseJsonBody } from "@/lib/api-validate";
+import { assetFolderRenameSchema } from "@/lib/validations";
 
 /**
  * PATCH /api/assets/folders/[id]
@@ -18,8 +20,10 @@ export async function PATCH(
     const supabase = await createServiceClient();
     const { id } = await params;
 
-    const body = await request.json();
-    const name = (body?.name ?? "").toString().trim();
+    const body = await parseJsonBody(request, assetFolderRenameSchema);
+    if (!body.ok) return body.response;
+
+    const name = body.data.name;
     if (!name) {
       return NextResponse.json({ error: "Folder name is required" }, { status: 400 });
     }

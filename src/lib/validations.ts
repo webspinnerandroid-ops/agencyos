@@ -91,3 +91,204 @@ export const generateContentSchema = z
   });
 
 export type GenerateContentInput = z.infer<typeof generateContentSchema>;
+
+// ---------------------------------------------------------------------------
+// Clients (create). Adopted by POST /api/clients via parseJsonBody.
+// ---------------------------------------------------------------------------
+
+export const clientCreateSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(2, "Client name must be at least 2 characters")
+    .max(120, "Client name must be 120 characters or fewer"),
+  // Empty string is how the UI represents "no website" — accept it rather than
+  // rejecting the form. A bare host ("acme.com", the placeholder in the UI) is
+  // accepted too and stored as typed: the field is a reference, not a link
+  // target, and tightening it here would reject input the product invites.
+  website: z
+    .string()
+    .trim()
+    .max(2000, "Website must be 2000 characters or fewer")
+    .refine(
+      (v) =>
+        v === "" ||
+        /^https?:\/\/\S+$/i.test(v) ||
+        /^[a-z0-9.-]+\.[a-z]{2,}(\/\S*)?$/i.test(v),
+      "Website must be a URL or a domain like acme.com"
+    )
+    .optional()
+    .nullable(),
+  notes: z.string().max(4000, "Notes must be 4000 characters or fewer").optional().nullable(),
+});
+
+export type ClientCreateInput = z.infer<typeof clientCreateSchema>;
+
+// ---------------------------------------------------------------------------
+// Posts (update). Adopted by PATCH /api/posts/[id].
+//
+// Every field is optional, but at least one update (or the cancel action) must
+// be present — an empty PATCH would otherwise be a silent no-op 200.
+// ---------------------------------------------------------------------------
+
+export const POST_STATUSES = [
+  "draft",
+  "pending_approval",
+  "approved",
+  "revision_requested",
+  "scheduled",
+  "published",
+  "failed",
+] as const;
+
+export const postUpdateSchema = z
+  .object({
+    action: z.literal("cancel_auto_publish").optional(),
+    status: z.enum(POST_STATUSES).optional(),
+    // Null = unschedule. Offset-qualified ISO required (the client sends UTC).
+    scheduled_at: z.string().datetime({ offset: true }).nullable().optional(),
+    workspace_id: z.string().uuid().nullable().optional(),
+    revision_reason: z
+      .string()
+      .trim()
+      .min(1, "A revision reason is required")
+      .max(2000)
+      .optional(),
+  })
+  .refine(
+    (v) =>
+      v.action !== undefined ||
+      v.status !== undefined ||
+      v.scheduled_at !== undefined ||
+      v.workspace_id !== undefined ||
+      v.revision_reason !== undefined,
+    {
+      message:
+        "scheduled_at, status, workspace_id, or revision_reason is required",
+    }
+  );
+
+export type PostUpdateInput = z.infer<typeof postUpdateSchema>;
+
+// ---------------------------------------------------------------------------
+// Content map (row patch). Adopted by PATCH /api/content-map/[id].
+//
+// The row patch is polymorphic, mirroring the route's three branches:
+//   1. Inline row edit      — any of title/topic/keywords/mode (no action)
+//   2. Schedule a row       — scheduledAt (string or null; no action)
+//   3. Action               — action: cancel_auto_publish | link | dismiss | restore
+// Every field is optional, but at least one recognized field must be present:
+// an empty PATCH would otherwise be a silent no-op.
+// ---------------------------------------------------------------------------
+
+export const contentMapRowPatchSchema = z
+  .object({
+    action: z
+      .enum(["cancel_auto_publish", "link", "dismiss", "restore"])
+      .optional(),
+    // Recorded when the generated post is linked to the row.
+    postId: z.string().uuid().optional(),
+    gate: z.unknown().optional(),
+    // Legacy companions the UI used to send with `link`; unused by the route
+    // but accepted so older clients keep working.
+    seo: z.unknown().optional(),
+    aeoGeo: z.unknown().optional(),
+    // Row's planned publish slot. Kept lenient here (any non-empty string or
+    // null) — the route converts it to ISO and 400s otherwise, preserving the
+    // existing datetime-local payloads.
+    scheduledAt: z
+      .string()
+      .min(1, "scheduledAt must be an ISO datetime or null")
+      .nullable()
+      .optional(),
+    // Inline row edit fields (mirror the import caps applied in the route).
+    title: z.string().max(1200, "Title must be 1200 characters or fewer").optional(),
+    topic: z.string().max(5000, "Topic must be 5000 characters or fewer").optional(),
+    keywords: z.array(z.string()).max(24).optional(),
+    // Generation mode, case-insensitive in transit ("Gate" → "gate").
+    mode: z.preprocess(
+      (m) => (typeof m === "string" ? m.toLowerCase() : m),
+      z.enum(["gate", "fiction"]).optional()
+    ),
+  })
+  .refine(
+    (v) =>
+      v.action !== undefined ||
+      v.scheduledAt !== undefined ||
+      v.title !== undefined ||
+      v.topic !== undefined ||
+      v.keywords !== undefined ||
+      v.mode !== undefined,
+    {
+      message:
+        "Provide an action, a scheduledAt, or inline row fields (title, topic, keywords, mode)",
+    }
+  );
+
+export type ContentMapRowPatchInput = z.infer<typeof contentMapRowPatchSchema>;
+
+// ---------------------------------------------------------------------------
+// Content map (batch runner). Adopted by POST /api/content-map/batch.
+// ---------------------------------------------------------------------------
+
+export const contentMapBatchSchema = z.object({
+  action: z.enum(["start", "stop", "status"]),
+  clientId: z.string().uuid().nullable().optional(),
+  brandVoice: z.string().max(4000).nullable().optional(),
+  imagePref: z
+    .union([z.number().int().min(0).max(3), z.literal("auto")])
+    .optional(),
+  /** Per-row generation: only these item ids (must be planned). */
+  itemIds: z.array(z.string().uuid()).max(200).optional(),
+});
+
+export type ContentMapBatchInput = z.infer<typeof contentMapBatchSchema>;
+
+// ---------------------------------------------------------------------------
+// Content map (site upload). Adopted by POST /api/content-map/site.
+// The route normalizes the URL itself (bare hosts like "example.com" are a
+// supported input shape), so the schema only enforces shape and length.
+// ---------------------------------------------------------------------------
+
+export const contentMapSiteSchema = z.object({
+  url: z
+    .string()
+    .min(1, "Provide the site's URL")
+    .max(2000, "URL must be 2000 characters or fewer"),
+});
+
+export type ContentMapSiteInput = z.infer<typeof contentMapSiteSchema>;
+
+// ---------------------------------------------------------------------------
+// Asset folders. Adopted by POST /api/assets/folders and
+// PATCH /api/assets/folders/[id].
+// ---------------------------------------------------------------------------
+
+export const ASSET_FOLDER_KINDS = [
+  "image",
+  "video",
+  "voice",
+  "brand",
+  "content",
+] as const;
+
+export const assetFolderCreateSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(1, "Folder name is required")
+    .max(120, "Folder name must be 120 characters or fewer"),
+  kind: z.enum(ASSET_FOLDER_KINDS).default("image"),
+});
+
+export type AssetFolderCreateInput = z.infer<typeof assetFolderCreateSchema>;
+
+export const assetFolderRenameSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(1, "Folder name is required")
+    .max(120, "Folder name must be 120 characters or fewer"),
+});
+
+export type AssetFolderRenameInput = z.infer<typeof assetFolderRenameSchema>;

@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getTenantId } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getCurrentWorkspaceId } from "@/lib/workspace";
-
-const FOLDER_KINDS = ["image", "video", "voice", "brand", "content"] as const;
+import { parseJsonBody } from "@/lib/api-validate";
+import { assetFolderCreateSchema, ASSET_FOLDER_KINDS } from "@/lib/validations";
 
 /**
  * GET /api/assets/folders
@@ -48,14 +48,13 @@ export async function POST(request: NextRequest) {
     const workspaceId = await getCurrentWorkspaceId();
     const supabase = await createServiceClient();
 
-    const body = await request.json();
-    const name = (body?.name ?? "").toString().trim();
-    const kind = (body?.kind ?? "image").toString();
+    const body = await parseJsonBody(request, assetFolderCreateSchema);
+    if (!body.ok) return body.response;
 
-    if (!name) {
-      return NextResponse.json({ error: "Folder name is required" }, { status: 400 });
-    }
-    if (!(FOLDER_KINDS as readonly string[]).includes(kind)) {
+    const name = body.data.name;
+    const kind = body.data.kind;
+
+    if (!(ASSET_FOLDER_KINDS as readonly string[]).includes(kind)) {
       return NextResponse.json({ error: `Invalid folder kind: ${kind}` }, { status: 400 });
     }
 

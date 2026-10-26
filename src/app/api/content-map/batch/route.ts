@@ -7,6 +7,8 @@ import {
   stopBatch,
   getBatchStatus,
 } from "@/lib/content-map-batch";
+import { parseJsonBody } from "@/lib/api-validate";
+import { contentMapBatchSchema } from "@/lib/validations";
 
 export const maxDuration = 60;
 
@@ -39,16 +41,11 @@ export async function POST(request: NextRequest) {
     await requireRole("agency_editor");
     const workspaceId = await getCurrentWorkspaceId().catch(() => null);
 
-    const body = (await request.json().catch(() => ({}))) as {
-      action?: string;
-      clientId?: string | null;
-      brandVoice?: string | null;
-      imagePref?: number | "auto";
-      /** Per-row generation: only these item ids (must be planned). */
-      itemIds?: string[];
-    };
+    const body = await parseJsonBody(request, contentMapBatchSchema);
+    if (!body.ok) return body.response;
+    const data = body.data;
 
-    if (body.action === "start") {
+    if (data.action === "start") {
       const result = await startBatch({
         tenantId,
         workspaceId,
@@ -57,17 +54,13 @@ export async function POST(request: NextRequest) {
         // The origin this server answers on (loopback in dev; the deployment
         // URL in prod — same process either way).
         origin: request.nextUrl.origin,
-        clientId: body.clientId ?? null,
-        brandVoice: body.brandVoice ?? null,
+        clientId: data.clientId ?? null,
+        brandVoice: data.brandVoice ?? null,
         itemIds:
-          Array.isArray(body.itemIds) && body.itemIds.length > 0
-            ? body.itemIds.filter((id) => typeof id === "string" && id.length > 0)
+          data.itemIds && data.itemIds.length > 0
+            ? data.itemIds
             : undefined,
-        imagePref:
-          body.imagePref === "auto" ||
-          (typeof body.imagePref === "number" && body.imagePref >= 0 && body.imagePref <= 3)
-            ? body.imagePref
-            : "auto",
+        imagePref: data.imagePref ?? "auto",
       });
       if (!result.started) {
         return NextResponse.json(
@@ -82,12 +75,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ started: true, claimed: result.claimed });
     }
 
-    if (body.action === "stop") {
+    if (data.action === "stop") {
       const stopped = stopBatch(tenantId, workspaceId);
       return NextResponse.json({ stopped });
     }
 
-    if (body.action === "status") {
+    if (data.action === "status") {
       return NextResponse.json(getBatchStatus(tenantId, workspaceId));
     }
 

@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getTenantId } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getCurrentWorkspaceId } from "@/lib/workspace";
+import { parseJsonBody } from "@/lib/api-validate";
+import { clientCreateSchema } from "@/lib/validations";
 
 export async function GET() {
   try {
@@ -36,12 +38,9 @@ export async function POST(request: NextRequest) {
     const supabase = await createServiceClient();
     const workspaceId = await getCurrentWorkspaceId();
 
-    const body = await request.json();
-    const { name, website, notes } = body;
-
-    if (!name || typeof name !== "string") {
-      return NextResponse.json({ error: "name is required" }, { status: 400 });
-    }
+    const body = await parseJsonBody(request, clientCreateSchema);
+    if (!body.ok) return body.response;
+    const { name, website, notes } = body.data;
 
     const { data, error } = await supabase
       .from("clients")

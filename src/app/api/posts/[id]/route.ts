@@ -3,6 +3,8 @@ import { getTenantId } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import { submitPostToIndexNow } from "@/lib/seo/indexnow";
 import { cancelAutoPublish } from "@/lib/content-map-autopublish";
+import { parseJsonBody } from "@/lib/api-validate";
+import { postUpdateSchema } from "@/lib/validations";
 
 export async function GET(
   _request: NextRequest,
@@ -124,8 +126,10 @@ export async function PATCH(
     const supabase = await createServiceClient();
     const { id } = await params;
 
-    const body = await request.json();
-    const { scheduled_at, status, workspace_id, revision_reason, action } = body;
+    const body = await parseJsonBody(request, postUpdateSchema);
+    if (!body.ok) return body.response;
+    const { scheduled_at, status, workspace_id, revision_reason, action } =
+      body.data;
 
     // Cancel the 15-minute auto-publish hold (the undo window on
     // content-map automation). The draft is kept — only the automation is
@@ -139,13 +143,6 @@ export async function PATCH(
         );
       }
       return NextResponse.json({ ok: true, cancelled: true });
-    }
-
-    if (scheduled_at === undefined && status === undefined && workspace_id === undefined && revision_reason === undefined) {
-      return NextResponse.json(
-        { error: "scheduled_at, status, workspace_id, or revision_reason is required" },
-        { status: 400 }
-      );
     }
 
     // Verify the post belongs to this tenant before updating

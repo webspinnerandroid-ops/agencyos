@@ -93,6 +93,7 @@ scripts/*.cjs
 
 # Hand-written operational scripts (no .ts source) — keep tracked.
 !scripts/audit-tenant-scope.cjs
+!scripts/audit-validation.cjs
 !scripts/manual-traffic-sync.cjs
 !scripts/sanitize-seo-campaigns.cjs
 !scripts/sync-site-domains.cjs

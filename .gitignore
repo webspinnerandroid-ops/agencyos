@@ -104,3 +104,5 @@ scripts/*.cjs
 # esbuild; kept tracked so the CI job runs it without a build step).
 !scripts/check-price-drift.cjs
 .bliss/
+# Private pasted credentials — local only
+.secrets/

@@ -170,6 +170,9 @@ export default function CalendarPage() {
       // Determine date range for the current view — fetch a generous window
       // (full month + buffer). The component handles the current month,
       // but we fetch a wider range so navigation feels instant for a while.
+      // Last day of month+2 (two FULL months ahead): the auto-jump reads
+      // this list to find the next non-empty month, so a post scheduled
+      // late in month+2 must be inside it.
       const now = new Date();
       const startDate = new Date(
         now.getFullYear(),
@@ -178,7 +181,7 @@ export default function CalendarPage() {
       ).toISOString();
       const endDate = new Date(
         now.getFullYear(),
-        now.getMonth() + 2,
+        now.getMonth() + 3,
         0
       ).toISOString();
 

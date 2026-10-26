@@ -292,3 +292,47 @@ export const assetFolderRenameSchema = z.object({
 });
 
 export type AssetFolderRenameInput = z.infer<typeof assetFolderRenameSchema>;
+
+// ---------------------------------------------------------------------------
+// Notifications — /api/notifications (mark read / delete) and
+// /api/notifications/read-link.
+//
+// These routes keep a legacy contract: the bell's "mark all" action may fire
+// with no body at all (the route treats an absent body as mark-all), and both
+// handlers otherwise destructure loose shapes. The schemas below tighten the
+// accepted TYPES (garbage ids/link values are now field-level 400s instead of
+// silently behaving as mark-all/no-op) while the routes use
+// parseJsonBody(..., { emptyAsEmptyObject: true }) to preserve the absent-body
+// behavior exactly.
+// ---------------------------------------------------------------------------
+
+/** POST /api/notifications — either { all: true } or { ids: [uuid, ...] }. */
+export const notificationsMarkReadSchema = z.object({
+  all: z.boolean().optional(),
+  ids: z.array(z.string().uuid()).optional(),
+});
+
+export type NotificationsMarkReadInput = z.infer<
+  typeof notificationsMarkReadSchema
+>;
+
+/** DELETE /api/notifications — { ids: [uuid, ...] }. Absent/empty = no-op. */
+export const notificationsDeleteSchema = z.object({
+  ids: z.array(z.string().uuid()).optional(),
+});
+
+export type NotificationsDeleteInput = z.infer<
+  typeof notificationsDeleteSchema
+>;
+
+/**
+ * POST /api/notifications/read-link — { link?: string }. The client sends the
+ * pathname it opened; an absent link is a no-op, not an error.
+ */
+export const notificationsReadLinkSchema = z.object({
+  link: z.string().max(2048).optional(),
+});
+
+export type NotificationsReadLinkInput = z.infer<
+  typeof notificationsReadLinkSchema
+>;

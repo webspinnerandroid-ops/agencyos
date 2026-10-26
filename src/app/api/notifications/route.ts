@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantId } from "@/lib/auth";
+import { parseJsonBody } from "@/lib/api-validate";
+import {
+  notificationsDeleteSchema,
+  notificationsMarkReadSchema,
+} from "@/lib/validations";
 import {
   listNotifications,
   countNotifications,
@@ -56,21 +61,24 @@ export async function GET(request: NextRequest) {
 /**
  * POST /api/notifications
  *
- * Mark notifications read. Body: { ids?: string[], all?: boolean }.
+ * Mark notifications read. Body: { ids?: uuid[], all?: boolean } — validated
+ * by notificationsMarkReadSchema; an absent body (the bell's single "mark all"
+ * action) still behaves as mark-all via emptyAsEmptyObject.
  * - `all: true` marks every unread notification read.
- * - Otherwise a specific `ids` array is marked read.
+ * - Otherwise the `ids` array is marked read (an empty array is a no-op, per
+ *   markNotificationsRead).
+ *
+ * Tightened: a non-array or non-uuid `ids` used to fall through to mark-all
+ * silently; it is now a field-level 400.
  */
 export async function POST(request: NextRequest) {
   try {
     const tenantId = await getTenantId();
-    let body: { ids?: string[]; all?: boolean } = {};
-    try {
-      body = (await request.json()) as { ids?: string[]; all?: boolean };
-    } catch {
-      // empty body → treat as mark-all (the bell's single "mark all" action)
-    }
-    const markAll = body.all === true;
-    const ids = markAll ? null : Array.isArray(body.ids) ? body.ids : null;
+    const body = await parseJsonBody(request, notificationsMarkReadSchema, {
+      emptyAsEmptyObject: true,
+    });
+    if (!body.ok) return body.response;
+    const ids = body.data.all === true ? null : (body.data.ids ?? null);
     await markNotificationsRead(tenantId, ids);
     return NextResponse.json({ success: true });
   } catch (error) {
@@ -83,18 +91,17 @@ export async function POST(request: NextRequest) {
 /**
  * DELETE /api/notifications
  *
- * Delete notifications. Body: { ids: string[] } — empty array is a no-op.
+ * Delete notifications. Body: { ids: uuid[] } — an absent body or an empty
+ * array is a no-op (deleteNotifications guards both).
  */
 export async function DELETE(request: NextRequest) {
   try {
     const tenantId = await getTenantId();
-    let body: { ids?: string[] } = {};
-    try {
-      body = (await request.json()) as { ids?: string[] };
-    } catch {
-      // fall through — no ids, no-op
-    }
-    const ids = Array.isArray(body.ids) ? body.ids : [];
+    const body = await parseJsonBody(request, notificationsDeleteSchema, {
+      emptyAsEmptyObject: true,
+    });
+    if (!body.ok) return body.response;
+    const ids = body.data.ids ?? [];
     await deleteNotifications(tenantId, ids);
     return NextResponse.json({ success: true, deleted: ids.length });
   } catch (error) {

@@ -80,6 +80,19 @@ export function validateJson<S extends ZodType>(
 }
 
 /**
+ * Optional behaviors for adoption-sensitive routes.
+ *
+ * `emptyAsEmptyObject`: some write routes legitimately receive NO body and
+ * treat that as a benign default (the bell's mark-all fires with an empty
+ * body; a no-op delete sends nothing). Those routes adopt validation without
+ * changing their contract by validating `{}` for the absent body instead of
+ * failing with 400. A non-empty body is still fully validated.
+ */
+export interface ParseJsonBodyOptions {
+  emptyAsEmptyObject?: boolean;
+}
+
+/**
  * Read and validate a JSON request body.
  *
  * Usage:
@@ -89,7 +102,8 @@ export function validateJson<S extends ZodType>(
  */
 export async function parseJsonBody<S extends ZodType>(
   request: Request,
-  schema: S
+  schema: S,
+  options?: ParseJsonBodyOptions
 ): Promise<
   { ok: true; data: import("zod").infer<S> } | { ok: false; response: NextResponse }
 > {
@@ -105,6 +119,7 @@ export async function parseJsonBody<S extends ZodType>(
       ),
     };
   }
+  if (options?.emptyAsEmptyObject && raw.trim().length === 0) raw = "{}";
 
   const result = validateJson(raw, schema);
   if (result.ok) return { ok: true, data: result.data };

@@ -95,3 +95,61 @@ test("PATCH /api/posts/[id] still applies a real status change", async ({ reques
   const row = await db.from("posts").select("status").eq("id", postId).single();
   expect(row.data?.status).toBe("approved");
 });
+
+// ---- Notifications family (batch 3) --------------------------------------
+// Random uuids never match a real row, so the mark/delete calls under test
+// are proven without touching the tenant's actual notifications.
+
+const CLEAN_UUID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+
+test("POST /api/notifications applies the body the page sends (ids list)", async ({ request }) => {
+  const res = await request.post("/api/notifications", {
+    data: { ids: [CLEAN_UUID] },
+  });
+  expect(res.status(), await res.text()).toBe(200);
+  expect((await res.json()).success).toBe(true);
+});
+
+test("POST /api/notifications keeps the empty-body mark-all courtesy", async ({ request }) => {
+  // An ABSENT body — no data, not even "": Playwright would otherwise send
+  // a quoted empty string, which the tightened schema correctly rejects.
+  const res = await request.post("/api/notifications", {
+    headers: { "Content-Type": "application/json" },
+  });
+  expect(res.status(), await res.text()).toBe(200);
+  expect((await res.json()).success).toBe(true);
+});
+
+test("POST /api/notifications refuses a non-array ids value with field detail", async ({ request }) => {
+  // Previously a garbage ids value silently marked EVERYTHING read.
+  const res = await request.post("/api/notifications", { data: { ids: "all" } });
+  expect(res.status()).toBe(400);
+  const body = (await res.json()) as { code?: string; issues?: { path: string }[] };
+  expect(body.code).toBe("invalid_body");
+  expect(body.issues?.map((i) => i.path)).toContain("ids");
+});
+
+test("DELETE /api/notifications accepts an ids list and an empty array no-op", async ({ request }) => {
+  const noop = await request.delete("/api/notifications", { data: { ids: [] } });
+  expect(noop.status(), await noop.text()).toBe(200);
+  expect((await noop.json()).deleted).toBe(0);
+
+  const junk = await request.delete("/api/notifications", { data: { ids: "all" } });
+  expect(junk.status()).toBe(400);
+});
+
+test("POST /api/notifications/read-link validates link and keeps the no-op courtesy", async ({ request }) => {
+  const res = await request.post("/api/notifications/read-link", {
+    data: { link: "/dashboard/posts" },
+  });
+  expect(res.status(), await res.text()).toBe(200);
+
+  const junk = await request.post("/api/notifications/read-link", { data: { link: 5 } });
+  expect(junk.status()).toBe(400);
+
+  // No body at all: historically a no-op, not an error.
+  const empty = await request.post("/api/notifications/read-link", {
+    headers: { "Content-Type": "application/json" },
+  });
+  expect(empty.status()).toBe(200);
+});

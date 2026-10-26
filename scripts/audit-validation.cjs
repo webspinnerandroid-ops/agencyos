@@ -30,10 +30,13 @@ const API = path.join(ROOT, "src", "app", "api");
 /**
  * Current state (2026-10-26). Lower `unvalidated` and raise `validated` as
  * families migrate — never the other way round.
+ *
+ * Migrated so far: clients + posts (batch 1), content-map + asset folders
+ * (batch 2), notifications + read-link (batch 3).
  */
 const BASELINE = {
-  unvalidated: 85,
-  validated: 9,
+  unvalidated: 83,
+  validated: 11,
 };
 
 function walk(dir, out = []) {

@@ -317,13 +317,6 @@ async function persistUploadedImages(
   }
 }
 
-interface SocialCaptionResult {
-  caption: string;
-  hashtags: string[];
-  firstComment: string;
-  contentWarnings: string[];
-  suggestedImageDescription: string;
-}
 
 export async function POST(request: NextRequest) {
   try {
@@ -752,6 +745,9 @@ Creative-fiction rules (this post is explicitly EXEMPT from SEO/AEO/GEO optimiza
             content: {
               type: "social",
               platform,
+              // Seeded title — migration 021's trigger takes this instead of
+              // prefixing the title column with the caption's first 80 chars.
+              title: caption.title,
               caption: caption.caption,
               hashtags: caption.hashtags,
               firstComment: caption.firstComment,
@@ -1400,6 +1396,10 @@ Creative-fiction rules (this post is explicitly EXEMPT from SEO/AEO/GEO optimiza
           content: {
             type: "social",
             platform,
+            // Seeded title (promoting the blog post) — migration 021's
+            // trigger takes this instead of prefixing the title column with
+            // the caption's first 80 chars.
+            title: caption.title,
             caption: caption.caption,
             hashtags: caption.hashtags,
             firstComment: caption.firstComment,

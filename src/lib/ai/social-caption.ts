@@ -56,10 +56,33 @@ async function getAccountSpecOverrides(
 
 export interface SocialCaptionResult {
   caption: string;
+  /**
+   * A short human title for the post — stamped into `content.title` so
+   * migration 021's denorm trigger takes this branch instead of "prefixing"
+   * the title column with the first 80 chars of the caption.
+   */
+  title: string;
   hashtags: string[];
   firstComment: string;
   contentWarnings: string[];
   suggestedImageDescription: string;
+}
+
+/**
+ * Deterministic title for a social post — no extra model call.
+ * A blog-promo caption titles itself after the blog post (the post exists
+ * to promote it); a standalone post after its topic or first keyword.
+ */
+function socialTitle(ctx: SocialCaptionContext, platform: string): string {
+  if (ctx.blog) {
+    const label = platform.charAt(0).toUpperCase() + platform.slice(1);
+    return `${ctx.blog.title} — ${label}`;
+  }
+  const fromTopic =
+    ctx.topic?.trim() ||
+    ctx.keywords?.find((k) => k && k.trim()) ||
+    "Social post";
+  return fromTopic.slice(0, 80);
 }
 
 /**
@@ -141,6 +164,8 @@ export async function generateSocialCaptionFor(
     PLATFORM_SPECS[platform.toLowerCase()]?.charLimit ??
     PLATFORM_SPECS.instagram.charLimit;
 
+  const title = socialTitle(ctx, platform);
+
   // Enrich the social prompt with platform-specific brand rules.
   let enrichedSocialPrompt = getSocialCaptionPrompt(platform, ctx.brandVoice ?? undefined);
   if (ctx.workspaceId) {
@@ -201,6 +226,7 @@ Write the post itself for ${platform.toUpperCase()}: native to the platform's fo
       );
       caption = {
         caption: enforced.caption,
+        title,
         hashtags: enforced.hashtags,
         firstComment: toPlainCaption(parsedCaption.firstComment) || "",
         contentWarnings: Array.isArray(parsedCaption.contentWarnings)
@@ -215,6 +241,7 @@ Write the post itself for ${platform.toUpperCase()}: native to the platform's fo
     } else {
       caption = {
         caption: toPlainCaption(rawCaption) || "Untitled caption",
+        title,
         hashtags: [],
         firstComment: "",
         contentWarnings: [],
@@ -227,6 +254,7 @@ Write the post itself for ${platform.toUpperCase()}: native to the platform's fo
         toPlainCaption(rawCaption) || "Untitled caption",
         effectiveCharLimit
       ),
+      title,
       hashtags: [],
       firstComment: "",
       contentWarnings: [],

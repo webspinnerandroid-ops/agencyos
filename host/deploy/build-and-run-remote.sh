@@ -30,23 +30,69 @@ log "staging source into a temp tree (exclude node_modules/.next/.git/diags/free
 STAGING=$(mktemp -d)
 trap 'rm -rf "$STAGING"' EXIT
 
-rsync -a --delete \
-  --exclude 'node_modules' \
-  --exclude '.next' \
-  --exclude '.git' \
-  --exclude 'diag-*.txt' \
-  --exclude 'diag-*.log' \
-  --exclude 'health-*.txt' \
-  --exclude 'health-*.cjs' \
-  --exclude 'build-*.txt' \
-  --exclude 'build-result.txt' \
-  --exclude '.freebuff' \
-  "$REPO_DIR/" "$STAGING/"
+SSH_OPTS="-i $SSH_KEY -o BatchMode=yes -o ConnectTimeout=12 -o StrictHostKeyChecking=no -o LogLevel=ERROR"
 
-log "pushing staged tree to $REMOTE_DIR (root@HOST)..."
-rsync -a --delete --chmod=Du=rwx,Dg=rx,Do=rx,Fu=rw,Fg=r,Fo=r \
-  -e "ssh -i $SSH_KEY -o BatchMode=yes -o ConnectTimeout=12 -o StrictHostKeyChecking=no -o LogLevel=ERROR" \
-  "$STAGING/" "root@$HOST:$REMOTE_DIR/"
+# 2026-10-27: this script's rsync step used to fail silently on hosts without
+# rsync (Git Bash on Windows: exit 127, "command not found"), and the script
+# kept going — building and LIKEWARM-restarting the STALE remote tree as if it
+# had deployed. The dark-theme fix shipped to origin that day never reached
+# production for exactly this reason. Two guards now:
+#   1. hosts WITH rsync keep the rsync path, but a failed transfer aborts
+#      before the rebuild (a failed push must never yield a green deploy);
+#   2. hosts WITHOUT rsync fall back to tar+scp of the git-tracked tree
+#      (same channel as scripts/upload-via-zip.py), pruning remote-only
+#      leftovers inside code dirs so the built tree matches HEAD.
+if command -v rsync >/dev/null 2>&1; then
+  rsync -a --delete \
+    --exclude 'node_modules' \
+    --exclude '.next' \
+    --exclude '.git' \
+    --exclude 'diag-*.txt' \
+    --exclude 'diag-*.log' \
+    --exclude 'health-*.txt' \
+    --exclude 'health-*.cjs' \
+    --exclude 'build-*.txt' \
+    --exclude 'build-result.txt' \
+    --exclude '.freebuff' \
+    "$REPO_DIR/" "$STAGING/"
+
+  log "pushing staged tree to $REMOTE_DIR (root@HOST)..."
+  if ! rsync -a --delete --chmod=Du=rwx,Dg=rx,Do=rx,Fu=rw,Fg=r,Fo=r \
+    -e "ssh $SSH_OPTS" \
+    "$STAGING/" "root@$HOST:$REMOTE_DIR/"
+  then
+    log "ERROR: the rsync push to the VPS failed — aborting BEFORE the rebuild"
+    log "       so the previous build is not restarted over a stale tree."
+    exit 3
+  fi
+else
+  log "rsync not found on this host — shipping the git-tracked tree via tar over ssh"
+  git -C "$REPO_DIR" ls-files -z > "$STAGING/manifest.nul"
+  tar -czf "$STAGING/tree.tgz" --null -T "$STAGING/manifest.nul" || { log "tar staging failed"; exit 3; }
+  scp $SSH_OPTS "$STAGING/tree.tgz" "$STAGING/manifest.nul" "root@$HOST:/tmp/" || { log "scp transfer failed"; exit 3; }
+  ssh $SSH_OPTS "root@$HOST" 'mv -f /tmp/tree.tgz /tmp/agencyos-tree.tgz; mv -f /tmp/manifest.nul /tmp/deploy-manifest.files' || { log "ssh rename failed"; exit 3; }
+  ssh $SSH_OPTS "root@$HOST" bash -s <<'REMOTE_TREE'
+set -euo pipefail
+cd /home/admin/web/platform.blissmedialab.com/agency-os
+tar -xzf /tmp/agencyos-tree.tgz
+python3 - <<'PY'
+import pathlib
+base = pathlib.Path("/home/admin/web/platform.blissmedialab.com/agency-os")
+keep = {k.decode("utf-8") for k in open("/tmp/deploy-manifest.files", "rb").read().split(b"\x00") if k}
+removed = 0
+for d in ["src", "tests", "scripts", "supabase", "docs", "host", "infra", "public", ".github", "i18n"]:
+    p = base / d
+    if not p.is_dir():
+        continue
+    for f in p.rglob("*"):
+        if f.is_file() and not f.is_symlink():
+            if f.relative_to(base).as_posix() not in keep:
+                f.unlink()
+                removed += 1
+print(f"pruned remote-only files: {removed}")
+PY
+REMOTE_TREE
+fi
 
 log "stopping any process listening on :3000 on the VPS..."
 ssh -i "$SSH_KEY" -o BatchMode=yes -o ConnectTimeout=12 -o StrictHostKeyChecking=no -o LogLevel=ERROR \

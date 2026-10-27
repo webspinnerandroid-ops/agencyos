@@ -1230,13 +1230,57 @@ const CAMPAIGN_PLAN_SCHEMA = {
   required: ["title", "summary", "items"],
 };
 
+/**
+ * Resolve which client a plan belongs to — the plan's proposed items must land
+ * under that client's calendar filter. Sources, in order:
+ *   1. The chat itself is bound to a client (team_chats.client_id).
+ *   2. The message names an existing client (best-effort name extraction,
+ *      matched against the tenant's clients table — exact name first, then
+ *      a substring match for labelled variants like "Acme Roasters Inc.").
+ * Never throws: a failed lookup falls back to null (unattributed plan),
+ * which is exactly today's behavior.
+ */
+async function resolveTargetClientId(
+  tenantId: string,
+  chatClientId: string | null,
+  userMessage: string
+): Promise<string | null> {
+  if (chatClientId) return chatClientId;
+  const { name } = extractClientFromMessage(userMessage);
+  if (!name) return null;
+  try {
+    const sb = await createServiceClient();
+    const trimmed = name.trim();
+    let { data } = await sb
+      .from("clients")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .ilike("name", trimmed)
+      .limit(1);
+    if (!data || data.length === 0) {
+      const escaped = trimmed.replace(/[%_\\]/g, "\\$&");
+      ({ data } = await sb
+        .from("clients")
+        .select("id")
+        .eq("tenant_id", tenantId)
+        .ilike("name", `%${escaped}%`)
+        .limit(1));
+    }
+    return data?.[0]?.id ?? null;
+  } catch (err) {
+    console.warn("[team-task] Could not resolve target client for plan:", err);
+    return null;
+  }
+}
+
 /** Malory maps the campaign → structured plan saved to campaign_plans. */
 async function maloryPlanCampaign(
   tenantId: string,
   topic: string,
   workspaceContext: string,
   workspaceId: string | null,
-  chatContext: string
+  chatContext: string,
+  clientId: string | null
 ): Promise<{ planId: string; title: string; summary: string; itemCount: number }> {
   const maloryPrompt =
     buildEmployeeSystemPrompt("nina", { workspaceContext, chatContext }) +
@@ -1298,6 +1342,7 @@ async function maloryPlanCampaign(
     title: plan.title,
     summary: plan.summary ?? "",
     workspaceId,
+    clientId,
     createdBy: "nina",
     items: items.map((i) => ({
       kind: i.kind === "social" ? "social" : "blog",
@@ -1324,7 +1369,7 @@ async function maloryPlanCampaign(
     await sb.from("seo_campaigns").insert({
       tenant_id: tenantId,
       workspace_id: workspaceId,
-      client_id: null,
+      client_id: clientId,
       url: saved.title,
       tier_name: "AI Team Plan",
       tier_price: null,
@@ -2157,12 +2202,21 @@ export async function processTeamTask(payload: TeamTaskPayload): Promise<void> {
     } else if (decision.action === "campaign") {
       const topic = decision.topic?.trim() || userMessage;
       try {
+        // Which client is this campaign for? A chat bound to a client wins;
+        // otherwise a client named in the request is matched against the
+        // tenant's clients table. Unattributed plans (null) are the fallback.
+        const planClientId = await resolveTargetClientId(
+          tenantId,
+          room.client_id ?? null,
+          userMessage
+        );
         const plan = await maloryPlanCampaign(
           tenantId,
           topic,
           workspaceContext,
           workspaceId,
-          chatContext
+          chatContext,
+          planClientId
         );
         const setup = await buildSetupChecklist(tenantId, workspaceId);
         const setupText = formatSetupChecklist(setup);

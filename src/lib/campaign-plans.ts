@@ -61,6 +61,8 @@ export interface CampaignPlanInput {
   title: string;
   summary: string;
   workspaceId: string | null;
+  /** Client the plan's proposed items belong to (null = unattributed). */
+  clientId?: string | null;
   createdBy?: string | null;
   items: {
     kind: CampaignItemKind;
@@ -85,7 +87,7 @@ export async function createCampaignPlan(
     .from("campaign_plans")
     .insert({
       workspace_id: input.workspaceId,
-      client_id: null,
+      client_id: input.clientId ?? null,
       title: input.title,
       summary: input.summary,
       status: "proposed",

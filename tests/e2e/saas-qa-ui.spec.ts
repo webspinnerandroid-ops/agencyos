@@ -285,8 +285,17 @@ test.describe("saas-qa-audit · calendar mechanics", () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto(`${BASE}/dashboard/calendar`, { waitUntil: "domcontentloaded" });
     await expect(page.getByRole("heading", { level: 2 }).first()).toBeVisible({ timeout: 60_000 });
-    await expect(chip(page)).toBeVisible({ timeout: 60_000 });
-    await chip(page).click();
+    // Scope the click to the probe chip (same contract as the hydration test
+    // below): "first visible chip in DOM" is whichever tenant post sorts
+    // earliest on the shared day, and another same-day post can open the
+    // dialog instead — the 10:00 AM assertion only holds for the probe.
+    const probeChip = page
+      .locator("div.cursor-grab, div.cursor-pointer")
+      .filter({ visible: true })
+      .filter({ hasText: "QA-AUDIT modal probe" })
+      .first();
+    await expect(probeChip).toBeVisible({ timeout: 60_000 });
+    await probeChip.click();
 
     const dialog = page.getByRole("dialog").last();
     await expect(dialog).toBeVisible({ timeout: 20_000 });
@@ -630,16 +639,19 @@ test.describe("saas-qa-audit · calendar mechanics", () => {
             .filter({ visible: true })
             .first();
           if ((await current.count()) === 0) return false;
-          try {
-            await current.dragTo(cellByDay(pageRef, toDay, at).locator("span").first(), {
-              timeout: 10_000,
-            });
-          } catch {
-            // The gesture never started; the poll re-runs from wherever the chip now is.
-          }
+          // The gesture may be swallowed and never start; catch is a no-op and
+          // the poll re-runs from wherever the chip now is.
+          await current
+            .dragTo(cellByDay(pageRef, toDay, at).locator("span").first(), {
+              timeout: 4_000,
+            })
+            .catch(() => undefined);
           return (await landed.count()) > 0;
         },
-        { timeout: 30_000, intervals: [500], message: `drop of "${title}" never landed on day ${toDay}` },
+        // HTML5 gestures are intermittently swallowed (see the block above);
+        // a healthy drop is sub-second, so a short per-gesture timeout packs
+        // more retry attempts into the budget. 240s test timeout covers this.
+        { timeout: 60_000, intervals: [500], message: `drop of "${title}" never landed on day ${toDay}` },
       )
       .toBe(true);
   };

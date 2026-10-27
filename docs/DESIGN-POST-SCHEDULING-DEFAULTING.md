@@ -39,12 +39,16 @@ undated — the fix went into the *view*, not the data.
 
 ## Option B — the Unscheduled backlog strip (shipped)
 
-A strip above the month grid / week strip listing undated drafts. Datable without
-fabricating anything:
+A strip above the month grid / week strip listing undated posts (the API does not
+filter by status — the strip keeps the calendar's selected statuses client-side).
+Datable without fabricating anything:
 
 - **API** — `GET /api/posts?unscheduled=1` returns `scheduled_at IS NULL` posts
-  (newest first, cap 50, tenant-scoped). Date-window params are skipped in this
-  mode; a null column cannot be constrained by a date range.
+  of any status, newest first, cap 50, tenant-scoped — and narrowed to the
+  selected client when the calendar's client filter is set (the route honors
+  `clientId`; the strip applies the status filter client-side). Date-window
+  params are skipped in this mode; a null column cannot be constrained by a
+  date range.
 - **Scheduling a strip chip** — dragging one onto any month cell or week row sets
   *that day's* 09:00 local slot (UTC offset resolved for the **target** date, so a
   DST-crossing move lands on a sane wall time). Optimistic transfer + re-fetch with
@@ -60,8 +64,10 @@ fabricating anything:
 
 The calendar's auto-jump was verified against this shape: a client whose only future
 work is *proposed* campaign-plan items still gets the jump (the scan merges proposed
-months from the unbounded `/api/campaign-plans` fetch — see the probe note in the
-calendar review), while a client with a scheduled post in the current month stays put.
+months from the `/api/campaign-plans` fetch, tenant- and workspace-scoped), while a
+client with a scheduled post in the current month stays put — both cases, plus the
+proposed-only case, lock in as `tests/e2e/calendar-auto-jump.spec.ts` (the review-time
+probe it was first verified with is gone; the permanent spec replaced it).
 
 ## Why 09:00 as the drop-time default
 
@@ -80,10 +86,15 @@ consequence of the drag rather than a silent property of generation.
   still always null in the codebase today.)
 - **Strip cap of 50.** Beyond that the strip truncates (server-sided cap); the API
   remains the durability point.
-- **Pre-existing drag flake.** The double-drop "last drop wins" test fails
-  intermittently because a second HTML5 `dragstart` sometimes never fires — proven
-  pre-existing on HEAD via stash A/B (fails at the same rate). Hardening idea:
-  extend the pointer-fallback drop path to desktop drags.
+- ~~**Pre-existing drag flake** in the double-drop "last drop wins" test~~ —
+  **mitigated since 2026-10-27**: the pointer fallback was extended to desktop
+  drags, so a mouse runs the same gesture as a fallback when Chromium swallows
+  an HTML5 `dragstart` (proven pre-existing on HEAD via stash A/B — the flake
+  itself is a browser behavior, not app code). The two paths are mutually
+  exclusive: when native DnD *does* initiate the UA fires `pointercancel` and
+  the pointer handlers defer via `nativeDragActiveRef`, so exactly one path
+  drops; a stale marker from a swallowed `dragend` is cleared on the next
+  pointerdown instead of degrading every later mouse gesture to clicks.
 - ~~**No regression coverage** for the auto-jump proposed-only case~~ — covered since
   2026-10-27 by `tests/e2e/calendar-auto-jump.spec.ts`: (1) a fresh load whose only
   scheduled posts sit in a future month jumps there, (2) a scheduled post in the

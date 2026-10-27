@@ -14,6 +14,10 @@
  *   3. NO posts at all — a single proposed campaign-plan item in month+2 →
  *      the jump merges the planned-only month from the /api/campaign-plans
  *      fetch the same way, and the dashed "Proposed" chip renders there.
+ *   4. A CLIENT-FILTERED view whose client has NO posts: a plan attributed
+ *      to that client (campaign_plans.client_id = the selection) supplies
+ *      the jump's month key, while other clients' current-month posts and
+ *      unattributed plans do not count for the scoped view.
  *
  * Runs against a disposable QA-AUDIT tenant (qa-fixtures) with a real signed-in
  * fixture user — no reliance on the dev session or on whatever posts happen to
@@ -40,6 +44,7 @@ const FUTURE_TITLE = "QA-AUDIT auto-jump future post";
 const TODAY_TITLE = "QA-AUDIT auto-jump today post";
 const PLAN_TITLE = "QA-AUDIT auto-jump proposed plan";
 const PROPOSED_TOPIC = "QA-AUDIT auto-jump proposed topic";
+const PROPOSED_FILTERED_TOPIC = "QA-AUDIT auto-jump scoped proposed topic";
 
 /** Same cookie the app's SSR client reads: sb-<project-ref>-auth-token. */
 function sessionCookie(url: string, baseURL: string, session: unknown) {
@@ -281,6 +286,136 @@ test("a proposed-only future month gets the jump even with no posts behind it", 
     // leave plan rows in the production DB. Items cascade from the plan.
     await todayDb.from("campaign_plan_items").delete().eq("plan_id", plan.data!.id);
     await todayDb.from("campaign_plans").delete().eq("id", plan.data!.id);
+  }
+
+  await page.close();
+});
+
+test("a client-filtered view jumps to its own proposed-only month — other clients' work stays out of the scan", async () => {
+  // The scoped jump: selecting a client re-arms the auto-jump and, from then
+  // on, only THAT client's posts and plans-attributed-to-it (campaign_plans.
+  // client_id = the selection) may supply a month key. Here the probe client
+  // has no posts at all; its ONLY future work is a proposed campaign item —
+  // the jump must still fire to the proposed month, while another client's
+  // current-month post (present on the disk at load) keeps the unfiltered
+  // view put and must not suppress the filtered jump.
+  const page = await ctx.newPage();
+  const now = new Date();
+  const expectedHeading = format(new Date(now.getFullYear(), now.getMonth() + 2, 1), "MMMM yyyy");
+  const j = (day: number) => format(new Date(now.getFullYear(), now.getMonth() + 2, day), "yyyy-MM-dd");
+
+  // Frozen-still precondition: sweep the tenant's posts (the suite is serial
+  // and the fixture is destroyed whole in afterAll) so the only work left is
+  // what this test stages.
+  const swept = await todayDb.from("posts").delete().eq("tenant_id", fx.tenantId);
+  expect(swept.error).toBeNull();
+
+  // The contrast client: a post at 16:00Z TODAY (Renders as the same calendar
+  // day in America/Denver, like the stay-put probe above), so the 
+  // all-clients opening month is non-empty and stays put.
+  const otherClient = await todayDb
+    .from("clients")
+    .insert({ tenant_id: fx.tenantId, workspace_id: fx.workspaceId, name: `${fx.tag} Contrast Client` })
+    .select("id")
+    .single<{ id: string }>();
+  expect(otherClient.error).toBeNull();
+  const otherClientId = otherClient.data!.id;
+  const otherPost = await todayDb
+    .from("posts")
+    .insert({
+      tenant_id: fx.tenantId,
+      workspace_id: fx.workspaceId,
+      client_id: otherClientId,
+      title: TODAY_TITLE,
+      type: "blog",
+      status: "scheduled",
+      scheduled_at: new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate(), 16, 0, 0)).toISOString(),
+      content: { type: "blog", title: TODAY_TITLE, body: "Auto-jump scoped counter-case." },
+    })
+    .select("id")
+    .single<{ id: string }>();
+  expect(otherPost.error).toBeNull();
+
+  // The probe client: no posts. Its only future work is a proposed item on a
+  // plan ATTRIBUTED to it — the shape scopedProposedItems keeps when the
+  // client filter is set.
+  const probeClient = await todayDb
+    .from("clients")
+    .insert({ tenant_id: fx.tenantId, workspace_id: fx.workspaceId, name: `${fx.tag} Proposed Client` })
+    .select("id")
+    .single<{ id: string }>();
+  expect(probeClient.error).toBeNull();
+  const probeClientId = probeClient.data!.id;
+  const plan = await todayDb
+    .from("campaign_plans")
+    .insert({
+      tenant_id: fx.tenantId,
+      workspace_id: fx.workspaceId,
+      // Attributed to the probe client: unlike the proposed-only test (whose
+      // plan is cross-client by construction), this plan carries a client_id
+      // so a filtered view can claim it.
+      client_id: probeClientId,
+      title: PLAN_TITLE,
+      summary: "Auto-jump scoped proposed-only probe.",
+      status: "proposed",
+      created_by: "nina",
+    })
+    .select("id")
+    .single<{ id: string }>();
+  expect(plan.error).toBeNull();
+  const item = await todayDb
+    .from("campaign_plan_items")
+    .insert({
+      plan_id: plan.data!.id,
+      tenant_id: fx.tenantId,
+      kind: "blog",
+      topic: PROPOSED_FILTERED_TOPIC,
+      // Date-only, on the 12th of month+2 like every other probe — inside
+      // the page's fetch window whatever day the run happens on.
+      due_date: j(12),
+      status: "proposed",
+    })
+    .select("id")
+    .single<{ id: string }>();
+  expect(item.error).toBeNull();
+
+  try {
+    await page.goto(`${BASE}/dashboard/calendar`, { waitUntil: "domcontentloaded" });
+
+    // Load: the all-clients view holds the contrast client's current-month
+    // post, so the auto-jump must not fire.
+    const currentMonth = format(now, "MMMM yyyy");
+    await expect(calendarHeading(page, currentMonth)).toHaveText(currentMonth, {
+      timeout: 60_000,
+    });
+
+    // Scope to the probe client: this re-arms the jump (selectedClientId
+    // effect) and refetches the posts list server-side — which now contains
+    // ZERO posts, so the scoped scan can only find the attributed proposal.
+    const clientSelect = page.locator("select").filter({ hasText: "All Clients" }).first();
+    await clientSelect.selectOption(probeClientId);
+
+    // The jump lands on the month holding the client's OWN proposal.
+    await expect(calendarHeading(page, expectedHeading)).toHaveText(expectedHeading, {
+      timeout: 60_000,
+    });
+
+    // And the month renders it — dashed, labeled "Proposed".
+    const proposedChip = page
+      .locator("button")
+      .filter({ hasText: PROPOSED_FILTERED_TOPIC })
+      .filter({ visible: true });
+    await expect(proposedChip.first()).toBeVisible({ timeout: 60_000 });
+    await expect(proposedChip.first()).toContainText("Proposed");
+  } finally {
+    // Sweep everything on failure too (the earlier tests re-load the
+    // calendar and must not see stray rows): items then plan, post then
+    // client (the FK order), each while their variables are in scope.
+    if (item.data?.id) await todayDb.from("campaign_plan_items").delete().eq("plan_id", plan.data!.id);
+    if (plan.data?.id) await todayDb.from("campaign_plans").delete().eq("id", plan.data!.id);
+    if (otherPost.data?.id) await todayDb.from("posts").delete().eq("id", otherPost.data.id);
+    if (otherClientId) await todayDb.from("clients").delete().eq("id", otherClientId);
+    if (probeClientId) await todayDb.from("clients").delete().eq("id", probeClientId);
   }
 
   await page.close();

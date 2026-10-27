@@ -22,6 +22,7 @@ import {
 import {
   ChevronLeft,
   ChevronRight,
+  Download,
   Calendar as CalendarIcon,
   BarChart3,
   TrendingUp,
@@ -376,15 +377,25 @@ function rescheduleToDay(post: CalendarPost, dateKey: string): string | null {
 // ------------------------------------------------------------------
 
 interface ChipEventHandlers {
-  /** Desktop mice use native HTML5 DnD (cells read the drop event). */
-  onDragStart: (post: CalendarPost, e: ReactDragEvent<HTMLDivElement>) => void;
+  /** Desktop mice use native HTML5 DnD (cells read the drop event). The
+      source tells the drop handler which persist path to take: grid chips
+      RESCHEDULE onto the target day; backlog chips GET a slot there. */
+  onDragStart: (
+    post: CalendarPost,
+    e: ReactDragEvent<HTMLDivElement>,
+    source?: "grid" | "backlog"
+  ) => void;
   onDragEnd: (e: ReactDragEvent<HTMLDivElement>) => void;
   /**
    * Touch fallback: mobile browsers never start a native HTML5 drag, so a
    * captured pointer gesture replays the same handleDropOnDay path when the
    * finger lifts over a [data-drop-day] target.
    */
-  onPointerDown: (post: CalendarPost, e: ReactPointerEvent<HTMLDivElement>) => void;
+  onPointerDown: (
+    post: CalendarPost,
+    e: ReactPointerEvent<HTMLDivElement>,
+    source?: "grid" | "backlog"
+  ) => void;
   onPointerMove: (e: ReactPointerEvent<HTMLDivElement>) => void;
   onPointerUp: (e: ReactPointerEvent<HTMLDivElement>) => void;
   onPointerCancel: (e: ReactPointerEvent<HTMLDivElement>) => void;
@@ -440,10 +451,10 @@ function DayContents({
             {...(draggable
               ? {
                   onDragStart: (e: ReactDragEvent<HTMLDivElement>) =>
-                    chips.onDragStart(post, e),
+                    chips.onDragStart(post, e, "grid"),
                   onDragEnd: chips.onDragEnd,
                   onPointerDown: (e: ReactPointerEvent<HTMLDivElement>) =>
-                    chips.onPointerDown(post, e),
+                    chips.onPointerDown(post, e, "grid"),
                   onPointerMove: chips.onPointerMove,
                   onPointerUp: chips.onPointerUp,
                   onPointerCancel: chips.onPointerCancel,
@@ -550,6 +561,15 @@ interface ContentCalendarProps {
    * chips are not draggable (e.g. portals that mirror the status config only).
    */
   onPostMove?: (postId: string, newScheduledAt: string) => Promise<void>;
+  /**
+   * Schedule an UNSCHEDULED post (the backlog strip): assign the target
+   * day's 9:00 AM local slot. The caller persists via PATCH /api/posts/[id]
+   * (scheduled_at-only updates never trip the approval gate). Optional —
+   * without it backlog chips are inert.
+   */
+  onPostSchedule?: (postId: string, newScheduledAt: string) => Promise<void>;
+  /** Posts with no scheduled_at (the backlog strip's source list). */
+  unscheduledPosts?: CalendarPost[];
   onApproveProposed: (item: ProposedItem, mediaKind: "image" | "video") => Promise<void>;
   onRefresh: () => void;
   /**
@@ -571,6 +591,8 @@ export default function ContentCalendar({
   onStatusesChange,
   onPostUpdate,
   onPostMove,
+  onPostSchedule,
+  unscheduledPosts = [],
   onApproveProposed,
   onRefresh,
   loadingFirst = false,
@@ -1036,10 +1058,20 @@ export default function ContentCalendar({
     [selectedStatuses, onStatusesChange]
   );
 
-  // ---- Drag-to-reschedule handlers ----
+  // ---- Drag-to-reschedule handlers (grid) + drag-to-schedule (backlog) ----
+  // dragSourceRef records which list the drag started from: grid chips keep
+  // their local wall time when moved, backlog chips get the target day's
+  // 9:00 AM slot.
+  const dragSourceRef = useRef<"grid" | "backlog" | null>(null);
+
   const handleDragStart = useCallback(
-    (post: CalendarPost, e: ReactDragEvent<HTMLDivElement>) => {
+    (
+      post: CalendarPost,
+      e: ReactDragEvent<HTMLDivElement>,
+      source: "grid" | "backlog" = "grid"
+    ) => {
       setDragPostId(post.id);
+      dragSourceRef.current = source;
       // Required by Firefox: a drag needs payload data to actually start.
       e.dataTransfer.setData("text/plain", post.id);
       e.dataTransfer.effectAllowed = "move";
@@ -1050,6 +1082,7 @@ export default function ContentCalendar({
   const handleDragEnd = useCallback(() => {
     setDragPostId(null);
     setDragOverDay(null);
+    dragSourceRef.current = null;
   }, []);
 
   const handleDragOverDay = useCallback(
@@ -1065,15 +1098,31 @@ export default function ContentCalendar({
   const handleDropOnDay = useCallback(
     async (dateKey: string) => {
       const id = dragPostId;
+      const source = dragSourceRef.current ?? "grid";
       setDragPostId(null);
       setDragOverDay(null);
-      if (!id || !onPostMove) return;
+      dragSourceRef.current = null;
+      if (!id) return;
+      // Backlog chips carry no slot to keep: the drop ASSIGNS the day's
+      // 9:00 AM local slot (offset resolved for that date, so a cross-DST
+      // drop stores the right instant) instead of rescheduling.
+      if (source === "backlog") {
+        if (!onPostSchedule) return;
+        const naive = `${dateKey}T09:00`;
+        const iso = normalizeScheduledAt(
+          naive,
+          offsetMinutesForLocalDateTime(naive)
+        );
+        if (iso) await onPostSchedule(id, iso);
+        return;
+      }
+      if (!onPostMove) return;
       const post = posts.find((p) => p.id === id);
       const newIso = post ? rescheduleToDay(post, dateKey) : null;
       if (!newIso) return;
       await onPostMove(id, newIso);
     },
-    [dragPostId, posts, onPostMove]
+    [dragPostId, posts, onPostMove, onPostSchedule]
   );
 
   // ---- Pointer drag (touch) ----
@@ -1100,8 +1149,15 @@ export default function ContentCalendar({
   }, []);
 
   const handleChipPointerDown = useCallback(
-    (post: CalendarPost, e: ReactPointerEvent<HTMLDivElement>) => {
-      if (!onPostMove || !post.scheduled_at || e.pointerType === "mouse") return;
+    (
+      post: CalendarPost,
+      e: ReactPointerEvent<HTMLDivElement>,
+      source: "grid" | "backlog" = "grid"
+    ) => {
+      if ((!onPostMove && !onPostSchedule) || e.pointerType === "mouse") return;
+      // Grid chips must carry a slot to reschedule; backlog chips are the
+      // undated ones — the drop assigns it.
+      if (source === "grid" && !post.scheduled_at) return;
       pointerDragRef.current = {
         postId: post.id,
         pointerId: e.pointerId,
@@ -1118,7 +1174,7 @@ export default function ContentCalendar({
         /* moves will bubble from the chip instead; still works on-touch */
       }
     },
-    [onPostMove]
+    [onPostMove, onPostSchedule]
   );
 
   const handleChipPointerMove = useCallback(
@@ -1157,6 +1213,7 @@ export default function ContentCalendar({
   const handleChipPointerCancel = useCallback(() => {
     if (!pointerDragRef.current) return;
     pointerDragRef.current = null;
+    dragSourceRef.current = null;
     setDragPostId(null);
     setDragOverDay(null);
   }, []);
@@ -1171,6 +1228,19 @@ export default function ContentCalendar({
   const openProposedFromChip = useCallback(
     (item: ProposedItem) => setSelectedProposed(item),
     []
+  );
+
+  // ---- Unscheduled backlog (datable without fabricated dates) ----
+  // The parent supplies the undated posts (GET /api/posts?unscheduled=1);
+  // the strip respects the same status filters as the grid. Dragging a
+  // backlog chip onto a day ASSIGNS that day's 9:00 AM slot — the date is
+  // what the operator chose, the time stays a constant default, and
+  // release-dragging (patting the chip back into the strip) changes
+  // nothing — unlike the old NULL-scheduled_at defaulting behavior which
+  // rewrote automatically-generated drafts behind their generation.
+  const unscheduledWork = useMemo(
+    () => unscheduledPosts.filter((p) => selectedStatuses.includes(p.status)),
+    [unscheduledPosts, selectedStatuses]
   );
 
   const chipHandlers: ChipEventHandlers = {
@@ -1437,6 +1507,83 @@ export default function ContentCalendar({
           </div>
         </div>
 
+        {/* Unscheduled backlog — drafts with no slot stay datable: dropping
+            a backlog chip on a day assigns that day's 9:00 AM local slot.
+            Nothing here can self-publish: the strip is display + explicit
+            operator drops only, and the Inngest cron reads scheduled_at, so
+            entries additionally need the approved→scheduled publish gate. */}
+        {unscheduledWork.length > 0 && (
+          <div
+            data-testid="unscheduled-backlog"
+            className="mb-4 rounded-lg border border-dashed bg-muted/20 p-3"
+          >
+            <div className="flex items-baseline gap-2 mb-2">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Unscheduled backlog
+              </h3>
+              <span className="text-xs text-muted-foreground">
+                {unscheduledWork.length} without a date — drag onto a day to
+                schedule at 9:00 AM
+              </span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {unscheduledWork.map((post) => {
+                const platforms = getPlatformsForPost(post);
+                const draggable = !!onPostSchedule;
+                return (
+                  <div
+                    key={post.id}
+                    className={cn(
+                      "bg-card border border-dashed rounded-md px-2 py-1.5 cursor-pointer hover:shadow-md transition-shadow text-xs max-w-[220px]",
+                      dragPostId === post.id && "opacity-50",
+                      // Same touch gesture contract as the grid chips.
+                      draggable && "cursor-grab active:cursor-grabbing touch-none"
+                    )}
+                    draggable={draggable}
+                    {...(draggable
+                      ? {
+                          onDragStart: (e: ReactDragEvent<HTMLDivElement>) =>
+                            handleDragStart(post, e, "backlog"),
+                          onDragEnd: handleDragEnd,
+                          onPointerDown: (e: ReactPointerEvent<HTMLDivElement>) =>
+                            handleChipPointerDown(post, e, "backlog"),
+                          onPointerMove: handleChipPointerMove,
+                          onPointerUp: handleChipPointerUp,
+                          onPointerCancel: handleChipPointerCancel,
+                        }
+                      : {})}
+                    onClick={() => openPostFromChip(post)}
+                  >
+                    <div className="flex items-center gap-1 mb-0.5">
+                      {platforms.map((p) => (
+                        <span
+                          key={p}
+                          title={p}
+                          className="text-[10px] leading-none"
+                        >
+                          {PLATFORM_ICONS[p] ?? p}
+                        </span>
+                      ))}
+                    </div>
+                    <p className="truncate text-muted-foreground leading-tight">
+                      {excerptFromContent(post.content, 44)}
+                    </p>
+                    <span
+                      className={cn(
+                        "inline-block mt-1 px-1.5 py-px rounded-full text-[10px] font-medium",
+                        STATUS_CONFIG[post.status]?.className ??
+                          "bg-gray-100 text-gray-700"
+                      )}
+                    >
+                      {STATUS_CONFIG[post.status]?.label ?? post.status}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {/* Day-of-week header */}
         {viewMode === "month" && (
           <div className="grid grid-cols-7 mb-1">
@@ -1476,7 +1623,7 @@ export default function ContentCalendar({
                     !isCurrentMonth && "bg-muted/30 text-muted-foreground",
                     isToday && "bg-accent/20",
                     dragPostId &&
-                      onPostMove &&
+                      (onPostMove || onPostSchedule) &&
                       (dragOverDay === dateKey
                         ? "bg-primary/10 ring-2 ring-inset ring-primary/50"
                         : "cursor-grab")
@@ -1531,7 +1678,7 @@ export default function ContentCalendar({
                     "flex items-start gap-2 border-r border-b p-2 transition-colors",
                     isToday && "bg-accent/20",
                     dragPostId &&
-                      onPostMove &&
+                      (onPostMove || onPostSchedule) &&
                       (dragOverDay === dateKey
                         ? "bg-primary/10 ring-2 ring-inset ring-primary/50"
                         : "cursor-grab")

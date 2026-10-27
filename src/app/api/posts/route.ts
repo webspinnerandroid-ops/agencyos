@@ -55,8 +55,21 @@ export async function GET(request: NextRequest) {
         )
       `
       )
-      .eq("tenant_id", tenantId)
-      .order("scheduled_at", { ascending: true });
+      .eq("tenant_id", tenantId);
+
+    // `unscheduled=1` returns the backlog: posts with no scheduled_at at all.
+    // Date-window params don't apply to a null column, so they are skipped in
+    // this mode. The calendar's "Unscheduled backlog" strip consumes this
+    // list — newest drafts first, hard cap keeps the strip payload small.
+    const unscheduled = searchParams.get("unscheduled") === "1";
+    if (unscheduled) {
+      query = query
+        .is("scheduled_at", null)
+        .order("created_at", { ascending: false })
+        .limit(50);
+    } else {
+      query = query.order("scheduled_at", { ascending: true });
+    }
 
     if (clientId) {
       query = query.eq("client_id", clientId);
@@ -66,11 +79,11 @@ export async function GET(request: NextRequest) {
       query = query.eq("status", status);
     }
 
-    if (startDate) {
+    if (startDate && !unscheduled) {
       query = query.gte("scheduled_at", startDate);
     }
 
-    if (endDate) {
+    if (endDate && !unscheduled) {
       query = query.lte("scheduled_at", endDate);
     }
 

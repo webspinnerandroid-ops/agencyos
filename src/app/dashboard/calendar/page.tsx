@@ -83,6 +83,10 @@ const DEFAULT_STATUSES: PostStatus[] = [
 
 export default function CalendarPage() {
   const [posts, setPosts] = useState<CalendarPost[]>([]);
+  // Posts with no scheduled_at — the "Unscheduled backlog" strip's source
+  // list. Kept separate from `posts` (which is a date-windowed query) so the
+  // drag-to-schedule move is a transfer between the two lists.
+  const [unscheduledPosts, setUnscheduledPosts] = useState<CalendarPost[]>([]);
   const [clients, setClients] = useState<Client[]>([]);
   const [campaignPlans, setCampaignPlans] = useState<CampaignPlan[]>([]);
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
@@ -237,6 +241,32 @@ export default function CalendarPage() {
     fetchPosts();
   }, [fetchPosts]);
 
+  // ---- Fetch undated posts (backlog strip) ----
+  // GET /api/posts?unscheduled=1 ignores the date window and returns up to
+  // 50 posts with scheduled_at IS NULL, newest first. Re-fetched on client
+  // switch and after every schedule/unschedule, exactly like the grid list.
+  const fetchUnscheduled = useCallback(async () => {
+    try {
+      const params = new URLSearchParams({ unscheduled: "1" });
+      if (selectedClientId) params.set("clientId", selectedClientId);
+      const res = await fetch(`/api/posts?${params.toString()}`, {
+        credentials: "include",
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setUnscheduledPosts(data.posts ?? []);
+      } else {
+        setUnscheduledPosts([]);
+      }
+    } catch {
+      setUnscheduledPosts([]); // the strip degrades quietly to empty
+    }
+  }, [selectedClientId]);
+
+  useEffect(() => {
+    fetchUnscheduled();
+  }, [fetchUnscheduled]);
+
   // ---- Post update (status changes from modal) ----
   const handlePostUpdate = useCallback(
     async (
@@ -262,6 +292,11 @@ export default function CalendarPage() {
   useEffect(() => {
     postsRef.current = posts;
   }, [posts]);
+
+  const unscheduledPostsRef = useRef<CalendarPost[]>([]);
+  useEffect(() => {
+    unscheduledPostsRef.current = unscheduledPosts;
+  }, [unscheduledPosts]);
 
   // Double-drop protection, two layers:
   //   1. Per-post move serialization — reschedule PATCHes for one post are
@@ -333,6 +368,7 @@ export default function CalendarPage() {
         if (ok) {
           if (!options?.silent) {
             setUndoMove({
+              kind: "move",
               postId,
               previousScheduledAt,
               movedToIso: newScheduledAt,
@@ -356,15 +392,83 @@ export default function CalendarPage() {
     [performMove]
   );
 
+  // ---- Backlog scheduling (backlog chip dropped on a day) ----
+  // The drop assigns the target day's 9:00 AM local slot (computed in the
+  // component). Optimistic: the chip leaves the backlog strip immediately
+  // and joins the grid on the target day when that day is in view. Same
+  // duplicate-target guard as moves; a failed PATCH reverts by refetching
+  // both authoritative lists. scheduled_at-only PATCHes do not change the
+  // status, so the approval gate is untouched and nothing self-publishes.
+  const handlePostSchedule = useCallback(
+    async (postId: string, newScheduledAt: string) => {
+      if (moveInFlightRef.current.get(postId) === newScheduledAt) {
+        return; // duplicate drop of a move already in flight
+      }
+      const post = unscheduledPostsRef.current.find((p) => p.id === postId);
+      if (!post) return;
+      moveInFlightRef.current.set(postId, newScheduledAt);
+      setUnscheduledPosts((prev) => prev.filter((p) => p.id !== postId));
+      setPosts((prev) =>
+        prev.some((p) => p.id === postId)
+          ? prev
+          : [...prev, { ...post, scheduled_at: newScheduledAt }]
+      );
+      let ok = false;
+      try {
+        const res = await fetch(`/api/posts/${postId}`, {
+          method: "PATCH",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ scheduled_at: newScheduledAt }),
+        });
+        ok = res.ok;
+        if (!res.ok) {
+          const err = await res.json().catch(() => null);
+          console.error(
+            "[calendar] schedule failed:",
+            (err as { error?: string })?.error ?? res.status
+          );
+        }
+      } catch (err) {
+        console.error("[calendar] schedule network failure:", err);
+      }
+      moveInFlightRef.current.delete(postId);
+      if (ok) {
+        setUndoMove({
+          kind: "schedule",
+          postId,
+          previousScheduledAt: null,
+          movedToIso: newScheduledAt,
+          title: contentTitleFrom(post),
+        });
+      } else {
+        setUndoMove(null); // a failed drop has nothing to undo
+        await Promise.all([fetchPosts(), fetchUnscheduled()]);
+      }
+    },
+    [fetchPosts, fetchUnscheduled]
+  );
+
   // ---- Undo after a wrong drop ----
-  // The last successful move is offered back for a few seconds. Also a move
-  // itself: the exact previous UTC instant is restored verbatim (no offset
+  // The last successful move is offered back for a few seconds. A move's
+  // undo restores the exact previous UTC instant verbatim (no offset
   // recomputation, so a DST-crossing undo is safe by construction).
+  //
+  // Undoing a BACKLOG SCHEDULING is different: there was no previous slot —
+  // the chip returns to the backlog by patching scheduled_at back to null
+  // (the update schema's "null = unschedule") and refetching both lists.
   const [undoMove, setUndoMove] = useState<
-    |
-      {
+    | {
+        kind: "move";
         postId: string;
         previousScheduledAt: string;
+        movedToIso: string;
+        title: string;
+      }
+    | {
+        kind: "schedule";
+        postId: string;
+        previousScheduledAt: null;
         movedToIso: string;
         title: string;
       }
@@ -381,10 +485,26 @@ export default function CalendarPage() {
     const notice = undoMove;
     if (!notice) return;
     setUndoMove(null);
+    if (notice.kind === "schedule") {
+      const res = await fetch(`/api/posts/${notice.postId}`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scheduled_at: null }),
+      });
+      if (!res.ok) {
+        console.error("[calendar] unschedule (undo) failed:", res.status);
+      }
+      await Promise.all([fetchPosts(), fetchUnscheduled()]);
+      return;
+    }
     await handlePostMove(notice.postId, notice.previousScheduledAt, {
       silent: true,
     });
-  }, [undoMove, handlePostMove]);
+    // setUndoMove: the compiler infers it from the calls above; being a
+    // setState setter it is stable, but the memoization pass requires the
+    // inferred dependency set to match this array exactly.
+  }, [undoMove, handlePostMove, fetchPosts, fetchUnscheduled, setUndoMove]);
 
   // ---- Approve a proposed campaign item (creates a draft post) ----
   const handleApproveProposed = useCallback(
@@ -486,11 +606,11 @@ export default function CalendarPage() {
           className="flex items-center gap-3 rounded-md border bg-card px-4 py-3 text-sm"
         >
           <span className="text-muted-foreground">
-            Moved{" "}
+            {undoMove.kind === "schedule" ? "Scheduled" : "Moved"}{" "}
             <span className="font-medium text-foreground">
               “{undoMove.title}”
             </span>{" "}
-            to{" "}
+            {undoMove.kind === "schedule" ? "for" : "to"}{" "}
             {new Date(undoMove.movedToIso).toLocaleDateString(undefined, {
               month: "short",
               day: "numeric",
@@ -587,6 +707,8 @@ export default function CalendarPage() {
         onStatusesChange={setSelectedStatuses}
         onPostUpdate={handlePostUpdate}
         onPostMove={handlePostMove}
+        onPostSchedule={handlePostSchedule}
+        unscheduledPosts={unscheduledPosts}
         onApproveProposed={handleApproveProposed}
         onRefresh={handleRefresh}
         loadingFirst={loading && posts.length === 0}

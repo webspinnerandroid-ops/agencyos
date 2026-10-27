@@ -153,3 +153,76 @@ test("POST /api/notifications/read-link validates link and keeps the no-op court
   });
   expect(empty.status()).toBe(200);
 });
+
+// ---- Posts rescore/regenerate + publish family (batch 4) -------------------
+// The probe post is used for read-only rescore shapes; regenerate and publish
+// are only exercised on REJECTED bodies and on ids that match nothing, so the
+// AI pipeline and any publisher stay untouched.
+
+test("POST /api/posts/[id]/aeo-geo rejects a non-boolean deep flag with field detail", async ({ request }) => {
+  const res = await request.post(`/api/posts/${postId}/aeo-geo`, { data: { deep: "yes" } });
+  expect(res.status()).toBe(400);
+  const body = (await res.json()) as { code?: string; issues?: { path: string }[] };
+  expect(body.code).toBe("invalid_body");
+  expect(body.issues?.map((i) => i.path)).toContain("deep");
+});
+
+test("POST /api/posts/[id]/aeo-geo accepts the body the detail modal sends", async ({ request }) => {
+  const res = await request.post(`/api/posts/${postId}/aeo-geo`, { data: { deep: false } });
+  expect(res.status(), await res.text()).toBe(200);
+  expect(await res.json()).toHaveProperty("result");
+});
+
+test("POST /api/posts/[id]/regenerate rejects a garbage body before any pipeline runs", async ({ request }) => {
+  const res = await request.post(`/api/posts/${postId}/regenerate`, { data: { feedback: 42 } });
+  expect(res.status()).toBe(400);
+  const body = (await res.json()) as { code?: string; issues?: { path: string }[] };
+  expect(body.code).toBe("invalid_body");
+  expect(body.issues?.map((i) => i.path)).toContain("feedback");
+});
+
+test("POST /api/publish refuses an unvalidatable body with field-level detail", async ({ request }) => {
+  const junkPlatform = await request.post("/api/publish", {
+    data: { postId, platform: "bluesky" },
+  });
+  expect(junkPlatform.status()).toBe(400);
+  expect((await junkPlatform.json()).code).toBe("invalid_body");
+
+  const badId = await request.post("/api/publish", { data: { postId: "row-1", platform: "all" } });
+  expect(badId.status()).toBe(400);
+});
+
+test("POST /api/publish routes a well-formed publish body past validation", async ({ request }) => {
+  // A uuid that matches no post: validation accepts it, the branch logic
+  // answers "Post not found" — proving the body got through the schema.
+  const res = await request.post("/api/publish", {
+    data: { postId: CLEAN_UUID, platform: "instagram", action: "publish" },
+  });
+  expect(res.status()).toBe(404);
+});
+
+test("POST /api/publish/generated keeps the empty-targets and missing-title contracts", async ({ request }) => {
+  const noTargets = await request.post("/api/publish/generated", {
+    data: { targets: [], content: { title: "t", body: "b" } },
+  });
+  expect(noTargets.status()).toBe(400);
+  expect((await noTargets.json()).issues?.[0]?.message).toMatch(/at least one connected site/);
+
+  const noTitle = await request.post("/api/publish/generated", {
+    data: { targets: [{ blogPlatformId: "bp-1", mode: "create", kind: "post" }], content: { body: "prose" } },
+  });
+  expect(noTitle.status()).toBe(400);
+  expect((await noTitle.json()).issues?.[0]?.message).toMatch(/missing a title/);
+});
+
+test("POST /api/publish/generated routes an app-shaped body past validation", async ({ request }) => {
+  // Missing platform id: every attempt fails per-site without touching data.
+  const res = await request.post("/api/publish/generated", {
+    data: {
+      targets: [{ blogPlatformId: "no-such-platform", mode: "create", kind: "post", includeImages: false }],
+      content: { title: "QA-VALIDATION probe", body: "Validation probe." },
+    },
+  });
+  expect(res.status(), await res.text()).toBe(200);
+  expect((await res.json()).success).toBe(false);
+});

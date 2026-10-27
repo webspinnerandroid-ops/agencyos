@@ -28,15 +28,16 @@ const ROOT = path.join(__dirname, "..");
 const API = path.join(ROOT, "src", "app", "api");
 
 /**
- * Current state (2026-10-26). Lower `unvalidated` and raise `validated` as
+ * Current state. Lower `unvalidated` and raise `validated` as
  * families migrate — never the other way round.
  *
  * Migrated so far: clients + posts (batch 1), content-map + asset folders
- * (batch 2), notifications + read-link (batch 3).
+ * (batch 2), notifications + read-link (batch 3), posts rescore/regenerate +
+ * the publish family (batch 4).
  */
 const BASELINE = {
-  unvalidated: 83,
-  validated: 11,
+  unvalidated: 79,
+  validated: 15,
 };
 
 function walk(dir, out = []) {

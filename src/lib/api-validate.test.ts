@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { MAX_JSON_BYTES, validateJson } from "./api-validate";
 import {
+  postAeoGeoSchema,
+  postRegenerateSchema,
+  publishBodySchema,
+  publishGeneratedSchema,
+  publishTargetSchema,
   assetFolderCreateSchema,
   assetFolderRenameSchema,
   clientCreateSchema,
@@ -300,5 +305,158 @@ describe("assetFolderRenameSchema", () => {
     expect(assetFolderRenameSchema.safeParse({}).success).toBe(false);
     expect(assetFolderRenameSchema.safeParse({ name: "   " }).success).toBe(false);
     expect(assetFolderRenameSchema.safeParse({ name: "x".repeat(121) }).success).toBe(false);
+  });
+});
+
+describe("postAeoGeoSchema", () => {
+  it("accepts the absent-body substitution and the deep toggle", () => {
+    expect(postAeoGeoSchema.safeParse({}).success).toBe(true);
+    expect(postAeoGeoSchema.safeParse({ deep: true }).success).toBe(true);
+  });
+
+  it("rejects a non-boolean deep flag", () => {
+    expect(postAeoGeoSchema.safeParse({ deep: "yes" }).success).toBe(false);
+    expect(postAeoGeoSchema.safeParse({ deep: 1 }).success).toBe(false);
+  });
+});
+
+describe("postRegenerateSchema", () => {
+  it("accepts the no-feedback regenerate and a real rewrite instruction", () => {
+    expect(postRegenerateSchema.safeParse({}).success).toBe(true);
+    expect(postRegenerateSchema.safeParse({ feedback: " " }).success).toBe(true);
+    expect(postRegenerateSchema.safeParse({ feedback: "Less salesy, more technical" }).success).toBe(true);
+  });
+
+  it("rejects a non-string and an over-long feedback value", () => {
+    expect(postRegenerateSchema.safeParse({ feedback: 5 }).success).toBe(false);
+    expect(postRegenerateSchema.safeParse({ feedback: "x".repeat(2001) }).success).toBe(false);
+  });
+});
+
+describe("publishBodySchema", () => {
+  it("accepts every dispatch payload the app actually sends", () => {
+    // PublishButton: WordPress schedule with a naive local slot + offset.
+    expect(
+      publishBodySchema.safeParse({
+        postId: "11111111-1111-4111-8111-111111111111",
+        platform: "wordpress",
+        action: "schedule",
+        scheduledAt: "2026-12-15T09:00",
+        tzOffsetMinutes: -60,
+        categoryId: 42,
+      }).success
+    ).toBe(true);
+    // Calendar retry: publish through the first platform.
+    expect(
+      publishBodySchema.safeParse({
+        postId: "11111111-1111-4111-8111-111111111111",
+        platform: "all",
+        action: "publish",
+      }).success
+    ).toBe(true);
+    // Connected-sites dialog: per-site targets without an action.
+    expect(
+      publishBodySchema.safeParse({
+        postId: "11111111-1111-4111-8111-111111111111",
+        platform: "connected_sites",
+        targets: [
+          { blogPlatformId: "bp-1", mode: "overwrite", kind: "post", wpPostId: 7, includeImages: true },
+        ],
+      }).success
+    ).toBe(true);
+    // Super-admin gate override.
+    expect(
+      publishBodySchema.safeParse({
+        postId: "11111111-1111-4111-8111-111111111111",
+        platform: "cms",
+        force: true,
+      }).success
+    ).toBe(true);
+  });
+
+  it("rejects a missing/non-uuid post id and an unknown platform", () => {
+    expect(publishBodySchema.safeParse({}).success).toBe(false);
+    expect(publishBodySchema.safeParse({ postId: "row-1", platform: "wordpress" }).success).toBe(false);
+    expect(publishBodySchema.safeParse({ postId: "11111111-1111-4111-8111-111111111111", platform: "bluesky" }).success).toBe(false);
+  });
+
+  it("rejects an unknown action and an impossible tz offset", () => {
+    expect(
+      publishBodySchema.safeParse({
+        postId: "11111111-1111-4111-8111-111111111111",
+        platform: "wordpress",
+        action: "unpublish",
+      }).success
+    ).toBe(false);
+    expect(
+      publishBodySchema.safeParse({
+        postId: "11111111-1111-4111-8111-111111111111",
+        platform: "wordpress",
+        tzOffsetMinutes: 900,
+      }).success
+    ).toBe(false);
+  });
+
+  it("rejects malformed per-site targets", () => {
+    expect(
+      publishBodySchema.safeParse({
+        postId: "11111111-1111-4111-8111-111111111111",
+        platform: "connected_sites",
+        targets: [{ blogPlatformId: "", mode: "replace", kind: "post" }],
+      }).success
+    ).toBe(false);
+  });
+});
+
+describe("publishTargetSchema", () => {
+  it("accepts a WordPress id number and a Ghost/string overwrite id", () => {
+    expect(
+      publishTargetSchema.safeParse({ blogPlatformId: "bp-1", mode: "create", kind: "page", includeImages: false })
+    ).toMatchObject({ success: true });
+  });
+});
+
+describe("publishGeneratedSchema", () => {
+  it("accepts the generate page's dialog payload", () => {
+    expect(
+      publishGeneratedSchema.safeParse({
+        targets: [{ blogPlatformId: "bp-1", mode: "create", kind: "post", includeImages: true }],
+        content: {
+          title: "  History of Netscape  ",
+          body: "# Netscape\nProse.",
+          slug: "history-of-netscape",
+          metaDescription: "Where Netscape came from",
+          images: [{ url: "https://cdn.test/a.png", placement: "featured" }],
+        },
+      }).success
+    ).toBe(true);
+  });
+
+  it("trims the title the route used to hand-check", () => {
+    const parsed = publishGeneratedSchema.safeParse({
+      targets: [{ blogPlatformId: "bp-1", mode: "create", kind: "post" }],
+      content: { title: "  Untitled  ", body: "prose" },
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.content.title).toBe("Untitled");
+  });
+
+  it("rejects an empty target list and a missing title/body", () => {
+    expect(publishGeneratedSchema.safeParse({ targets: [], content: { title: "t", body: "b" } }).success).toBe(false);
+    expect(
+      publishGeneratedSchema.safeParse({ targets: [{ blogPlatformId: "bp-1", mode: "create", kind: "post" }], content: { body: "b" } }).success
+    ).toBe(false);
+    expect(
+      publishGeneratedSchema.safeParse({ targets: [{ blogPlatformId: "bp-1", mode: "create", kind: "post" }], content: { title: "t" } }).success
+    ).toBe(false);
+  });
+
+  it("rejects a non-URL generated image", () => {
+    expect(
+      publishGeneratedSchema.safeParse({
+        targets: [{ blogPlatformId: "bp-1", mode: "create", kind: "post" }],
+        content: { title: "t", body: "b", images: [{ url: "not a url" }] },
+      }).success
+    ).toBe(false);
   });
 });

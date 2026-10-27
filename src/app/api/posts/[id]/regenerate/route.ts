@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getTenantId, requireRole } from "@/lib/auth";
 import { getCurrentWorkspaceId } from "@/lib/workspace";
 import { regenerateBlogPost } from "@/lib/ai/team-task";
+import { parseJsonBody } from "@/lib/api-validate";
+import { postRegenerateSchema } from "@/lib/validations";
 import { ScoreGateError } from "@/lib/score-gate";
 
 /**
@@ -24,15 +26,16 @@ export async function POST(
     const { id } = await params;
     const workspaceId = await getCurrentWorkspaceId();
 
-    let body: { feedback?: string } = {};
-    try {
-      body = (await request.json()) as { feedback?: string };
-    } catch {
-      // no body — plain regenerate
-    }
+    // No body = plain regenerate (the calendar fires one without feedback).
+    const body = await parseJsonBody(
+      request,
+      postRegenerateSchema,
+      { emptyAsEmptyObject: true }
+    );
+    if (!body.ok) return body.response;
     const feedback =
-      typeof body.feedback === "string" && body.feedback.trim()
-        ? body.feedback.trim()
+      typeof body.data.feedback === "string" && body.data.feedback.trim()
+        ? body.data.feedback.trim()
         : undefined;
 
     const result = await regenerateBlogPost(tenantId, id, workspaceId, feedback);

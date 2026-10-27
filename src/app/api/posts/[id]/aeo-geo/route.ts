@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getTenantId } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import { resolveAeoGeoScore } from "@/lib/aeo-geo";
+import { parseJsonBody } from "@/lib/api-validate";
+import { postAeoGeoSchema } from "@/lib/validations";
 
 /**
  * POST /api/posts/[id]/aeo-geo
@@ -21,8 +23,14 @@ export async function POST(
       return NextResponse.json({ error: "Authentication required" }, { status: 401 });
     }
     const { id } = await params;
-    const body = await request.json().catch(() => ({}));
-    const deep = body?.deep === true;
+    // No body = the plain "re-score" call; emptyAsEmptyObject preserves that.
+    const body = await parseJsonBody(
+      request,
+      postAeoGeoSchema,
+      { emptyAsEmptyObject: true }
+    );
+    if (!body.ok) return body.response;
+    const deep = body.data.deep === true;
 
     const supabase = await createServiceClient();
     const { data: post, error } = await supabase

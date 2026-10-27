@@ -9,6 +9,9 @@ import { publishToConnectedSites } from "@/lib/publishing/connectedSitesPublishe
 import { publishPost as publishToSocial } from "@/lib/publishing/socialPublisher";
 import { normalizeScheduledAt } from "@/lib/scheduling";
 import { scoreAeoGeo } from "@/lib/aeo-geo";
+import type { GeneratedContentTarget } from "@/lib/publishing/wordpressPublisher";
+import { parseJsonBody } from "@/lib/api-validate";
+import { publishBodySchema } from "@/lib/validations";
 import { getScoreGate } from "@/lib/score-gate";
 import { markdownBodyToCmsBlocks, slugify } from "@/lib/cms";
 
@@ -27,12 +30,18 @@ const MAX_AUTO_REWRITES = 2;
 export async function POST(request: NextRequest) {
   try {
     const tenantId = await getTenantId();
-    const body = await request.json();
-    const { postId, platform, action, scheduledAt, categoryId, force, tzOffsetMinutes } = body;
-
-    if (!postId) {
-      return NextResponse.json({ error: "postId required" }, { status: 400 });
-    }
+    const body = await parseJsonBody(request, publishBodySchema);
+    if (!body.ok) return body.response;
+    const {
+      postId,
+      platform,
+      action,
+      scheduledAt,
+      categoryId,
+      force,
+      tzOffsetMinutes,
+      targets: dialogTargets,
+    } = body.data;
 
     // Normalize a naive datetime-local value ("2026-08-10T14:30") into the
     // correct UTC instant using the browser's timezone offset. This keeps the
@@ -338,8 +347,11 @@ export async function POST(request: NextRequest) {
       // client only sends the per-site targets. Every attempt is logged to
       // publishing_logs (with site name + live URL) for the publish-history
       // links on the dashboard and Posts list.
-      const targets = body?.targets;
-      if (!Array.isArray(targets) || targets.length === 0) {
+      const targets: GeneratedContentTarget[] = (dialogTargets ?? []).map((t) => ({
+        ...t,
+        includeImages: t.includeImages ?? false,
+      }));
+      if (targets.length === 0) {
         return NextResponse.json(
           { error: "Select at least one connected site to publish to." },
           { status: 400 }
@@ -371,7 +383,7 @@ export async function POST(request: NextRequest) {
       results.push(...wpResult.results);
       allSucceeded = wpResult.allSucceeded;
     } else if (platform === "wordpress" || platform === "blog") {
-      const wpResult = await publishToWordPress(postId, tenantId, action || "publish", normalizedScheduledAt ?? undefined, categoryId);
+      const wpResult = await publishToWordPress(postId, tenantId, action || "publish", normalizedScheduledAt ?? undefined, categoryId ?? undefined);
       results.push(...wpResult.results);
       allSucceeded = wpResult.allSucceeded;
     } else if (["instagram", "twitter", "linkedin", "facebook", "tiktok", "threads"].includes(platform)) {
@@ -403,7 +415,7 @@ export async function POST(request: NextRequest) {
       // cron — one consistent scheduled_at across the board.
       const wpAction = action === "schedule" ? "schedule" : action || "publish";
       const [wpResult] = await Promise.all([
-        publishToWordPress(postId, tenantId, wpAction, normalizedScheduledAt ?? undefined, categoryId).catch(() => ({ allSucceeded: false, results: [] })),
+        publishToWordPress(postId, tenantId, wpAction, normalizedScheduledAt ?? undefined, categoryId ?? undefined).catch(() => ({ allSucceeded: false, results: [] })),
       ]);
       results.push(...wpResult.results);
       if (action === "schedule") {

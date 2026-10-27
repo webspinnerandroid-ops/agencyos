@@ -336,3 +336,140 @@ export const notificationsReadLinkSchema = z.object({
 export type NotificationsReadLinkInput = z.infer<
   typeof notificationsReadLinkSchema
 >;
+
+// ---------------------------------------------------------------------------
+// Posts — rescore & regenerate. Adopted by POST /api/posts/[id]/aeo-geo and
+// POST /api/posts/[id]/regenerate.
+//
+// Both handlers legitimately fire with NO body (the detail modal's plain
+// "re-score" and the calendar's plain "regenerate"), so the routes adopt
+// validation with parseJsonBody(..., { emptyAsEmptyObject: true }) — the
+// absent-body courtesy, identical shapes-validation to every other family.
+// ---------------------------------------------------------------------------
+
+/** POST /api/posts/[id]/aeo-geo — { deep?: true } runs the LLM-assisted pass. */
+export const postAeoGeoSchema = z.object({
+  deep: z.boolean().optional(),
+});
+
+export type PostAeoGeoInput = z.infer<typeof postAeoGeoSchema>;
+
+/**
+ * POST /api/posts/[id]/regenerate — { feedback?: string } guides the rewrite.
+ * The caller already sends the trimmed string (or omits the field entirely for
+ * a plain regenerate), so the schema only enforces type and size; the route
+ * keeps its "blank feedback = plain regenerate" rule.
+ */
+export const postRegenerateSchema = z.object({
+  feedback: z
+    .string()
+    .max(2000, "Feedback must be 2000 characters or fewer")
+    .optional(),
+});
+
+export type PostRegenerateInput = z.infer<typeof postRegenerateSchema>;
+
+// ---------------------------------------------------------------------------
+// Publish routes. Adopted by POST /api/publish (saved posts) and
+// POST /api/publish/generated (the generate page's connected-sites dialog).
+// ---------------------------------------------------------------------------
+
+/**
+ * Every platform POST /api/publish dispatches on. Unknown platforms were
+ * already a 400 ("Unknown platform"), so an enum here preserves the contract
+ * while rejecting the whole body at validation time instead of branch time.
+ */
+export const PUBLISH_PLATFORMS = [
+  "all",
+  "blog",
+  "cms",
+  "site_blog",
+  "connected_sites",
+  "wordpress",
+  "instagram",
+  "twitter",
+  "linkedin",
+  "facebook",
+  "tiktok",
+  "threads",
+] as const;
+
+/**
+ * A per-site target of the connected-sites dialogs
+ * (ConnectedSitesPublishDialog.tsx SitePublishTarget, mirrored in the
+ * publisher's GeneratedContentTarget). Recorded for overwrite mode — number
+ * for WordPress ids, string for Ghost/Webflow/built-in-CMS ids; the
+ * mode/kind/whichever-object consistency is enforced by the publisher, not
+ * here.
+ */
+export const publishTargetSchema = z.object({
+  blogPlatformId: z
+    .string()
+    .min(1, "blogPlatformId is required for every target"),
+  mode: z.enum(["create", "overwrite"]),
+  kind: z.enum(["post", "page"]),
+  wpPostId: z.union([z.number().int(), z.string().min(1)]).optional(),
+  includeImages: z.boolean().optional(),
+  categoryId: z.union([z.number().int(), z.string().min(1)]).optional(),
+});
+
+export type PublishTargetInput = z.infer<typeof publishTargetSchema>;
+
+/** The generated-content shape the generate page posts alongside targets. */
+export const generatedContentPayloadSchema = z.object({
+  title: z.string().trim().min(1, "Generated content is missing a title."),
+  body: z.string().min(1, "Generated content is missing a body."),
+  slug: z.string().optional(),
+  metaDescription: z.string().optional(),
+  seoMeta: z
+    .record(z.string(), z.union([z.string(), z.array(z.string())]))
+    .optional(),
+  images: z
+    .array(
+      z.object({
+        url: z.string().url(),
+        alt: z.string().optional(),
+        placement: z.enum(["featured", "inline"]).optional(),
+        description: z.string().optional(),
+      })
+    )
+    .optional(),
+});
+
+export type GeneratedContentPayloadInput = z.infer<
+  typeof generatedContentPayloadSchema
+>;
+
+/** POST /api/publish/generated — publish a not-yet-saved generated post. */
+export const publishGeneratedSchema = z.object({
+  targets: z
+    .array(publishTargetSchema)
+    .min(1, "Select at least one connected site to publish to."),
+  content: generatedContentPayloadSchema,
+});
+
+export type PublishGeneratedInput = z.infer<typeof publishGeneratedSchema>;
+
+/**
+ * POST /api/publish — publish or schedule a SAVED post across platforms.
+ *
+ * scheduledAt stays shape-only (string wall-clock or epoch number): the
+ * datetime-local value plus the browser's tzOffsetMinutes is interpreted by
+ * normalizeScheduledAt in src/lib/scheduling.ts, which remains the authority
+ * on what a valid slot means. The same applies to categoryId (WordPress's own
+ * id type from PublishButton).
+ */
+export const publishBodySchema = z.object({
+  postId: z.string().uuid("postId must be a valid post id"),
+  platform: z.enum(PUBLISH_PLATFORMS),
+  action: z.enum(["publish", "schedule", "draft"]).optional(),
+  scheduledAt: z.union([z.string(), z.number()]).nullable().optional(),
+  categoryId: z.union([z.string(), z.number()]).nullable().optional(),
+  // Publish-gate override (super admin owns the final call).
+  force: z.boolean().optional(),
+  tzOffsetMinutes: z.number().int().min(-840).max(840).optional(),
+  // connected_sites branch only — the dialog's per-site targets.
+  targets: z.array(publishTargetSchema).optional(),
+});
+
+export type PublishBodyInput = z.infer<typeof publishBodySchema>;

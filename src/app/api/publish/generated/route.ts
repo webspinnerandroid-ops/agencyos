@@ -7,6 +7,8 @@ import type {
   GeneratedContentTarget,
   GeneratedContentPayload,
 } from "@/lib/publishing/wordpressPublisher";
+import { parseJsonBody } from "@/lib/api-validate";
+import { publishGeneratedSchema } from "@/lib/validations";
 
 /**
  * POST /api/publish/generated
@@ -33,29 +35,17 @@ import type {
 export async function POST(request: NextRequest) {
   try {
     const tenantId = await getTenantId();
-    const body = await request.json();
-    const targets = body?.targets as GeneratedContentTarget[] | undefined;
-    const content = body?.content as GeneratedContentPayload | undefined;
-
-    if (!Array.isArray(targets) || targets.length === 0) {
-      return NextResponse.json(
-        { error: "Select at least one connected site to publish to." },
-        { status: 400 }
-      );
-    }
-    if (!content || typeof content.title !== "string" || !content.title.trim()) {
-      return NextResponse.json(
-        { error: "Generated content is missing a title." },
-        { status: 400 }
-      );
-    }
-    if (!content.body || typeof content.body !== "string" || !content.body.trim()) {
-      return NextResponse.json(
-        { error: "Generated content is missing a body." },
-        { status: 400 }
-      );
-    }
-
+    const body = await parseJsonBody(request, publishGeneratedSchema);
+    if (!body.ok) return body.response;
+    const targets: GeneratedContentTarget[] = body.data.targets.map((t) => ({
+      ...t,
+      includeImages: t.includeImages ?? false,
+    }));
+    // The publisher's payload type requires an images array (possibly empty).
+    const content: GeneratedContentPayload = {
+      ...body.data.content,
+      images: body.data.content.images ?? [],
+    };
     const result = await publishToConnectedSites(
       tenantId,
       targets,

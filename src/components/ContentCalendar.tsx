@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { useState, useCallback, useMemo, useEffect, useLayoutEffect, useRef } from "react";
 import type {
   DragEvent as ReactDragEvent,
   PointerEvent as ReactPointerEvent,
@@ -618,7 +618,25 @@ export default function ContentCalendar({
   const [publishError, setPublishError] = useState<string | null>(null);
 
   // ---- Drag-to-reschedule (HTML5 DnD on desktop, pointer gesture on touch) ----
+  // Latest posts, readable from event handlers synchronously: a drop event
+  // can fire before the render commit that re-created `handleDropOnDay`, and
+  // the closure's stale `posts` would compute a same-day no-op for a move the
+  // optimistic state already applied (a lost reverse re-drop).
+  const postsRef = useRef<CalendarPost[]>(posts);
+  useLayoutEffect(() => {
+    postsRef.current = posts;
+  }, [posts]);
   const [dragPostId, setDragPostId] = useState<string | null>(null);
+  // Mirror in a ref: the drag gesture's dragover/drop events can fire before
+  // the state commit from dragstart re-renders, and handleDragOverDay/
+  // handleDropOnDay would then read the STALE null (guard: `drop` never gets
+  // allow-default, the drop event never fires) — seen as an intermittent
+  // lost drop when two drags happen in quick succession.
+  const dragPostIdRef = useRef<string | null>(null);
+  const setDragPostIdSync = useCallback((v: string | null) => {
+    dragPostIdRef.current = v;
+    setDragPostId(v);
+  }, []);
   const [dragOverDay, setDragOverDay] = useState<string | null>(null);
 
   // ---- Month grid ↔ week strip (mobile) ----
@@ -1070,7 +1088,7 @@ export default function ContentCalendar({
       e: ReactDragEvent<HTMLDivElement>,
       source: "grid" | "backlog" = "grid"
     ) => {
-      setDragPostId(post.id);
+      setDragPostIdSync(post.id);
       dragSourceRef.current = source;
       // Required by Firefox: a drag needs payload data to actually start.
       e.dataTransfer.setData("text/plain", post.id);
@@ -1080,26 +1098,26 @@ export default function ContentCalendar({
   );
 
   const handleDragEnd = useCallback(() => {
-    setDragPostId(null);
+    setDragPostIdSync(null);
     setDragOverDay(null);
     dragSourceRef.current = null;
   }, []);
 
   const handleDragOverDay = useCallback(
     (dateKey: string, e: ReactDragEvent<HTMLDivElement>) => {
-      if (dragPostId == null) return;
+      if (dragPostIdRef.current == null) return;
       e.preventDefault(); // allow the drop
       e.dataTransfer.dropEffect = "move";
       if (dragOverDay !== dateKey) setDragOverDay(dateKey);
     },
-    [dragPostId, dragOverDay]
+    [dragOverDay]
   );
 
   const handleDropOnDay = useCallback(
     async (dateKey: string) => {
-      const id = dragPostId;
+      const id = dragPostIdRef.current;
       const source = dragSourceRef.current ?? "grid";
-      setDragPostId(null);
+      setDragPostIdSync(null);
       setDragOverDay(null);
       dragSourceRef.current = null;
       if (!id) return;
@@ -1117,12 +1135,12 @@ export default function ContentCalendar({
         return;
       }
       if (!onPostMove) return;
-      const post = posts.find((p) => p.id === id);
+      const post = postsRef.current.find((p) => p.id === id);
       const newIso = post ? rescheduleToDay(post, dateKey) : null;
       if (!newIso) return;
       await onPostMove(id, newIso);
     },
-    [dragPostId, posts, onPostMove, onPostSchedule]
+    [onPostMove, onPostSchedule, setDragPostIdSync]
   );
 
   // ---- Pointer drag (touch) ----
@@ -1184,7 +1202,7 @@ export default function ContentCalendar({
       if (!st.active) {
         if (Math.hypot(e.clientX - st.startX, e.clientY - st.startY) < 8) return;
         st.active = true;
-        setDragPostId(st.postId);
+        setDragPostIdSync(st.postId);
       }
       // Suppress selection/scroll defaults only once the gesture is a drag.
       e.preventDefault();
@@ -1203,7 +1221,7 @@ export default function ContentCalendar({
       // The click that follows a real drag must not open the post dialog.
       suppressClickUntilRef.current = Date.now();
       const target = dayKeyFromPoint(e.clientX, e.clientY);
-      setDragPostId(null);
+      setDragPostIdSync(null);
       setDragOverDay(null);
       if (target) void handleDropOnDay(target);
     },
@@ -1214,7 +1232,7 @@ export default function ContentCalendar({
     if (!pointerDragRef.current) return;
     pointerDragRef.current = null;
     dragSourceRef.current = null;
-    setDragPostId(null);
+    setDragPostIdSync(null);
     setDragOverDay(null);
   }, []);
 

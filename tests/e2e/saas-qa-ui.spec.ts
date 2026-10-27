@@ -202,6 +202,21 @@ test.describe("saas-qa-audit · calendar mechanics", () => {
     probeTenantId = tenantId;
     const ws = { data: workspaceId ? { id: workspaceId } : null };
 
+    // Leak recovery: a run killed mid-test never reached its own finally, so
+    // its QA-AUDIT probes leaked into this tenant. Stale rows collide with
+    // today's probe titles — a `.first()` locator then resolves a dead probe
+    // (its PATCHes bypass the test's route probe, a dialog opens the wrong
+    // post). Purge the probe-prefix titles before staging anything new.
+    const stale = await db
+      .from("posts")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .like("title", "QA-AUDIT%");
+    for (const row of stale.data ?? []) {
+      await db.from("publishing_logs").delete().eq("post_id", row.id);
+      await db.from("posts").delete().eq("id", row.id);
+    }
+
     const at = new Date();
     at.setUTCHours(16, 0, 0, 0); // 16:00Z = 10:00 MDT in October
     const post = await db
@@ -400,6 +415,39 @@ test.describe("saas-qa-audit · calendar mechanics", () => {
     title: string,
     at: "first" | "last" = "first"
   ) => cellByDay(page, day, at).locator("div.bg-card", { hasText: title }).first();
+
+  // HTML5 dragstart events are intermittently swallowed by Chromium when
+  // gestures run back-to-back in CI: one missed dragstart leaves the chip
+  // unmoved and every later assertion times out. Retry the gesture from the
+  // chip's CURRENT position until it verifiably lands on the target day; a
+  // swallowed attempt is a strict no-op, so retries cannot overshoot and the
+  // final state is exactly one clean drop. (Callers that assert a drop is a
+  // NO-OP keep their plain .dragTo — a retried gesture there proves nothing.)
+  const dropOnDay = async (pageRef: Page, title: string, toDay: string) => {
+    const landed = chipIn(pageRef, toDay, title);
+    await expect
+      .poll(
+        async () => {
+          if ((await landed.count()) > 0) return true;
+          const current = pageRef
+            .locator("div.bg-card", { hasText: title })
+            .filter({ visible: true })
+            .first();
+          if ((await current.count()) === 0) return false;
+          try {
+            await current.dragTo(cellByDay(pageRef, toDay).locator("span").first(), {
+              timeout: 10_000,
+            });
+          } catch {
+            // The gesture never started; the poll re-runs from wherever the chip now is.
+          }
+          return (await landed.count()) > 0;
+        },
+        { timeout: 30_000, intervals: [500], message: `drop of "${title}" never landed on day ${toDay}` },
+      )
+      .toBe(true);
+  };
+
   // The three drag scenarios run inside a nested describe set to
   // Europe/Berlin, so the DST boundary falls INSIDE the rendered month view:
   // Berlin's fall-back is Sunday Oct 25, 2026 — Oct 24 is CEST (UTC+2),
@@ -412,26 +460,78 @@ test.describe("saas-qa-audit · calendar mechanics", () => {
   // The regression this guards (using "today's" offset instead: Oct 26 is
   // CET, so −60) would store 09:00Z — a silent one-hour wall-clock drift.
   //
-  // They also require the view's open month to be October 2026, so they
-  // skip outside that window. Run the suite during October 2026 to
-  // exercise them.
+  // These three run in the CURRENT Europe/Berlin month whenever that month
+  // contains a DST transition (last Sunday of October or of March): a probe
+  // sits just after the boundary, and the spec expresses both instants and
+  // day cells through the computed boundary — month view and expectations
+  // then follow automatically, whatever the CI date is.
+  const BERLIN_OFF_HRS = (iso: string): number => {
+    // Deterministic across host TZs: read Berlin's "GMT+2"-style zone name
+    // for that instant out of Intl (Node ≥ full-ICU and Chromium both ship it).
+    const name = new Intl.DateTimeFormat("en-US", {
+      timeZone: "Europe/Berlin",
+      timeZoneName: "shortOffset",
+    })
+      .formatToParts(new Date(iso))
+      .find((p) => p.type === "timeZoneName")?.value;
+    const match = /GMT([+-]\d{1,2})/.exec(name ?? "");
+    return match ? Number(match[1]) : 0;
+  };
+
   test.describe("drag mechanics at a DST boundary inside the view", () => {
     test.describe.configure({ mode: "serial" });
     test.use({ timezoneId: "Europe/Berlin" });
 
-    const DST_WINDOW = (() => {
-      const now = new Date();
-      return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}` === "2026-10";
-    })();
+    const now = new Date();
+    const y = now.getUTCFullYear();
+    const m = now.getUTCMonth();
+    // UTC month m contains a Berlin DST transition in exactly these months:
+    //   March: last Sunday, 02:00 CET (UTC+1) → 03:00 CEST (UTC+2)
+    //   October: last Sunday, 03:00 CEST (UTC+2) → 02:00 CET (UTC+1)
+    // The transition happens at 01:00 UTC on that Sunday in both cases.
+    const TRANSITION_MONTHS = [2, 9];
+    const DST_WINDOW = TRANSITION_MONTHS.includes(m);
+
+    // Last Sunday of the current month (UTC). Berlin's offset changes at
+    // 01:00 UTC on that day, so 09:00 UTC on it is unambiguously past the
+    // switch — a probe there uses the month's NEW offset. The PROBE stays on
+    // that Sunday itself (never the day after): when the last Sunday is the
+    // month's final day (e.g. Oct 2027), the following date would fall into
+    // the next month, outside the rendered grid.
+    const lastSunday = new Date(
+      Date.UTC(y, m + 1, 0) - (new Date(Date.UTC(y, m + 1, 0)).getUTCDay() * 86_400_000)
+    );
+    // Target day: the Saturday just before the boundary — the OLD offset —
+    // and always inside the open month view.
+    const beforeDay = new Date(lastSunday.getTime() - 86_400_000);
+    const dayNo = (d: Date) => String(d.getUTCDate());
+    const probeDayNo = dayNo(lastSunday);
+    const targetDay = dayNo(beforeDay);
+    const probeInstant = new Date(lastSunday.getTime() + 9 * 3_600_000); // 09:00Z on the boundary Sunday
+    // Preserving the wall clock while the target day sits on a different
+    // offset: the clock reading stays 10:00-local, rebased onto the TARGET
+    // civil date and resolved with the TARGET date's offset:
+    //   target epoch = target civil midnight (UTC) + local wall ms since
+    //   midnight (probe instant + its offset) - target offset.
+    const wallPreservedEpoch = (): Date => {
+      const probeOff = BERLIN_OFF_HRS(probeInstant.toISOString());
+      const targetOff = BERLIN_OFF_HRS(new Date(beforeDay.getTime() + 12 * 3_600_000).toISOString());
+      const wallMsOfProbe =
+        (probeInstant.getTime() + probeOff * 3_600_000) % 86_400_000;
+      return new Date(
+        Date.UTC(y, m, beforeDay.getUTCDate()) + wallMsOfProbe - targetOff * 3_600_000
+      );
+    };
 
     test("drag across the DST boundary keeps the same local wall time", async ({ page }) => {
-      test.skip(!DST_WINDOW, "hardcodes the Oct 24→26 2026 Berlin DST boundary; run in October 2026");
+      test.skip(!DST_WINDOW, "the view's month has no Berlin DST transition to drag across");
       test.setTimeout(240_000);
-      const probeId = await createProbePost("QA-AUDIT DST probe", "2026-10-26T09:00:00Z"); // 10:00 CET
+      const probeId = await createProbePost("QA-AUDIT DST probe", probeInstant.toISOString());
+      const expectedInstant = wallPreservedEpoch().toISOString();
       try {
         await page.setViewportSize({ width: 1440, height: 900 });
         await page.goto(`${BASE}/dashboard/calendar`, { waitUntil: "domcontentloaded" });
-        const chip = chipIn(page, "26", "QA-AUDIT DST probe");
+        const chip = chipIn(page, probeDayNo, "QA-AUDIT DST probe");
         await expect(chip).toBeVisible({ timeout: 90_000 });
 
         const pageErrors: string[] = [];
@@ -447,12 +547,12 @@ test.describe("saas-qa-audit · calendar mechanics", () => {
           await route.continue();
         });
 
-        await chip.dragTo(cellByDay(page, "24").locator("span").first());
+        await dropOnDay(page, "QA-AUDIT DST probe", targetDay);
 
         await expect.poll(() => patchBodies.length).toBeGreaterThan(0);
-        expect(new Date(patchBodies[0]).toISOString()).toBe("2026-10-24T08:00:00.000Z");
+        expect(new Date(patchBodies[0]).toISOString()).toBe(expectedInstant);
         // The chip itself lands on the target day.
-        await expect(chipIn(page, "24", "QA-AUDIT DST probe")).toBeVisible();
+        await expect(chipIn(page, targetDay, "QA-AUDIT DST probe")).toBeVisible();
         // A dropped drop must not crash the page.
         expect(pageErrors, `page errors during drag:\n${pageErrors.join("\n")}`).toEqual([]);
       } finally {
@@ -461,13 +561,14 @@ test.describe("saas-qa-audit · calendar mechanics", () => {
     });
 
     test("drag to the wrong day offers Undo, which restores the previous exact instant", async ({ page }) => {
-      test.skip(!DST_WINDOW, "hardcodes the Oct 24→26 2026 Berlin DST boundary; run in October 2026");
+      test.skip(!DST_WINDOW, "the view's month has no Berlin DST transition to drag across");
       test.setTimeout(240_000);
-      const probeId = await createProbePost("QA-AUDIT Undo probe", "2026-10-26T09:00:00Z");
+      const probeId = await createProbePost("QA-AUDIT Undo probe", probeInstant.toISOString());
+      const probeRestoredIso = probeInstant.toISOString();
       try {
         await page.setViewportSize({ width: 1440, height: 900 });
         await page.goto(`${BASE}/dashboard/calendar`, { waitUntil: "domcontentloaded" });
-        const chip = chipIn(page, "26", "QA-AUDIT Undo probe");
+        const chip = chipIn(page, probeDayNo, "QA-AUDIT Undo probe");
         await expect(chip).toBeVisible({ timeout: 90_000 });
 
         const patchBodies: string[] = [];
@@ -484,19 +585,24 @@ test.describe("saas-qa-audit · calendar mechanics", () => {
           await route.continue();
         });
 
-        await chip.dragTo(cellByDay(page, "24").locator("span").first());
+        await dropOnDay(page, "QA-AUDIT Undo probe", targetDay);
 
         const banner = page.getByTestId("post-move-undo");
         await expect(banner).toBeVisible({ timeout: 20_000 });
         await expect(banner).toContainText("QA-AUDIT Undo probe");
-        await expect(banner).toContainText(/Oct\s*24/);
+        // The banner spells the target day the browser-rendered way
+        // (month: "short", day: "numeric"): "Oct 24"-shaped (October) or
+        // "Mar 28"-shaped (March). Match like with like.
+        const bannerMonth = new Date(beforeDay.getTime() + 12 * 3_600_000)
+          .toLocaleDateString("en-US", { month: "short", timeZone: "Europe/Berlin" });
+        await expect(banner).toContainText(new RegExp(`${bannerMonth}\\s*${targetDay}`));
 
         await banner.getByRole("button", { name: /undo/i }).click();
         // The undo is itself a move: second PATCH carries the exact instant the
         // row had before the drop — restored verbatim, no offset recomputation.
         await expect.poll(() => patchBodies.length).toBe(2);
-        expect(new Date(patchBodies[1]).toISOString()).toBe("2026-10-26T09:00:00.000Z");
-        await expect(chipIn(page, "26", "QA-AUDIT Undo probe")).toBeVisible();
+        expect(new Date(patchBodies[1]).toISOString()).toBe(probeRestoredIso);
+        await expect(chipIn(page, probeDayNo, "QA-AUDIT Undo probe")).toBeVisible();
         await expect(banner).toBeHidden();
       } finally {
         await deleteProbePost(probeId);
@@ -504,13 +610,15 @@ test.describe("saas-qa-audit · calendar mechanics", () => {
     });
 
     test("double drop: the reverse re-drop waits for the in-flight PATCH, then applies exactly (last drop wins)", async ({ page }) => {
-      test.skip(!DST_WINDOW, "hardcodes the Oct 24→26 2026 Berlin DST boundary; run in October 2026");
+      test.skip(!DST_WINDOW, "the view's month has no Berlin DST transition to drag across");
       test.setTimeout(240_000);
-      const probeId = await createProbePost("QA-AUDIT double-drop probe", "2026-10-26T09:00:00Z");
+      const probeId = await createProbePost("QA-AUDIT double-drop probe", probeInstant.toISOString());
+      const probeRestoredIso = probeInstant.toISOString();
+      const expectedInstant = wallPreservedEpoch().toISOString();
       try {
         await page.setViewportSize({ width: 1440, height: 900 });
         await page.goto(`${BASE}/dashboard/calendar`, { waitUntil: "domcontentloaded" });
-        const chip = chipIn(page, "26", "QA-AUDIT double-drop probe");
+        const chip = chipIn(page, probeDayNo, "QA-AUDIT double-drop probe");
         await expect(chip).toBeVisible({ timeout: 90_000 });
 
         const patchBodies: string[] = [];
@@ -531,16 +639,16 @@ test.describe("saas-qa-audit · calendar mechanics", () => {
           await route.continue();
         });
 
-        // Drop 1: Oct 26 → Oct 24, response held by the gate.
-        await chip.dragTo(cellByDay(page, "24").locator("span").first());
+        // Drop 1: chip day → boundary Saturday, response held by the gate.
+        await dropOnDay(page, "QA-AUDIT double-drop probe", targetDay);
         await expect.poll(() => patchBodies.length).toBe(1);
 
       // The reverse move is dropped while drop 1 is still in flight. Its PATCH
       // must NOT be sent until the first completes (per-post serialization) —
       // otherwise the slower first write could land last and strand the row at
       // the earlier instant while the UI shows the later day.
-      await chipIn(page, "24", "QA-AUDIT double-drop probe")
-        .dragTo(cellByDay(page, "26").locator("span").first());
+      await dropOnDay(page, "QA-AUDIT double-drop probe", probeDayNo);
+
       await page.waitForTimeout(700);
       expect(
         patchBodies.length,
@@ -551,13 +659,13 @@ test.describe("saas-qa-audit · calendar mechanics", () => {
       await expect.poll(() => patchBodies.length).toBe(2);
       // Serialized in drop order; the final write is the reverse move's exact
       // value, and the chip ends where the user last dropped it.
-      expect(new Date(patchBodies[0]).toISOString()).toBe("2026-10-24T08:00:00.000Z");
-      expect(new Date(patchBodies[1]).toISOString()).toBe("2026-10-26T09:00:00.000Z");
-      await expect(chipIn(page, "26", "QA-AUDIT double-drop probe")).toBeVisible();
+      expect(new Date(patchBodies[0]).toISOString()).toBe(expectedInstant);
+      expect(new Date(patchBodies[1]).toISOString()).toBe(probeRestoredIso);
+      await expect(chipIn(page, probeDayNo, "QA-AUDIT double-drop probe")).toBeVisible();
 
       // A drop on the post's own day is a no-op: no third PATCH.
-      await chipIn(page, "26", "QA-AUDIT double-drop probe")
-        .dragTo(cellByDay(page, "26").locator("span").first());
+      await chipIn(page, probeDayNo, "QA-AUDIT double-drop probe")
+        .dragTo(cellByDay(page, probeDayNo).locator("span").first());
       await page.waitForTimeout(500);
       expect(patchBodies.length, "same-day drop fired a reschedule").toBe(2);
       } finally {

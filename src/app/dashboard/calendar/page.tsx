@@ -352,18 +352,23 @@ export default function CalendarPage() {
       const previousScheduledAt = post?.scheduled_at ?? null;
       if (!previousScheduledAt || !post) return Promise.resolve();
 
+      // Guard and the optimistic jump are set at ENQUEUE time (drop order).
+      // The serial queue only orders the WRITE, per the comment below: a
+      // queued reverse move must show immediately and dedupe subsequent
+      // identical drops. Setting the guard inside the chained body instead
+      // let rapid re-drops while a write is in flight enqueue a duplicate
+      // PATCH for every retry (each saw the stale guard).
+      moveInFlightRef.current.set(postId, newScheduledAt);
+      setPosts((prev) =>
+        prev.map((p) =>
+          p.id === postId ? { ...p, scheduled_at: newScheduledAt } : p
+        )
+      );
+
       const queue = (
         moveQueuesRef.current.get(postId) ?? Promise.resolve()
       ).catch(() => {});
       const next = queue.then(async () => {
-        moveInFlightRef.current.set(postId, newScheduledAt);
-        // Optimistic: the chip jumps to the target day immediately, in drop
-        // order — the serial queue only orders the writes.
-        setPosts((prev) =>
-          prev.map((p) =>
-            p.id === postId ? { ...p, scheduled_at: newScheduledAt } : p
-          )
-        );
         const ok = await performMove(postId, newScheduledAt);
         if (ok) {
           if (!options?.silent) {

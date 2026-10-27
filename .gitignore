@@ -36,9 +36,9 @@ yarn-error.log*
 # env files — never commit (may contain real secrets)
 .env*
 
-# local tooling / scratch
+# local tooling / scratch (any .dot-tmp artifact, repo root or nested)
 .freebuff/
-scripts/.tmp-*
+.tmp-*
 scripts/*.log
 scripts/*.err
 run-capture.ps1
@@ -88,24 +88,21 @@ scripts/.session-cookies.json
 .edge-profile-*/
 
 # esbuild bundles of the one-off .ts scripts in /scripts — rebuildable, and
-# they bloat the repo (multi-MB each). Keep only the TypeScript source.
+# this wildcard also bloats nothing new: it keeps them (and NEW hand-written
+# .cjs scratch scripts) ignored by default. Files that are already tracked
+# stay tracked — gitignore rules never apply to tracked paths — so the repo's
+# one-off .cjs tools (audit-*.cjs, backfill-*.cjs, the _*-diagnostic scripts,
+# check-price-drift.cjs …) keep their history no matter what this wildcard
+# says. No allowlist to maintain. When a new script IS meant to be tracked,
+# add it once with:
+#   git add -f scripts/<name>.cjs
 scripts/*.cjs
-
-# Hand-written operational scripts (no .ts source) — keep tracked.
-!scripts/audit-tenant-scope.cjs
-!scripts/audit-validation.cjs
-!scripts/manual-traffic-sync.cjs
-!scripts/sanitize-seo-campaigns.cjs
-!scripts/sync-site-domains.cjs
-!scripts/backfill-assets.cjs
-!scripts/backfill-post-scores.cjs
-!scripts/delete-broken-assets.cjs
-# Committed bundle for the nightly price-drift check (built from .ts via
-# esbuild; kept tracked so the CI job runs it without a build step).
-!scripts/check-price-drift.cjs
 .bliss/
 # Private pasted credentials — local only
 .secrets/
 # Playwright run artifacts (error contexts, screenshots, auth storage states)
 test-results/
 playwright-report/
+# Supabase in-flight manual SQL — scratch until it becomes a numbered
+# migration in supabase/migrations/. Kept on disk, never committed.
+/supabase/pending-manual*.sql

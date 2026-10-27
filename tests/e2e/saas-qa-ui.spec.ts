@@ -579,8 +579,16 @@ test.describe("saas-qa-audit · calendar mechanics", () => {
   // swallowed attempt is a strict no-op, so retries cannot overshoot and the
   // final state is exactly one clean drop. (Callers that assert a drop is a
   // NO-OP keep their plain .dragTo — a retried gesture there proves nothing.)
-  const dropOnDay = async (pageRef: Page, title: string, toDay: string) => {
-    const landed = chipIn(pageRef, toDay, title);
+  const dropOnDay = async (
+    pageRef: Page,
+    title: string,
+    toDay: string,
+    // Match-sides selector for `toDay`: a dropped chip can share its day
+    // number with an earlier cell (a trailing next-month cell repeats 1–6),
+    // so callers pin which cell's DOM occurrence is the target.
+    at: "first" | "last" = "first"
+  ) => {
+    const landed = chipIn(pageRef, toDay, title, at);
     await expect
       .poll(
         async () => {
@@ -591,7 +599,7 @@ test.describe("saas-qa-audit · calendar mechanics", () => {
             .first();
           if ((await current.count()) === 0) return false;
           try {
-            await current.dragTo(cellByDay(pageRef, toDay).locator("span").first(), {
+            await current.dragTo(cellByDay(pageRef, toDay, at).locator("span").first(), {
               timeout: 10_000,
             });
           } catch {
@@ -829,6 +837,154 @@ test.describe("saas-qa-audit · calendar mechanics", () => {
       }
     });
   });
+
+  test.describe("drag across the week-row boundary at a month-length edge", () => {
+    // Pinned so the geometry and the expected instants are identical on any
+    // host/CI machine (the calendar renders in the browser's zone).
+    test.use({ timezoneId: "America/Denver" });
+
+    const now = new Date();
+    // The staged VIEW is the calendar's next month — one click on the header
+    // arrow. Its last week row spills into the following month whenever the
+    // month does not END on a Saturday (those weeks fit inside the month, so
+    // there is no row whose Saturday/Sunday pair sits on either side of the
+    // month-length edge).
+    const stageFirst = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1, 12));
+    const stageLast = new Date(
+      Date.UTC(stageFirst.getUTCFullYear(), stageFirst.getUTCMonth() + 1, 0)
+    );
+    const STRADDLES = stageLast.getUTCDay() !== 6;
+    // Source: the Saturday BEFORE the final week row (previous row's last
+    // cell). Target: the first spilled day — the 1st of the next month, in
+    // the final row. Dropping crosses BOTH the week-row boundary and the
+    // month-length edge (the naive-arithmetic edge where a 30/31-day month
+    // hands the day arithmetic to the next month).
+    const rowStart = new Date(stageLast.getTime() - stageLast.getUTCDay() * 86_400_000);
+    const sourceDate = new Date(rowStart.getTime() - 86_400_000);
+    const targetDate = new Date(stageLast.getTime() + 86_400_000);
+    const dayKey = (d: Date) => d.toISOString().slice(0, 10);
+    const dayNo = (d: Date) => String(d.getUTCDate());
+    const DENVER = "America/Denver";
+    const caption = (firstOfMonth: Date) =>
+      new Intl.DateTimeFormat("en-US", {
+        month: "long", year: "numeric", timeZone: DENVER,
+      }).format(firstOfMonth);
+    const denverOffHrs = (iso: string): number => {
+      const name = new Intl.DateTimeFormat("en-US", {
+        timeZone: DENVER, timeZoneName: "shortOffset",
+      })
+        .formatToParts(new Date(iso))
+        .find((p) => p.type === "timeZoneName")?.value;
+      const match = /GMT([+-]?\d{1,2})/.exec(name ?? "");
+      return match ? Number(match[1]) : 0;
+    };
+
+    test("cross-row drag across the month edge: write is serialized in drop order and lands wall-preserved", async ({ page }) => {
+      test.skip(
+        !STRADDLES,
+        `${caption(stageFirst)} ends on a Saturday — its final week row has no spill into the next month`
+      );
+      test.setTimeout(240_000);
+      const title = "QA-AUDIT month-edge probe";
+      const probeIso = `${dayKey(sourceDate)}T16:00:00.000Z`;
+      const probeInstant = new Date(probeIso).toISOString();
+      const probeId = await createProbePost(title, probeInstant);
+      try {
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await page.goto(`${BASE}/dashboard/calendar`, { waitUntil: "domcontentloaded" });
+
+        // Move to the staged month: a click before hydration is a silent
+        // no-op, so click the arrow again until the caption verifiably changed
+        // (same retry shape as the week-strip toggle above).
+        const stageCaption = caption(stageFirst);
+        await expect
+          .poll(
+            async () => {
+              if ((await page.locator("h2", { hasText: stageCaption }).count()) > 0) return true;
+              const h2 = page.locator("h2", { hasText: caption(now) }).first();
+              if ((await h2.count()) === 0) return false;
+              await h2.locator("xpath=following-sibling::button[1]").click().catch(() => undefined);
+              return (await page.locator("h2", { hasText: stageCaption }).count()) > 0;
+            },
+            { timeout: 60_000, intervals: [1_000], message: `the calendar never showed ${stageCaption}` },
+          )
+          .toBe(true);
+
+        const sourceChip = chipIn(page, dayNo(sourceDate), title, "first");
+        await expect(sourceChip).toBeVisible({ timeout: 90_000 });
+
+        const pageErrors: string[] = [];
+        page.on("pageerror", (err) => pageErrors.push(err.message));
+
+        // Hold the FIRST reschedule PATCH in flight so the reverse re-drop
+        // below is issued while the earlier write is still queued — the exact
+        // race the per-post serialization queue exists for.
+        const patchBodies: string[] = [];
+        let releaseFirst!: () => void;
+        const firstHeld = new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        });
+        await page.route(`**/api/posts/${probeId}`, async (route) => {
+          const req = route.request();
+          if (req.method() !== "PATCH") return route.continue();
+          patchBodies.push(
+            ((req.postDataJSON() as { scheduled_at?: string }) ?? {}).scheduled_at ?? ""
+          );
+          if (patchBodies.length === 1) {
+            await firstHeld;
+            await new Promise((r) => setTimeout(r, 400));
+          }
+          await route.continue();
+        });
+
+        // Drop 1: across the week boundary AND the month edge. "last" pins
+        // the trailing next-month cell (its day number repeats day 1 of the
+        // staged month earlier in the grid).
+        await dropOnDay(page, title, dayNo(targetDate), "last");
+        await expect.poll(() => patchBodies.length).toBe(1);
+
+        // Drop 2: the reverse move, dropped while drop 1 is still in flight.
+        // Its PATCH must wait for the first write (per-post serialization).
+        await dropOnDay(page, title, dayNo(sourceDate), "first");
+        await page.waitForTimeout(700);
+        expect(
+          patchBodies.length,
+          "the reverse move's PATCH was sent while the first was still in flight"
+        ).toBe(1);
+
+        releaseFirst();
+        await expect.poll(() => patchBodies.length).toBe(2);
+
+        // Write 1: the chip keeps the wall-clock time it renders locally and
+        // is rebased onto the TARGET civil date, with the offset in force
+        // THERE (across the month edge; if the staged month sits on a DST
+        // switch this also asserts the switch-correct offset).
+        const probeParts = new Intl.DateTimeFormat("en-GB", {
+          timeZone: DENVER, hourCycle: "h23", hour: "2-digit", minute: "2-digit",
+        }).formatToParts(new Date(probeIso));
+        const wallH = Number(probeParts.find((p) => p.type === "hour")!.value);
+        const wallM = Number(probeParts.find((p) => p.type === "minute")!.value);
+        const expectedCrossEdge = new Date(
+          Date.UTC(
+            targetDate.getUTCFullYear(),
+            targetDate.getUTCMonth(),
+            targetDate.getUTCDate(),
+            wallH,
+            wallM
+          ) - denverOffHrs(new Date(targetDate.getTime() + 12 * 3_600_000).toISOString()) * 3_600_000
+        ).toISOString();
+        expect(new Date(patchBodies[0]).toISOString()).toBe(expectedCrossEdge);
+        // Write 2, in drop order: the reverse move lands at the probe's
+        // original exact instant (no offset recomputation drift).
+        expect(new Date(patchBodies[1]).toISOString()).toBe(probeInstant);
+        await expect(chipIn(page, dayNo(sourceDate), title, "first")).toBeVisible();
+        expect(pageErrors, `page errors during drag:\n${pageErrors.join("\n")}`).toEqual([]);
+      } finally {
+        await deleteProbePost(probeId);
+      }
+    });
+  });
+
   test.describe("backlog strip: undated drafts are datable — and undoable", () => {
     // Pinned so the expected 09:00 instant is identical on any host/CI
     // machine (the browser resolves the slot in its zone).

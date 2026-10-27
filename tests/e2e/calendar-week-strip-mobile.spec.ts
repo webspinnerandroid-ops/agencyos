@@ -390,3 +390,145 @@ test.describe("phone: datable backlog drafts on the week strip", () => {
     }
   });
 });
+
+test.describe("phone: datable backlog drafts on the month grid", () => {
+  // Pinned so the expected 09:00 instant is identical on any host/CI machine
+  // (the browser resolves the slot in its zone).
+  test.use({ timezoneId: "America/Denver" });
+
+  // Phone twin of the month-grid backlog drop: switching to the Month view
+  // must expose the same [data-drop-day] cells, and a strip draft dropped on
+  // one must assign that day's 09:00 LOCAL slot (offset resolved for the
+  // TARGET date — the 9:00-equivalent instant, not today's offset) under
+  // touch emulation, with exactly one PATCH. The pointer drag path is what
+  // runs on this project (native HTML5 DnD never starts under touch), so a
+  // pass here proves the fallback gesture wiring covers the month grid.
+  test("drag a backlog draft onto a month-grid cell: the 9:00 slot lands under touch emulation", async ({ page }) => {
+    const title = "QA-AUDIT phone month-grid probe";
+    const probeId = await createProbeDraft(title);
+    try {
+      await page.goto(`${BASE}/dashboard/calendar`, { waitUntil: "domcontentloaded" });
+
+      const stripChip = page
+        .getByTestId("unscheduled-backlog")
+        .locator("div.bg-card", { hasText: title });
+      await expect(stripChip).toBeVisible({ timeout: 90_000 });
+
+      // Switch to the Month view; retry until the month grid owns the DOM
+      // (a pre-hydration click is a silent no-op).
+      const todayKey = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/Denver", year: "numeric", month: "2-digit", day: "2-digit",
+      }).format(new Date());
+      const utcOfKey = (k: string) => {
+        const [y, mo, d] = k.split("-").map(Number);
+        return Date.UTC(y, mo - 1, d);
+      };
+      const dow = new Date(utcOfKey(todayKey)).getUTCDay();
+      // Drop adjacent to today (Sat on the previous day) — same in-week rule
+      // as the week-strip probes, and the cell is always in the RENDERED
+      // month (no month-navigation edge cases in scope here).
+      const targetKey = new Date(
+        utcOfKey(todayKey) + (dow === 6 ? -86_400_000 : +86_400_000),
+      ).toISOString().slice(0, 10);
+      // min-h-[110px] pins this to the month grid (the week strip's rows are
+      // shorter); today's own cell guarantees the month is in view.
+      const targetCell = page
+        .locator(`[data-drop-day="${targetKey}"].min-h-\\[110px\\]`);
+      await expect
+        .poll(
+          async () => {
+            const inMonth = (await targetCell.count()) > 0;
+            if (!inMonth) {
+              await page
+                .getByRole("group", { name: "Calendar view" })
+                .getByRole("button", { name: "Month" })
+                .click()
+                .catch(() => undefined);
+            }
+            return inMonth;
+          },
+          { timeout: 30_000, intervals: [1_000], message: "the calendar never switched to the month grid" },
+        )
+        .toBe(true);
+
+      const pageErrors: string[] = [];
+      page.on("pageerror", (err) => pageErrors.push(err.message));
+
+      const patchBodies: Array<string | null> = [];
+      await page.route(`**/api/posts/${probeId}`, async (route) => {
+        const req = route.request();
+        if (req.method() === "PATCH") {
+          patchBodies.push(
+            ((req.postDataJSON() as { scheduled_at?: string | null }) ?? {}).scheduled_at ?? null,
+          );
+        }
+        await route.continue();
+      });
+
+      // Expected slot = 09:00 local on the TARGET day, offset resolved for
+      // THAT date. Verify the exact instant AND that the stored row kept the
+      // draft status (a scheduling PATCH must not publish).
+      const offHours = (iso: string): number => {
+        const name = new Intl.DateTimeFormat("en-US", {
+          timeZone: "America/Denver", timeZoneName: "shortOffset",
+        })
+          .formatToParts(new Date(iso))
+          .find((p) => p.type === "timeZoneName")?.value;
+        const match = /GMT([+-]?\d{1,2})/.exec(name ?? "");
+        return match ? Number(match[1]) : 0;
+      };
+      const off = offHours(`${targetKey}T12:00:00Z`);
+      const expectedSlotIso = new Date(
+        Date.parse(`${targetKey}T09:00:00Z`) - off * 3_600_000,
+      ).toISOString();
+
+      const chipInTarget = targetCell.locator("div.bg-card", { hasText: title }).first();
+      await expect
+        .poll(
+          async () => {
+            if ((await chipInTarget.count()) > 0) return true;
+            const current = page
+              .locator("div.bg-card", { hasText: title })
+              .filter({ visible: true })
+              .first();
+            if ((await current.count()) === 0) return false;
+            try {
+              await current.dragTo(targetCell, { timeout: 10_000 });
+            } catch {
+              // The gesture never started; the poll re-runs.
+            }
+            return (await chipInTarget.count()) > 0;
+          },
+          { timeout: 60_000, intervals: [500], message: `the phone month-grid drop never landed on ${targetKey}` },
+        )
+        .toBe(true);
+
+      // Exactly one write, and it is the day's 09:00-equivalent slot.
+      await expect.poll(() => patchBodies.length).toBe(1);
+      expect(
+        new Date(patchBodies[0] as string).toISOString(),
+        "dropping a strip draft on a month cell must assign the day's 09:00 local slot",
+      ).toBe(expectedSlotIso);
+      await expect(chipInTarget).toBeVisible();
+
+      const { db } = adminClient();
+      const rowState = async (): Promise<{ slot: string | null; status: string | null }> => {
+        const row = await db
+          .from("posts")
+          .select("scheduled_at,status")
+          .eq("id", probeId)
+          .single();
+        return {
+          slot: row.data?.scheduled_at ? new Date(row.data.scheduled_at).toISOString() : null,
+          status: row.data?.status ?? null,
+        };
+      };
+      await expect
+        .poll(rowState, { timeout: 20_000 })
+        .toEqual({ slot: expectedSlotIso, status: "draft" });
+      expect(pageErrors, `page errors during drag:\n${pageErrors.join("\n")}`).toEqual([]);
+    } finally {
+      await deleteProbePost(probeId);
+    }
+  });
+});

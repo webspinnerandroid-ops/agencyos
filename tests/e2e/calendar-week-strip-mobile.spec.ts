@@ -64,6 +64,30 @@ async function createProbePost(title: string, scheduledIso: string): Promise<str
   return post.data!.id as string;
 }
 
+/** Disposable UNDATED draft — the Unscheduled backlog strip's source row.
+ * Same shape the saas-qa-audit suites insert; here used on a phone emulation. */
+async function createProbeDraft(title: string): Promise<string> {
+  const { db } = adminClient();
+  const { tenantId, workspaceId } = sessionIds();
+  if (!tenantId) throw new Error("could not read the session tenant cookie");
+  if (!workspaceId) throw new Error("the suite session has no workspace_id cookie");
+  const post = await db
+    .from("posts")
+    .insert({
+      tenant_id: tenantId,
+      workspace_id: workspaceId,
+      title,
+      type: "blog",
+      status: "draft",
+      scheduled_at: null,
+      content: { type: "blog", title, body: "Probe." },
+    })
+    .select("id")
+    .single();
+  if (post.error) throw new Error(`probe draft insert failed: ${post.error.message}`);
+  return post.data!.id as string;
+}
+
 async function deleteProbePost(id: string | null): Promise<void> {
   if (!id) return;
   const { db } = adminClient();
@@ -203,4 +227,166 @@ test("phone week strip: dragTo reschedules to the adjacent day", async ({ page }
   } finally {
     await deleteProbePost(probeId);
   }
+});
+
+test.describe("phone: datable backlog drafts on the week strip", () => {
+  // Pinned so the expected 09:00 instant is identical on any host/CI machine
+  // (the browser resolves the slot in its zone).
+  test.use({ timezoneId: "America/Denver" });
+
+  // Phone twin of the desktop backlog probe in saas-qa-ui.spec.ts:
+  // dropping a strip draft onto a WEEK-STRIP row (not a month-grid cell) must
+  // assign the day's 09:00 local slot without publishing the draft, and Undo
+  // must unschedule it back to the strip.
+  test("drag a backlog draft onto a week-strip row: the 9:00 slot lands, Undo returns it to the strip", async ({ page }) => {
+    const title = "QA-AUDIT phone backlog probe";
+    const probeId = await createProbeDraft(title);
+    try {
+      await page.goto(`${BASE}/dashboard/calendar`, { waitUntil: "domcontentloaded" });
+
+      const strip = page.getByTestId("unscheduled-backlog");
+      const stripChip = strip.locator("div.bg-card", { hasText: title });
+      // The strip refetches asynchronously; the probe is the newest row
+      // (unscheduled lists newest-first) so it leads the strip.
+      await expect(stripChip).toBeVisible({ timeout: 90_000 });
+
+      // Phones open on the week strip, but re-assert defensively: poll until
+      // the strip owns the DOM (week rows carry a `w-12` label column the
+      // month grid never renders), clicking the Week button until they do.
+      // A pre-hydration click is a silent no-op, so retry until it takes.
+      const todayKey = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/Denver", year: "numeric", month: "2-digit", day: "2-digit",
+      }).format(new Date());
+      const utcOfKey = (k: string) => {
+        const [y, mo, d] = k.split("-").map(Number);
+        return Date.UTC(y, mo - 1, d);
+      };
+      const dow = new Date(utcOfKey(todayKey)).getUTCDay();
+      await expect
+        .poll(
+          async () => {
+            const onWeek =
+              (await page.locator(`[data-drop-day="${todayKey}"] div.w-12`).count()) > 0;
+            if (!onWeek) {
+              await page
+                .getByRole("group", { name: "Calendar view" })
+                .getByRole("button", { name: "Week" })
+                .click()
+                .catch(() => undefined);
+            }
+            return onWeek;
+          },
+          { timeout: 30_000, intervals: [1_000], message: "the calendar never switched to the week strip" },
+        )
+        .toBe(true);
+
+      // The target must be a RENDERED strip cell: the strip exposes only its
+      // own 7 days. Sunday-Friday drop on the next day, Saturday on the
+      // previous one — inside the week, today's row always carries a chip.
+      const targetKey = new Date(
+        utcOfKey(todayKey) + (dow === 6 ? -86_400_000 : +86_400_000),
+      ).toISOString().slice(0, 10);
+      const targetCell = page.locator(`[data-drop-day="${targetKey}"]`);
+
+      // Expected slot = 09:00 LOCAL on the target day, offset resolved for
+      // THAT date (the backlog drop resolves the drop date's own DST state,
+      // it never reuses today's).
+      const offHours = (iso: string): number => {
+        const name = new Intl.DateTimeFormat("en-US", {
+          timeZone: "America/Denver", timeZoneName: "shortOffset",
+        })
+          .formatToParts(new Date(iso))
+          .find((p) => p.type === "timeZoneName")?.value;
+        const match = /GMT([+-]?\d{1,2})/.exec(name ?? "");
+        return match ? Number(match[1]) : 0;
+      };
+      const off = offHours(`${targetKey}T12:00:00Z`);
+      const expectedSlotIso = new Date(
+        Date.parse(`${targetKey}T09:00:00Z`) - off * 3_600_000
+      ).toISOString();
+
+      const pageErrors: string[] = [];
+      page.on("pageerror", (err) => pageErrors.push(err.message));
+
+      const patchBodies: Array<string | null> = [];
+      await page.route(`**/api/posts/${probeId}`, async (route) => {
+        const req = route.request();
+        if (req.method() === "PATCH") {
+          patchBodies.push(
+            ((req.postDataJSON() as { scheduled_at?: string | null }) ?? {}).scheduled_at ?? null,
+          );
+        }
+        await route.continue();
+      });
+
+      // Same swallowed-gesture retry as every other drag here: re-attempt
+      // until the chip verifiably lands on the target row; a swallowed
+      // attempt is a strict no-op, so retries cannot overshoot.
+      const chipInTarget = targetCell.locator("div.bg-card", { hasText: title }).first();
+      await expect
+        .poll(
+          async () => {
+            if ((await chipInTarget.count()) > 0) return true;
+            const current = page
+              .locator("div.bg-card", { hasText: title })
+              .filter({ visible: true })
+              .first();
+            if ((await current.count()) === 0) return false;
+            try {
+              await current.dragTo(targetCell, { timeout: 10_000 });
+            } catch {
+              // The gesture never started; the poll re-runs.
+            }
+            return (await chipInTarget.count()) > 0;
+          },
+          { timeout: 30_000, intervals: [500], message: `the phone backlog drop never landed on ${targetKey}` },
+        )
+        .toBe(true);
+
+      // Exactly one write, and it is the 09:00 local slot.
+      await expect.poll(() => patchBodies.length).toBe(1);
+      expect(
+        new Date(patchBodies[0] as string).toISOString(),
+        "dropping a strip draft must assign the day's 09:00 local slot",
+      ).toBe(expectedSlotIso);
+      await expect(chipInTarget).toBeVisible();
+
+      // The row itself: exact assigned instant AND the untouched status —
+      // a scheduled_at-only PATCH must not publish a draft.
+      const { db } = adminClient();
+      const rowState = async (): Promise<{ slot: string | null; status: string | null }> => {
+        const row = await db
+          .from("posts")
+          .select("scheduled_at,status")
+          .eq("id", probeId)
+          .single();
+        return {
+          slot: row.data?.scheduled_at ? new Date(row.data.scheduled_at).toISOString() : null,
+          status: row.data?.status ?? null,
+        };
+      };
+      await expect
+        .poll(rowState, { timeout: 20_000 })
+        .toEqual({ slot: expectedSlotIso, status: "draft" });
+
+      // Undo puts it back: a backlog SCHEDULING had no previous slot, so the
+      // undo is an UNSCHEDULE — scheduled_at back to null, never re-slot.
+      const banner = page.getByTestId("post-move-undo");
+      await expect(banner).toBeVisible({ timeout: 20_000 });
+      await expect(banner).toContainText(title);
+      await banner.getByRole("button", { name: /undo/i }).click();
+
+      await expect.poll(() => patchBodies.length).toBe(2);
+      expect(patchBodies[1], "undo must unschedule, not fabricate another slot").toBeNull();
+      await expect(stripChip).toBeVisible({ timeout: 20_000 });
+      await expect(chipInTarget).toHaveCount(0);
+      await expect(banner).toBeHidden();
+      await expect
+        .poll(rowState, { timeout: 20_000 })
+        .toEqual({ slot: null, status: "draft" });
+      expect(pageErrors, `page errors during drag:\n${pageErrors.join("\n")}`).toEqual([]);
+    } finally {
+      await deleteProbePost(probeId);
+    }
+  });
 });

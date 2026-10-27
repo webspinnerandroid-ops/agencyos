@@ -9,7 +9,7 @@
  */
 import { test, expect, type Page } from "@playwright/test";
 import fs from "fs";
-import { adminClient } from "./qa-fixtures";
+import { adminClient, gotoWithCompileRetry, requestWithCompileRetry } from "./qa-fixtures";
 
 /** Tenant + workspace the suite's session is actually browsing (from cookies). */
 function sessionIds(): { tenantId: string | null; workspaceId: string | null } {
@@ -126,12 +126,15 @@ test.describe("saas-qa-audit · responsive viewports", () => {
       const report: string[] = [];
 
       for (const target of PAGES) {
-        const res = await page.goto(`${BASE}${target.path}`, { waitUntil: "domcontentloaded" });
+        // Cold-compile hardened: a first-hit dashboard route in dev can
+        // compile longer than the 45s navigationTimeout, which used to fail
+        // the sweep — retry transport failure once with a longer timeout.
+        const res = await gotoWithCompileRetry(page, `${BASE}${target.path}`);
         await page.waitForTimeout(800);
         const overflow = await horizontalOverflow(page);
         const headingOk = (await page.getByRole("heading").first().textContent().catch(() => "")) ?? "";
-        report.push(`${target.path}: http=${res?.status()} overflow=${overflow}px heading="${headingOk.trim().slice(0, 40)}"`);
-        expect(res?.status(), `${target.path} status`).toBeLessThan(400);
+        report.push(`${target.path}: http=${res.status()} overflow=${overflow}px heading="${headingOk.trim().slice(0, 40)}"`);
+        expect(res.status(), `${target.path} status`).toBeLessThan(400);
         expect(overflow, `${target.path} overflows horizontally by ${overflow}px`).toBeLessThanOrEqual(2);
         expect(headingOk.length, `${target.path} has no heading`).toBeGreaterThan(0);
       }
@@ -572,6 +575,35 @@ test.describe("saas-qa-audit · calendar mechanics", () => {
     at: "first" | "last" = "first"
   ) => cellByDay(page, day, at).locator("div.bg-card", { hasText: title }).first();
 
+  // The calendar page's initial fetches (grid, backlog strip, campaign plans,
+  // clients) commit in separate React renders over the first ~3s: the
+  // campaign-plans card and the strip both mount content ABOVE the grid, so a
+  // gesture that starts before the last commit has painted can have its drop
+  // coordinates invalidated by a late layout shift (the instrumented DST run
+  // caught the plans card shifting the grid ≥2 rows 36ms into a drag).
+  // Product-side, every fetch path is buffered behind the drag-session
+  // freeze; test-side, don't start a gesture until the page has been
+  // DOM-quiet for a beat.
+  const waitCalendarSettled = (pageRef: Page) =>
+    pageRef.waitForFunction(
+      () => {
+        const w = window as unknown as {
+          __calSettled?: { installed: boolean; lastMut: number };
+        };
+        const state = (w.__calSettled ??= { installed: false, lastMut: performance.now() });
+        if (!state.installed) {
+          state.installed = true;
+          new MutationObserver(() => {
+            state.lastMut = performance.now();
+          }).observe(document.body, { childList: true, subtree: true });
+        }
+        return performance.now() - state.lastMut > 600;
+      },
+      undefined,
+      { timeout: 45_000, polling: 100 },
+    )
+      .catch(() => undefined); // a hung quiet-wait must not mask the real assertion below
+
   // HTML5 dragstart events are intermittently swallowed by Chromium when
   // gestures run back-to-back in CI: one missed dragstart leaves the chip
   // unmoved and every later assertion times out. Retry the gesture from the
@@ -695,6 +727,7 @@ test.describe("saas-qa-audit · calendar mechanics", () => {
       try {
         await page.setViewportSize({ width: 1440, height: 900 });
         await page.goto(`${BASE}/dashboard/calendar`, { waitUntil: "domcontentloaded" });
+        await waitCalendarSettled(page);
         const chip = chipIn(page, probeDayNo, "QA-AUDIT DST probe");
         await expect(chip).toBeVisible({ timeout: 90_000 });
 
@@ -732,6 +765,7 @@ test.describe("saas-qa-audit · calendar mechanics", () => {
       try {
         await page.setViewportSize({ width: 1440, height: 900 });
         await page.goto(`${BASE}/dashboard/calendar`, { waitUntil: "domcontentloaded" });
+        await waitCalendarSettled(page);
         const chip = chipIn(page, probeDayNo, "QA-AUDIT Undo probe");
         await expect(chip).toBeVisible({ timeout: 90_000 });
 
@@ -782,6 +816,7 @@ test.describe("saas-qa-audit · calendar mechanics", () => {
       try {
         await page.setViewportSize({ width: 1440, height: 900 });
         await page.goto(`${BASE}/dashboard/calendar`, { waitUntil: "domcontentloaded" });
+        await waitCalendarSettled(page);
         const chip = chipIn(page, probeDayNo, "QA-AUDIT double-drop probe");
         await expect(chip).toBeVisible({ timeout: 90_000 });
 
@@ -892,6 +927,7 @@ test.describe("saas-qa-audit · calendar mechanics", () => {
       try {
         await page.setViewportSize({ width: 1440, height: 900 });
         await page.goto(`${BASE}/dashboard/calendar`, { waitUntil: "domcontentloaded" });
+        await waitCalendarSettled(page);
 
         // Move to the staged month: a click before hydration is a silent
         // no-op, so click the arrow again until the caption verifiably changed
@@ -1007,6 +1043,7 @@ test.describe("saas-qa-audit · calendar mechanics", () => {
       try {
         await page.setViewportSize({ width: 1440, height: 900 });
         await page.goto(`${BASE}/dashboard/calendar`, { waitUntil: "domcontentloaded" });
+        await waitCalendarSettled(page);
 
         const strip = page.getByTestId("unscheduled-backlog");
         const stripChip = strip.locator("div.bg-card", { hasText: title });
@@ -1115,6 +1152,131 @@ test.describe("saas-qa-audit · calendar mechanics", () => {
         await deleteProbePost(probeId);
       }
     });
+
+    test("double drop on the same day: exactly one schedule PATCH wins", async ({ page }) => {
+      test.setTimeout(240_000);
+      const title = "QA-AUDIT backlog double-drop probe";
+      const probeId = await createProbeDraft(title);
+      try {
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await page.goto(`${BASE}/dashboard/calendar`, { waitUntil: "domcontentloaded" });
+        await waitCalendarSettled(page);
+
+        const strip = page.getByTestId("unscheduled-backlog");
+        const stripChip = strip.locator("div.bg-card", { hasText: title });
+        await expect(stripChip).toBeVisible({ timeout: 90_000 });
+
+        // Anchor on the day ATTRIBUTE (same as the undo test above): the view
+        // may auto-jump, and every rendered month owns exactly one "-15" key.
+        const targetKey = String(
+          await page.locator('div[data-drop-day$="-15"]').getAttribute("data-drop-day")
+        );
+        const targetCell = page.locator(`div[data-drop-day="${targetKey}"]`);
+        const off = denverOffHrs(`${targetKey}T12:00:00Z`);
+        const expectedSlotIso = new Date(
+          Date.parse(`${targetKey}T09:00:00Z`) - off * 3_600_000
+        ).toISOString();
+        const chipInTarget = targetCell.locator("div.bg-card", { hasText: title }).first();
+
+        // Hold the FIRST schedule PATCH in its response gate: both repeat
+        // gestures below then act while a schedule write is still unresolved —
+        // the exact window where a second, racing PATCH could strand the row
+        // or double-write.
+        const patchBodies: Array<string | null> = [];
+        let releaseFirst!: () => void;
+        const firstHeld = new Promise<void>((resolve) => { releaseFirst = resolve; });
+        await page.route(`**/api/posts/${probeId}`, async (route) => {
+          const req = route.request();
+          if (req.method() !== "PATCH") return route.continue();
+          patchBodies.push(
+            ((req.postDataJSON() as { scheduled_at?: string | null }) ?? {}).scheduled_at ?? null
+          );
+          if (patchBodies.length === 1) {
+            await firstHeld;
+            await new Promise((r) => setTimeout(r, 400));
+          }
+          await route.continue();
+        });
+
+        // Gesture 1: strip draft → the day (retriable; see the undo test).
+        await expect
+          .poll(
+            async () => {
+              if ((await chipInTarget.count()) > 0) return true;
+              const current = page
+                .locator("div.bg-card", { hasText: title })
+                .filter({ visible: true })
+                .first();
+              if ((await current.count()) === 0) return false;
+              try {
+                await current.dragTo(targetCell.locator("span").first(), { timeout: 10_000 });
+              } catch {
+                // The gesture never started; the poll re-tries from wherever the chip is.
+              }
+              return (await chipInTarget.count()) > 0;
+            },
+            { timeout: 30_000, intervals: [500], message: `drop of "${title}" never landed on ${targetKey}` }
+          )
+          .toBe(true);
+        await expect.poll(() => patchBodies.length).toBe(1);
+
+        // Repeat drop (a): a REAL gesture. The chip is already on the grid on
+        // the target day, so re-dropping it onto the SAME day runs the
+        // "own-day drop is a no-op" path — no second PATCH while the first
+        // resolves.
+        await page
+          .locator("div.bg-card", { hasText: title })
+          .filter({ visible: true })
+          .first()
+          .dragTo(targetCell.locator("span").first(), { timeout: 10_000 })
+          .catch(() => undefined); // a swallowed gesture is a no-op either way
+
+        // Repeat drop (b): a stray native drop with no drag session behind it
+        // (the Chromium flake the pointer fallback exists for). The drop
+        // handler must ignore a gesture-less drop.
+        await page.evaluate((key: string) => {
+          const cell = document.querySelector(`div[data-drop-day="${key}"]`);
+          cell?.dispatchEvent(
+            new DragEvent("drop", { bubbles: true, cancelable: true })
+          );
+        }, targetKey);
+
+        await page.waitForTimeout(900);
+        expect(
+          patchBodies.length,
+          `same-day double drop re-fired the schedule PATCH (bodies: ${patchBodies.join(", ")})`
+        ).toBe(1);
+
+        releaseFirst();
+        await page.waitForTimeout(800);
+        expect(
+          patchBodies.length,
+          "the completed window re-fired the schedule PATCH after release"
+        ).toBe(1);
+
+        // Final state: the ONE write assigned the 09:00 slot AND left the
+        // status untouched (no self-publish). The chip is only on the grid.
+        const { db } = adminClient();
+        const rowState = async (): Promise<{ slot: string | null; status: string | null }> => {
+          const row = await db
+            .from("posts")
+            .select("scheduled_at,status")
+            .eq("id", probeId)
+            .single();
+          return {
+            slot: row.data?.scheduled_at ? new Date(row.data.scheduled_at).toISOString() : null,
+            status: row.data?.status ?? null,
+          };
+        };
+        await expect
+          .poll(rowState, { timeout: 20_000 })
+          .toEqual({ slot: expectedSlotIso, status: "draft" });
+        await expect(chipInTarget).toBeVisible();
+        await expect(stripChip).toHaveCount(0);
+      } finally {
+        await deleteProbePost(probeId);
+      }
+    });
   });
 });
 
@@ -1160,10 +1322,11 @@ test.describe("saas-qa-audit · form validation states", () => {
   });
 
   test("form-only endpoints answer 415 (not 500) when a JSON body is posted", async ({ request }) => {
-    const res = await request.post("/api/content-map", {
+    // Cold-compile hardened: the first hit of the route compiles it in dev.
+    const res = await requestWithCompileRetry(request, "/api/content-map", {
+      method: "POST",
       data: { file: "not-a-file" },
       headers: { "content-type": "application/json" },
-      timeout: 90_000, // first hit compiles the route in dev
     });
     expect(res.status(), await res.text()).toBe(415);
   });

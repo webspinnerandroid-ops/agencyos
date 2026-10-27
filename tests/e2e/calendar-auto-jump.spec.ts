@@ -24,6 +24,18 @@
  *      (another client's current-month proposal can't keep the view put),
  *      the OTHER client's chip stays hidden even inside the very month the
  *      view renders, and only the probe's attributed chip shows.
+ *   6. The CREATOR path: a plan seeded from a sold SEO proposal via POST
+ *      /api/campaign-plans/from-proposal must inherit the proposal's
+ *      client_id (asserted in the DB, not staged rows), and a client-
+ *      filtered calendar auto-jumps onto the seeded plan's earliest month
+ *      with its topic rendered as a proposed chip.
+ *
+ * Case-6 history: the proposal path seeds research milestone items
+ * (kind: "research"), which 046's re-tightened campaign_plan_items_kind_check
+ * (blog/social/website only) rejected — every POST
+ * /api/campaign-plans/from-proposal failed with "violates check constraint
+ * campaign_plan_items_kind_check". Migration 115 re-admits 'research'; the
+ * live DB carries it, so this case runs green.
  *
  * Runs against a disposable QA-AUDIT tenant (qa-fixtures) with a real signed-in
  * fixture user — no reliance on the dev session or on whatever posts happen to
@@ -41,6 +53,7 @@ import {
   adminClient,
   createFixtures,
   destroyFixtures,
+  requestWithCompileRetry,
   type QaFixtures,
 } from "./qa-fixtures";
 
@@ -53,6 +66,9 @@ const PROPOSED_TOPIC = "QA-AUDIT auto-jump proposed topic";
 const PROPOSED_FILTERED_TOPIC = "QA-AUDIT auto-jump scoped proposed topic";
 const OTHER_CURRENT_TOPIC = "QA-AUDIT auto-jump other-client current topic";
 const OTHER_FUTURE_TOPIC = "QA-AUDIT auto-jump other-client future topic";
+// Case 6 (creator path): the sold-proposal tier a plan is seeded from.
+const PROPOSAL_TIER = "QA-AUDIT auto-jump attributed tier";
+const PROPOSAL_TOPIC = "QA-AUDIT auto-jump proposal-path topic";
 
 /** Same cookie the app's SSR client reads: sb-<project-ref>-auth-token. */
 function sessionCookie(url: string, baseURL: string, session: unknown) {
@@ -590,6 +606,159 @@ test("a client-filtered calendar hides another client's proposed chip, and the j
     await todayDb.from("campaign_plans").delete().eq("id", plan.data!.id);
     if (otherClientId) await todayDb.from("clients").delete().eq("id", otherClientId);
     if (probeClientId) await todayDb.from("clients").delete().eq("id", probeClientId);
+  }
+
+  await page.close();
+});
+
+test("a proposal-seeded plan attributes to the proposal's client — the scoped calendar jumps to its earliest month", async () => {
+  // The CREATOR path behind the service-role-staged rows above: a plan
+  // seeded from a sold SEO proposal (/api/campaign-plans/from-proposal)
+  // must inherit the seo_campaigns row's client_id, so the proposal's
+  // items land under that client's calendar filter. The tests above write
+  // campaign_plans and campaign_plan_items directly, so nothing proves the
+  // write side — this test drives the real route end to end: create a
+  // client, sell it a tier, POST the route, and (a) the created plan
+  // carries that client_id in the DB, (b) a client-filtered calendar
+  // auto-jumps onto the plan's EARLIEST proposed month and renders the
+  // proposal's own topic chip there.
+  const page = await ctx.newPage();
+  let planId: string | null = null;
+  let clientRowId: string | null = null;
+
+  // Frozen-still precondition (serial suite): no posts on disk, so every
+  // month key comes from proposals only.
+  const swept = await todayDb.from("posts").delete().eq("tenant_id", fx.tenantId);
+  expect(swept.error).toBeNull();
+
+  // The attribution target — the client the proposal is sold to.
+  const client = await todayDb
+    .from("clients")
+    .insert({ tenant_id: fx.tenantId, workspace_id: fx.workspaceId, name: `${fx.tag} Proposal Path Client` })
+    .select("id")
+    .single<{ id: string }>();
+  expect(client.error).toBeNull();
+  clientRowId = client.data!.id;
+
+  // The sold proposal: one launch month with six blog pieces. The tier's
+  // cadence (weekly) dates them from the next Monday onward — the landing
+  // month is read from the DB after the route runs, never assumed.
+  const proposal = await todayDb
+    .from("seo_campaigns")
+    .insert({
+      tenant_id: fx.tenantId,
+      workspace_id: fx.workspaceId,
+      client_id: clientRowId!,
+      url: "https://example.com",
+      tier_name: PROPOSAL_TIER,
+      tier_price: 1900,
+      status: "proposed",
+      campaign_json: {
+        tierName: PROPOSAL_TIER,
+        tierPrice: 1900,
+        executiveSummary: "Auto-jump proposal-path probe.",
+        contentCalendar: [
+          {
+            month: 1,
+            focusArea: "Attribution",
+            contentPieces: Array.from({ length: 6 }, () => ({
+              type: "blog_post",
+              title: PROPOSAL_TOPIC,
+              targetKeyword: "attribution probe",
+            })),
+            technicalTasks: [],
+            linkBuildingTasks: [],
+          },
+        ],
+      },
+    })
+    .select("id")
+    .single<{ id: string }>();
+  expect(proposal.error).toBeNull();
+
+  try {
+    // First page load provisions the middleware-set x-tenant-id (and other
+    // session) cookies the API routes require — a bare POST from a fresh
+    // context fails on "x-tenant-id cookie is missing".
+    await page.goto(`${BASE}/dashboard/calendar`, { waitUntil: "domcontentloaded" });
+
+    // Drive the real creator route with the signed-in fixture session
+    // (page.request shares the browser context's cookie jar).
+    // Cold-compile hardened: this can be the run's first hit of the route.
+    const resp = await requestWithCompileRetry(page.request, `${BASE}/api/campaign-plans/from-proposal`, {
+      method: "POST",
+      data: { campaignId: proposal.data!.id, workspaceId: fx.workspaceId },
+    });
+    const body = (await resp.json()) as {
+      success?: boolean;
+      planId?: string;
+      error?: string;
+    };
+    expect(
+      resp.ok(),
+      `route failed: ${resp.status()} ${JSON.stringify(body)}`
+    ).toBe(true);
+    expect(body.error).toBeUndefined();
+    expect(body.success).toBe(true);
+    planId = body.planId ?? null;
+    expect(planId).toBeTruthy();
+
+    // (a) Write-side contract: the seeded plan is attributed to the
+    // proposal's client — without this, no client filter can claim it.
+    const planRow = await todayDb
+      .from("campaign_plans")
+      .select("client_id")
+      .eq("id", planId!)
+      .single<{ client_id: string | null }>();
+    expect(planRow.error).toBeNull();
+    expect(planRow.data!.client_id).toBe(clientRowId);
+
+    // The expected landing month = the plan's EARLIEST proposed item month
+    // (weekdays forward from today, so never in the past). If that month
+    // happens to be the current one, the re-armed scan picks it too —
+    // either way the view must end on exactly this month.
+    const items = await todayDb
+      .from("campaign_plan_items")
+      .select("due_date")
+      .eq("plan_id", planId!)
+      .order("due_date", { ascending: true })
+      .returns<{ due_date: string }[]>();
+    expect(items.error).toBeNull();
+    const [y, m, d] = items.data![0].due_date.split("-").map(Number);
+    const expectedHeading = format(new Date(y, m - 1, 1), "MMMM yyyy");
+
+    // (b) The scoped calendar's auto-jump: reload to a clean page state,
+    // select the plan's client (re-arms the scan; possible only because of
+    // the stamped client_id), and the view lands on the plan's earliest
+    // month.
+    await page.goto(`${BASE}/dashboard/calendar`, { waitUntil: "domcontentloaded" });
+    const clientSelect = page.locator("select").filter({ hasText: "All Clients" }).first();
+    await clientSelect.selectOption(clientRowId);
+
+    await expect(calendarHeading(page, expectedHeading)).toHaveText(expectedHeading, {
+      timeout: 60_000,
+    });
+
+    // The proposal's own topic renders in that month as a dashed
+    // "Proposed" chip — the plan is visible through the client filter.
+    const chip = page
+      .locator("button")
+      .filter({ hasText: PROPOSAL_TOPIC })
+      .filter({ visible: true });
+    await expect(chip.first()).toBeVisible({ timeout: 60_000 });
+    await expect(chip.first()).toContainText("Proposed");
+  } finally {
+    // Sweep on failure too: proposal-seeded rows in production DB must not
+    // outlive a failed run. Items cascade, but delete explicitly in FK
+    // order (items → plan; the campaign and the client are independent).
+    if (planId) {
+      await todayDb.from("campaign_plan_items").delete().eq("plan_id", planId);
+      await todayDb.from("campaign_plans").delete().eq("id", planId);
+    }
+    if (proposal.data?.id) {
+      await todayDb.from("seo_campaigns").delete().eq("id", proposal.data.id);
+    }
+    if (clientRowId) await todayDb.from("clients").delete().eq("id", clientRowId);
   }
 
   await page.close();

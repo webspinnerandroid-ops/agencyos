@@ -401,6 +401,139 @@ test.describe("saas-qa-audit · calendar mechanics", () => {
     }
   });
 
+  test("desktop week strip: HTML5 dragTo reschedules to the adjacent day", async ({ page }) => {
+    // 16:00Z is 10:00 America/Denver on MDT days — always inside the week the
+    // strip opens on, so the probe renders without navigating weeks.
+    const at = new Date();
+    at.setUTCHours(16, 0, 0, 0);
+    const probeId = await createProbePost("QA-AUDIT week drag probe", at.toISOString());
+    try {
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.goto(`${BASE}/dashboard/calendar`, { waitUntil: "domcontentloaded" });
+
+      // Week-strip cells carry the full Denver-local date on [data-drop-day]
+      // (the month-grid helpers match on `min-h-[110px]` cells the strip does
+      // not use).
+      const weekCell = (dateKey: string) => page.locator(`[data-drop-day="${dateKey}"]`);
+      const chipInWeek = (dateKey: string) =>
+        weekCell(dateKey).locator("div.bg-card", { hasText: "QA-AUDIT week drag probe" }).first();
+
+      // Denver-local date keys (the browser renders America/Denver; the spec
+      // process may not).
+      const todayKey = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/Denver", year: "numeric", month: "2-digit", day: "2-digit",
+      }).format(new Date());
+      const utcOfKey = (k: string) => {
+        const [y, mo, d] = k.split("-").map(Number);
+        return Date.UTC(y, mo - 1, d);
+      };
+      const dow = new Date(utcOfKey(todayKey)).getUTCDay();
+      // Stay inside the rendered 7-day strip: Sun–Fri drop on the next day,
+      // Saturday on the previous one.
+      const targetKey = new Date(
+        utcOfKey(todayKey) + (dow === 6 ? -86_400_000 : +86_400_000)
+      ).toISOString().slice(0, 10);
+
+      // Wait for hydration + posts before toggling: a click on a page whose
+      // React handlers are not attached is a silent no-op.
+      const firstChip = page
+        .locator("div.bg-card", { hasText: "QA-AUDIT week drag probe" })
+        .filter({ visible: true })
+        .first();
+      await expect(firstChip).toBeVisible({ timeout: 90_000 });
+
+      // Switch into the week strip and VERIFY it took: week rows carry a
+      // `w-12` label column the month grid never renders. Re-click until the
+      // strip owns the DOM.
+      await expect
+        .poll(
+          async () => {
+            const onWeek =
+              (await page.locator(`[data-drop-day="${todayKey}"] div.w-12`).count()) > 0;
+            if (!onWeek) {
+              await page
+                .getByRole("group", { name: "Calendar view" })
+                .getByRole("button", { name: "Week" })
+                .click()
+                .catch(() => undefined);
+            }
+            return onWeek;
+          },
+          { timeout: 30_000, intervals: [1_000], message: "the calendar never switched to the week strip" },
+        )
+        .toBe(true);
+
+      await expect(chipInWeek(todayKey)).toBeVisible({ timeout: 90_000 });
+
+      const pageErrors: string[] = [];
+      page.on("pageerror", (err) => pageErrors.push(err.message));
+
+      const patchBodies: string[] = [];
+      await page.route(`**/api/posts/${probeId}`, async (route) => {
+        if (route.request().method() === "PATCH") {
+          patchBodies.push(
+            ((route.request().postDataJSON() as { scheduled_at?: string }) ?? {}).scheduled_at ?? ""
+          );
+        }
+        await route.continue();
+      });
+
+      // Same swallowed-gesture retry as the month-grid drags: re-attempt the
+      // gesture until the chip verifiably lands on the target row.
+      await expect
+        .poll(
+          async () => {
+            if ((await chipInWeek(targetKey).count()) > 0) return true;
+            const current = page
+              .locator("div.bg-card", { hasText: "QA-AUDIT week drag probe" })
+              .filter({ visible: true })
+              .first();
+            if ((await current.count()) === 0) return false;
+            try {
+              await current.dragTo(weekCell(targetKey), { timeout: 10_000 });
+            } catch {
+              // The gesture never started; the poll re-runs.
+            }
+            return (await chipInWeek(targetKey).count()) > 0;
+          },
+          { timeout: 30_000, intervals: [500], message: `the week-strip drop never landed on ${targetKey}` },
+        )
+        .toBe(true);
+
+      // Mirror of ContentCalendar.rescheduleToDay: the chip keeps the wall
+      // hours it renders locally and is rebased onto the target date with the
+      // offset in force THERE. Read both through Intl — the spec process is
+      // not forced to Denver. (The target day's offset is the one 10:00 wall
+      // sees on every adjacent pair; Denver's switches at 02:00 local.)
+      const probeParts = new Intl.DateTimeFormat("en-GB", {
+        timeZone: "America/Denver", hourCycle: "h23", hour: "2-digit", minute: "2-digit",
+      }).formatToParts(at);
+      const wallH = Number(probeParts.find((p) => p.type === "hour")!.value);
+      const wallM = Number(probeParts.find((p) => p.type === "minute")!.value);
+      const [ty, tm, td] = targetKey.split("-").map(Number);
+      const targetOffName = new Intl.DateTimeFormat("en-US", {
+        timeZone: "America/Denver", timeZoneName: "shortOffset",
+      })
+        .formatToParts(new Date(Date.UTC(ty, tm - 1, td, 12, 0)))
+        .find((p) => p.type === "timeZoneName")?.value;
+      const offMatch = /GMT([+-]?\d{1,2})/.exec(targetOffName ?? "");
+      expect(offMatch, `unparsable zone name ${targetOffName}`).not.toBeNull();
+      // normalizeScheduledAt: utcMs = Date.UTC(wall) + getTimezoneOffset*60k;
+      // getTimezoneOffset is (UTC − wall), opposite the GMT name's sign.
+      const expected = new Date(
+        Date.UTC(ty, tm - 1, td, wallH, wallM) - Number(offMatch![1]) * 3_600_000
+      ).toISOString();
+
+      await expect.poll(() => patchBodies.length).toBeGreaterThan(0);
+      expect(new Date(patchBodies[0]).toISOString()).toBe(expected);
+      // The chip itself lands on the target row.
+      await expect(chipInWeek(targetKey)).toBeVisible();
+      expect(pageErrors, `page errors during drag:\n${pageErrors.join("\n")}`).toEqual([]);
+    } finally {
+      await deleteProbePost(probeId);
+    }
+  });
+
   test("post chips on the month grid identify their post", async ({ page }) => {
     // /api/posts re-shapes rows into `post.content`, so the chip excerpt has a
     // title to render instead of falling back to "No content".

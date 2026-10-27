@@ -59,6 +59,12 @@ export default async function SitePage({
   const siteName = site?.site_name || "My Site";
   const tagline = site?.tagline || "";
   const presetCss = THEME_PRESETS[site?.theme_preset as string]?.css ?? THEME_PRESETS.clean.css;
+  // The dark preset paints the shell/header/footer, but the rendered page runs
+  // under the app's root layout — its <body> keeps the light dashboard tokens,
+  // leaving white margins around the dark content. Extend the dark preset to
+  // darken the page body as well.
+  const bodyCss =
+    site?.theme_preset === "dark" ? "html body{background:#0f1115 !important}" : "";
   const globalCss = site?.global_css || "";
 
   const headerBlocks = (Array.isArray(site?.header_blocks) ? site.header_blocks : []) as CmsBlock[];
@@ -96,9 +102,9 @@ export default async function SitePage({
       <head>
         <title>{page.title} — {siteName}</title>
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <style dangerouslySetInnerHTML={{ __html: `${CMS_STYLES}\n${CMS_HEADER_FOOTER_STYLES}\n${presetCss}\n${globalCss}\n${renderTokenStyles(page.tokens)}` }} />
+        <style dangerouslySetInnerHTML={{ __html: `${CMS_STYLES}\n${CMS_HEADER_FOOTER_STYLES}\n${presetCss}\n${bodyCss}\n${globalCss}\n${renderTokenStyles(page.tokens)}` }} />
       </head>
-      <body style={{ margin: 0, background: "#fff" }}>
+      <body style={{ margin: 0 }}>
         {/* Sitewide header */}
         <header className="cms-site-header">
           <div>

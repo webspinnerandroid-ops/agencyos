@@ -14,7 +14,7 @@
  */
 import { test, expect, type BrowserContext, type APIRequestContext } from "@playwright/test";
 import { createClient } from "@supabase/supabase-js";
-import { adminClient, createFixtures, destroyFixtures, type QaFixtures } from "./qa-fixtures";
+import { adminClient, createFixtures, destroyFixtures, gotoWithCompileRetry, requestWithCompileRetry, type QaFixtures } from "./qa-fixtures";
 
 test.describe.configure({ mode: "serial" });
 
@@ -70,7 +70,8 @@ test.afterAll(async () => {
 });
 
 test("client session is admitted to the portal", async () => {
-  const res = await api.get("/portal/dashboard");
+  // Cold-compile hardened: these are the suite's first route hits.
+  const res = await requestWithCompileRetry(api, "/portal/dashboard");
   expect(res.status(), "portal dashboard must stay reachable for clients").toBeLessThan(400);
 });
 
@@ -78,7 +79,9 @@ test("client session is bounced off agency pages to the portal", async () => {
   // A page from the CLIENT context — the default `page` fixture carries the
   // suite's super-admin storageState and would prove nothing here.
   const page = await ctx.newPage();
-  await page.goto("/dashboard/clients", { waitUntil: "domcontentloaded" });
+  // Cold-compile hardened: the redirect target may compile on this first
+  // hit (45s navTimeout would misread that as status 0).
+  await gotoWithCompileRetry(page, "/dashboard/clients");
   expect(page.url()).toContain("/portal/dashboard");
   await page.close();
 });
@@ -107,19 +110,22 @@ test("client session cannot mutate agency data", async () => {
 });
 
 test("client session keeps its allowlisted self-service endpoints", async () => {
-  const me = await api.get("/api/me");
+  // Cold-compile hardened: /api/me and /api/notifications can be this
+  // suite's first hits of those routes.
+  const me = await requestWithCompileRetry(api, "/api/me");
   expect(me.status()).toBe(200);
   const body = (await me.json()) as { role?: string };
   expect(body.role).toBe("client");
 
-  const notifications = await api.get("/api/notifications?limit=5");
+  const notifications = await requestWithCompileRetry(api, "/api/notifications?limit=5");
   expect(notifications.status(), "the portal notification bell must keep working").toBe(200);
 });
 
 test("agency session is unaffected (positive control)", async ({ request }) => {
-  const res = await request.get("/api/clients");
+  // Cold-compile hardened: /api/clients is this suite's first hit of the route.
+  const res = await requestWithCompileRetry(request, "/api/clients");
   expect(res.status(), "the gate must not touch agency staff").toBe(200);
 
-  const posts = await request.get("/api/posts");
+  const posts = await requestWithCompileRetry(request, "/api/posts");
   expect(posts.status()).toBe(200);
 });

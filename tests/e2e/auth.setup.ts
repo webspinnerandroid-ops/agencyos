@@ -1,5 +1,6 @@
 import { test as setup } from "@playwright/test";
 import fs from "fs";
+import { requestWithCompileRetry } from "./qa-fixtures";
 
 /**
  * Audit setup project — ensures exactly one working authenticated session.
@@ -61,7 +62,8 @@ setup("authenticate once", async ({ page }) => {
   // ---- 2. Fresh sign-in through the real UI ------------------------------
   for (let attempt = 0; attempt < 2 && !authenticated; attempt++) {
     if (attempt > 0) await page.waitForTimeout(30_000);
-    const mint = await page.request.post(`${BASE}/api/auth/dev-login`);
+    // Cold-compile hardened: dev-login can compile on this suite's first hit.
+    const mint = await requestWithCompileRetry(page.request, `${BASE}/api/auth/dev-login`, { method: "POST" });
     if (mint.status() === 404) break; // disabled — no point retrying
     if (!mint.ok()) continue;
     await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded" });

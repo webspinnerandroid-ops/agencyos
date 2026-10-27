@@ -182,7 +182,9 @@ jobs:
   # 6. E2E technical & security audit (Playwright)
   #    `npx playwright test` sweeps every spec under tests/e2e on every
   #    push — including the calendar drag-and-drop + undo mechanics at the
-  #    Europe/Berlin DST boundary (saas-qa-ui, DST boundary describe) and
+  #    Europe/Berlin DST boundary (saas-qa-ui, DST boundary describe), the
+  #    calendar-ics-export month-file probe (folded UTF-8 titles must be
+  #    round-trip safe in RFC 5545 readers), and
   #    the MobileNav modal-drawer contract (mobile-drawer-semantics, run in
   #    the dedicated chromium-mobile phone-emulation project). New spec
   #    files dropped into tests/e2e are picked up automatically.

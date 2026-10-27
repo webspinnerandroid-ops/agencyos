@@ -106,3 +106,6 @@ playwright-report/
 # Supabase in-flight manual SQL — scratch until it becomes a numbered
 # migration in supabase/migrations/. Kept on disk, never committed.
 /supabase/pending-manual*.sql
+
+# QA-AUDIT kill-safe sweep journal {pid -> fixture tenant}
+.qa-audit-runs.json

@@ -19,6 +19,7 @@ import {
   count,
   createFixtures,
   destroyFixtures,
+  requestWithCompileRetry,
   tenantSession,
   type QaFixtures,
 } from "./qa-fixtures";
@@ -101,25 +102,31 @@ test.describe("saas-qa-audit · DB integrity & tenancy", () => {
 
   test("cross-tenant API probes from another tenant cannot read or mutate this tenant's objects", async ({ request }) => {
     // `request` carries the super-admin session (a different tenant).
-    const clients = await request.get("/api/clients");
+    // Cold-compile hardened: these are the suite's first API hits — a dev
+    // compile outlasting the probe's timeout read as a transport throw.
+    const clients = await requestWithCompileRetry(request, "/api/clients");
     expect(clients.status()).toBe(200);
     const clientsBody = (await clients.json()) as { clients?: Array<{ id: string }> };
     expect(clientsBody.clients?.map((c) => c.id) ?? []).not.toContain(fx.clientId);
 
-    const posts = await request.get(`/api/posts?clientId=${fx.clientId}`);
+    const posts = await requestWithCompileRetry(request, `/api/posts?clientId=${fx.clientId}`);
     expect(posts.status()).toBe(200);
     const postsBody = (await posts.json()) as Array<{ id: string }> | { posts?: Array<{ id: string }> };
     const postIds = Array.isArray(postsBody) ? postsBody.map((p) => p.id) : (postsBody.posts ?? []).map((p) => p.id);
     expect(postIds).not.toContain(fx.postId);
 
-    const map = await request.get(`/api/content-map?clientId=${fx.clientId}`);
+    const map = await requestWithCompileRetry(request, `/api/content-map?clientId=${fx.clientId}`);
     expect(map.status()).toBe(200);
     const mapBody = (await map.json()) as { items?: Array<{ id: string }> };
     expect(mapBody.items?.map((i) => i.id) ?? []).not.toContain(fx.mapItemId);
 
-    const patch = await request.patch(`/api/posts/${fx.postId}`, { data: { status: "published" } });
+    // Cold-compile hardened: these can be the suite's first hits of /api/posts/[id].
+    const patch = await requestWithCompileRetry(request, `/api/posts/${fx.postId}`, {
+      method: "PATCH",
+      data: { status: "published" },
+    });
     expect(patch.status()).toBe(404);
-    const del = await request.delete(`/api/posts/${fx.postId}`);
+    const del = await requestWithCompileRetry(request, `/api/posts/${fx.postId}`, { method: "DELETE" });
     expect(del.status()).toBe(404);
 
     const row = await db.from("posts").select("status").eq("id", fx.postId).single();
@@ -221,7 +228,11 @@ test.describe("saas-qa-audit · AI content engine", () => {
       storageState: { cookies: [], origins: [] },
       timeout: 60_000,
     });
-    const res = await anon.post("/api/generate-content", { data: { topic: "unauth probe topic" } });
+    // Cold-compile hardened: this is the suite's first hit of the route.
+    const res = await requestWithCompileRetry(anon, "/api/generate-content", {
+      method: "POST",
+      data: { topic: "unauth probe topic" },
+    });
     expect(res.status()).toBe(401);
     await anon.dispose();
   });
@@ -230,7 +241,16 @@ test.describe("saas-qa-audit · AI content engine", () => {
     test.setTimeout(120_000);
     const statuses: number[] = [];
     for (let i = 0; i < 11; i++) {
-      const res = await request.post("/api/generate-content", { data: { topic: "x" } }); // too short
+      // Cold-compile hardened for the FIRST hit only: a retry inside the loop
+      // would spend a second request against the server-side limiter budget
+      // and shift the 429's expected position.
+      const res =
+        i === 0
+          ? await requestWithCompileRetry(request, "/api/generate-content", {
+              method: "POST",
+              data: { topic: "x" },
+            })
+          : await request.post("/api/generate-content", { data: { topic: "x" } }); // too short
       statuses.push(res.status());
     }
     expect(statuses.slice(0, 5).every((s) => s === 400)).toBeTruthy();

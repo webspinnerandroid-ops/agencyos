@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { getTenantId } from "@/lib/auth";
+import { parseJsonBody } from "@/lib/api-validate";
+import { sequenceCreateSchema } from "@/lib/validations";
 
 function getServiceSupabase() {
   return createClient(
@@ -31,20 +33,18 @@ export async function POST(request: NextRequest) {
   try {
     const tenantId = await getTenantId();
     const supabase = getServiceSupabase();
-    const body = await request.json();
-
-    if (!body.name || !body.steps) {
-      return NextResponse.json({ error: "name and steps are required" }, { status: 400 });
-    }
+    const body = await parseJsonBody(request, sequenceCreateSchema);
+    if (!body.ok) return body.response;
+    const { name, description, steps, isActive } = body.data;
 
     const { data, error } = await supabase
       .from("sequences")
       .insert({
         tenant_id: tenantId,
-        name: body.name,
-        description: body.description ?? null,
-        steps: body.steps,
-        is_active: body.isActive ?? false,
+        name,
+        description: description ?? null,
+        steps,
+        is_active: isActive ?? false,
       })
       .select("id")
       .single();

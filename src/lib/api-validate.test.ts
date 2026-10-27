@@ -16,6 +16,10 @@ import {
   notificationsMarkReadSchema,
   notificationsReadLinkSchema,
   postUpdateSchema,
+  sequenceCreateSchema,
+  sequenceEnrollSchema,
+  sequenceStepSchema,
+  sequenceUpdateSchema,
 } from "./validations";
 
 describe("validateJson — emptyAsEmptyObject courtesies", () => {
@@ -330,6 +334,113 @@ describe("postRegenerateSchema", () => {
   it("rejects a non-string and an over-long feedback value", () => {
     expect(postRegenerateSchema.safeParse({ feedback: 5 }).success).toBe(false);
     expect(postRegenerateSchema.safeParse({ feedback: "x".repeat(2001) }).success).toBe(false);
+  });
+});
+
+describe("sequenceStepSchema", () => {
+  const valid = { channel: "email", delay_days: 3, body_template: "Hey {{first_name}}" };
+
+  it("accepts the step shape processSequenceStep actually consumes", () => {
+    expect(sequenceStepSchema.safeParse(valid).success).toBe(true);
+    // Email step with a subject; SMS step with no delay (route defaults 0).
+    expect(
+      sequenceStepSchema.safeParse({
+        channel: "email",
+        subject: "Quick follow up",
+        body_template: "Template prose",
+      }).success
+    ).toBe(true);
+    expect(sequenceStepSchema.safeParse({ channel: "sms", body_template: "x" }).success).toBe(true);
+  });
+
+  it("rejects an out-of-enum channel (previously a silently skipped step)", () => {
+    expect(sequenceStepSchema.safeParse({ ...valid, channel: "push" }).success).toBe(false);
+  });
+
+  it("rejects an empty template, an impossible delay, and a non-object step", () => {
+    expect(sequenceStepSchema.safeParse({ channel: "email", body_template: "" }).success).toBe(false);
+    expect(sequenceStepSchema.safeParse({ ...valid, delay_days: -1 }).success).toBe(false);
+    expect(sequenceStepSchema.safeParse({ ...valid, delay_days: 366 }).success).toBe(false);
+    expect(sequenceStepSchema.safeParse("send it").success).toBe(false);
+  });
+});
+
+describe("sequenceCreateSchema", () => {
+  it("accepts the create shape the sequence API sends, name trimmed", () => {
+    const parsed = sequenceCreateSchema.safeParse({
+      name: "  Cold outbound  ",
+      description: "3-touch email cadence",
+      steps: [
+        { channel: "email", delay_days: 0, subject: "Hi", body_template: "{{first_name}}" },
+        { channel: "sms", delay_days: 2, body_template: "Checking in" },
+      ],
+      isActive: false,
+    });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.name).toBe("Cold outbound");
+  });
+
+  it("keeps a steps-only name/description-free body valid, and an empty steps array", () => {
+    expect(sequenceCreateSchema.safeParse({ name: "Sequenced", steps: [] }).success).toBe(true);
+  });
+
+  it("rejects the old lenient contracts the schema deliberately tightens", () => {
+    // Missing name or steps was previously a manual truthiness 400.
+    expect(sequenceCreateSchema.safeParse({ steps: [] }).success).toBe(false);
+    expect(sequenceCreateSchema.safeParse({ name: "Sequenced" }).success).toBe(false);
+    // Garbage steps were previously stored verbatim.
+    expect(sequenceCreateSchema.safeParse({ name: "Sequenced", steps: "three emails" }).success).toBe(false);
+    expect(
+      sequenceCreateSchema.safeParse({ name: "Sequenced", steps: [{ body_template: "x" }] }).success
+    ).toBe(false);
+    // Name/description caps.
+    expect(sequenceCreateSchema.safeParse({ name: "x".repeat(121), steps: [] }).success).toBe(false);
+    expect(
+      sequenceCreateSchema.safeParse({ name: "Sequenced", description: "x".repeat(2001), steps: [] }).success
+    ).toBe(false);
+    expect(
+      sequenceCreateSchema.safeParse({ name: "x.25", isActive: "true", steps: [] }).success
+    ).toBe(false);
+  });
+
+  it("rejects an over-cap step list", () => {
+    const steps = Array.from({ length: 51 }, () => ({ channel: "email", body_template: "x" }));
+    expect(sequenceCreateSchema.safeParse({ name: "Sequenced", steps }).success).toBe(false);
+  });
+});
+
+describe("sequenceUpdateSchema", () => {
+  it("accepts each patch field on its own and together", () => {
+    expect(sequenceUpdateSchema.safeParse({ name: "Renamed cadence" }).success).toBe(true);
+    expect(sequenceUpdateSchema.safeParse({ isActive: true }).success).toBe(true);
+    expect(sequenceUpdateSchema.safeParse({ description: null }).success).toBe(true);
+    expect(
+      sequenceUpdateSchema.safeParse({ steps: [{ channel: "sms", body_template: "x" }] }).success
+    ).toBe(true);
+    expect(sequenceUpdateSchema.safeParse({ name: "Renamed", isActive: false }).success).toBe(true);
+  });
+
+  it("rejects an empty patch instead of answering a silent no-op", () => {
+    const parsed = sequenceUpdateSchema.safeParse({});
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues[0].message).toMatch(/Provide at least one of/);
+    }
+  });
+
+  it("rejects malformed fields", () => {
+    expect(sequenceUpdateSchema.safeParse({ name: "   " }).success).toBe(false);
+    expect(sequenceUpdateSchema.safeParse({ isActive: 1 }).success).toBe(false);
+  });
+});
+
+describe("sequenceEnrollSchema", () => {
+  it("accepts a uuid lead and rejects a missing or junk leadId", () => {
+    expect(
+      sequenceEnrollSchema.safeParse({ leadId: "11111111-1111-4111-8111-111111111111" }).success
+    ).toBe(true);
+    expect(sequenceEnrollSchema.safeParse({}).success).toBe(false);
+    expect(sequenceEnrollSchema.safeParse({ leadId: "lead-1" }).success).toBe(false);
   });
 });
 

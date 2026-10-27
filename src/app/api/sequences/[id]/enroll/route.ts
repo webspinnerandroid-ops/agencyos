@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { getTenantId } from "@/lib/auth";
+import { parseJsonBody } from "@/lib/api-validate";
+import { sequenceEnrollSchema } from "@/lib/validations";
 
 function getServiceSupabase() {
   return createClient(
@@ -17,11 +19,9 @@ export async function POST(
     const tenantId = await getTenantId();
     const { id: sequenceId } = await context.params;
     const supabase = getServiceSupabase();
-    const { leadId } = await request.json();
-
-    if (!leadId) {
-      return NextResponse.json({ error: "leadId is required" }, { status: 400 });
-    }
+    const parsed = await parseJsonBody(request, sequenceEnrollSchema);
+    if (!parsed.ok) return parsed.response;
+    const { leadId } = parsed.data;
 
     // Get the sequence to determine first step delay
     const { data: sequence, error: seqErr } = await supabase

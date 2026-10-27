@@ -416,9 +416,17 @@ export const publishTargetSchema = z.object({
 export type PublishTargetInput = z.infer<typeof publishTargetSchema>;
 
 /** The generated-content shape the generate page posts alongside targets. */
+// The `error` option (zod v4) puts the friendly message on the MISSING-field
+// case too — a min(1, ...) message only fires for an empty string, and the
+// default "expected string, received undefined" tells the operator nothing.
 export const generatedContentPayloadSchema = z.object({
-  title: z.string().trim().min(1, "Generated content is missing a title."),
-  body: z.string().min(1, "Generated content is missing a body."),
+  title: z
+    .string({ error: "Generated content is missing a title." })
+    .trim()
+    .min(1, "Generated content is missing a title."),
+  body: z
+    .string({ error: "Generated content is missing a body." })
+    .min(1, "Generated content is missing a body."),
   slug: z.string().optional(),
   metaDescription: z.string().optional(),
   seoMeta: z
@@ -473,3 +481,78 @@ export const publishBodySchema = z.object({
 });
 
 export type PublishBodyInput = z.infer<typeof publishBodySchema>;
+
+// ---------------------------------------------------------------------------
+// Lead sequences. Adopted by POST /api/sequences, PATCH /api/sequences/[id],
+// and POST /api/sequences/[id]/enroll.
+//
+// A step mirrors the SequenceStep the automation consumes
+// (src/lib/leads/cipher.ts processSequenceStep): a channel (previously an
+// unknown channel meant the step silently did nothing but still advanced the
+// enrollment), a delay, and a template body. The enrollment future-proofing
+// stays in the route: an absent delay_days still defaults to 0.
+// ---------------------------------------------------------------------------
+
+export const sequenceStepSchema = z.object({
+  channel: z.enum(["email", "sms"]),
+  delay_days: z
+    .number()
+    .int()
+    .min(0, "delay_days cannot be negative")
+    .max(365, "delay_days must be a year or less")
+    .optional(),
+  subject: z.string().max(500, "Subject must be 500 characters or fewer").optional(),
+  body_template: z
+    .string()
+    .min(1, "Every step needs a message template")
+    .max(10_000, "Message template must be 10,000 characters or fewer"),
+});
+
+export type SequenceStepInput = z.infer<typeof sequenceStepSchema>;
+
+export const sequenceCreateSchema = z.object({
+  name: z
+    .string()
+    .trim()
+    .min(1, "name is required")
+    .max(120, "Name must be 120 characters or fewer"),
+  description: z.string().max(2000, "Description must be 2000 characters or fewer").nullable().optional(),
+  steps: z.array(sequenceStepSchema).max(50, "A sequence can have at most 50 steps"),
+  isActive: z.boolean().optional(),
+});
+
+export type SequenceCreateInput = z.infer<typeof sequenceCreateSchema>;
+
+// Every field is optional, but at least one must be present — an empty PATCH
+// would otherwise be a silent no-op 200 (same rule as postUpdateSchema).
+export const sequenceUpdateSchema = z
+  .object({
+    name: z
+      .string()
+      .trim()
+      .min(1, "name cannot be empty")
+      .max(120, "Name must be 120 characters or fewer")
+      .optional(),
+    description: z.string().max(2000, "Description must be 2000 characters or fewer").nullable().optional(),
+    steps: z.array(sequenceStepSchema).max(50, "A sequence can have at most 50 steps").optional(),
+    isActive: z.boolean().optional(),
+  })
+  .refine(
+    (v) =>
+      v.name !== undefined ||
+      v.description !== undefined ||
+      v.steps !== undefined ||
+      v.isActive !== undefined,
+    {
+      message: "Provide at least one of name, description, steps, isActive",
+    }
+  );
+
+export type SequenceUpdateInput = z.infer<typeof sequenceUpdateSchema>;
+
+/** POST /api/sequences/[id]/enroll — { leadId }. */
+export const sequenceEnrollSchema = z.object({
+  leadId: z.string().uuid("leadId must be a valid lead id"),
+});
+
+export type SequenceEnrollInput = z.infer<typeof sequenceEnrollSchema>;

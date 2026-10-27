@@ -14,6 +14,7 @@ test.describe.configure({ mode: "serial" });
 let tenantId: string;
 let postId: string;
 let createdClientId: string | null = null;
+let createdSequenceId: string | null = null;
 const stamp = Date.now();
 
 test.beforeAll(async () => {
@@ -46,6 +47,7 @@ test.afterAll(async () => {
   const { db } = adminClient();
   if (postId) await db.from("posts").delete().eq("id", postId);
   if (createdClientId) await db.from("clients").delete().eq("id", createdClientId);
+  if (createdSequenceId) await db.from("sequences").delete().eq("id", createdSequenceId);
 });
 
 test("POST /api/clients refuses an empty body with field-level detail", async ({ request }) => {
@@ -225,4 +227,78 @@ test("POST /api/publish/generated routes an app-shaped body past validation", as
   });
   expect(res.status(), await res.text()).toBe(200);
   expect((await res.json()).success).toBe(false);
+});
+
+// ---- Sequences family (batch 5) --------------------------------------------
+// Create/patch/delete are exercised with no leads in sight; enroll is only
+// exercised against a sequence id that matches nothing, so no real lead is
+// ever enrolled.
+
+test("POST /api/sequences refuses the old lenient contracts with field detail", async ({ request }) => {
+  // Previously a truthiness 400 on missing name/steps; garbage steps row(s)
+  // were stored verbatim (later crashing the automation on step.channel).
+  const empty = await request.post("/api/sequences", { data: {} });
+  expect(empty.status()).toBe(400);
+  const emptyBody = (await empty.json()) as { code?: string; issues?: { path: string }[] };
+  expect(emptyBody.code).toBe("invalid_body");
+  expect(emptyBody.issues?.map((i) => i.path)).toContain("name");
+
+  const junkSteps = await request.post("/api/sequences", {
+    data: { name: `QA-VALIDATION ${stamp}`, steps: "three emails" },
+  });
+  expect(junkSteps.status()).toBe(400);
+
+  const steplessStep = await request.post("/api/sequences", {
+    data: { name: `QA-VALIDATION ${stamp}`, steps: [{ body_template: "x" }] },
+  });
+  expect(steplessStep.status()).toBe(400);
+  expect(((await steplessStep.json()) as { issues?: { path: string }[] }).issues?.map((i) => i.path)).toContain("steps.0.channel");
+});
+
+test("POST /api/sequences accepts the body the sequence API sends", async ({ request }) => {
+  const res = await request.post("/api/sequences", {
+    data: {
+      name: `QA-VALIDATION ${stamp}`,
+      description: "created by api-validation.spec",
+      steps: [{ channel: "email", delay_days: 0, subject: "Hi", body_template: "{{first_name}}" }],
+      isActive: false,
+    },
+  });
+  expect(res.status(), await res.text()).toBe(201);
+  createdSequenceId = ((await res.json()) as { id: string }).id;
+});
+
+test("PATCH /api/sequences/[id] refuses an empty patch and a junk isActive", async ({ request }) => {
+  const empty = await request.patch(`/api/sequences/${createdSequenceId}`, { data: {} });
+  expect(empty.status()).toBe(400);
+  expect((await empty.json()).code).toBe("invalid_body");
+
+  const junk = await request.patch(`/api/sequences/${createdSequenceId}`, { data: { isActive: "sure" } });
+  expect(junk.status()).toBe(400);
+});
+
+test("PATCH /api/sequences/[id] still applies a real update", async ({ request }) => {
+  const res = await request.patch(`/api/sequences/${createdSequenceId}`, {
+    data: { name: `QA-VALIDATION ${stamp} renamed`, isActive: true },
+  });
+  expect(res.status(), await res.text()).toBe(200);
+
+  const { db } = adminClient();
+  const row = await db.from("sequences").select("name, is_active").eq("id", createdSequenceId).single();
+  expect(row.data?.name).toBe(`QA-VALIDATION ${stamp} renamed`);
+  expect(row.data?.is_active).toBe(true);
+});
+
+test("POST /api/sequences/[id]/enroll validates the body before the sequence lookup", async ({ request }) => {
+  // A junk leadId is a field-level 400, not a 404 from the branch logic.
+  const junk = await request.post(`/api/sequences/${createdSequenceId}/enroll`, { data: { leadId: "lead-1" } });
+  expect(junk.status()).toBe(400);
+  expect(((await junk.json()) as { issues?: { path: string }[] }).issues?.map((i) => i.path)).toContain("leadId");
+
+  // A well-formed body routes past validation to the sequence lookup.
+  const unknown = await request.post(
+    `/api/sequences/${"88888888-8888-4888-8888-888888888888"}/enroll`,
+    { data: { leadId: "88888888-8888-4888-8888-888888888888" } }
+  );
+  expect(unknown.status(), await unknown.text()).toBe(404);
 });

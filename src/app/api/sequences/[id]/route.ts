@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import { getTenantId } from "@/lib/auth";
+import { parseJsonBody } from "@/lib/api-validate";
+import { sequenceUpdateSchema } from "@/lib/validations";
 
 function getServiceSupabase() {
   return createClient(
@@ -17,7 +19,9 @@ export async function PATCH(
     const tenantId = await getTenantId();
     const { id } = await context.params;
     const supabase = getServiceSupabase();
-    const body = await request.json();
+    const parsed = await parseJsonBody(request, sequenceUpdateSchema);
+    if (!parsed.ok) return parsed.response;
+    const body = parsed.data;
 
     const updates: Record<string, unknown> = {};
     if (body.name !== undefined) updates.name = body.name;

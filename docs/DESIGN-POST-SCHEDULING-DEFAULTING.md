@@ -83,20 +83,24 @@ consequence of the drag rather than a silent property of generation.
   mapped out for THAT client, mirroring the posts query. The one exception: a plan with `client_id: null` is unattributable (cross-client), so it
   renders only on the all-clients view — the same treatment the posts query gives a
   `client_id IS NULL` row under a client filter.
-- **Creator-side plan attribution (shipped for Malory's chat path, 2026-10-28;
-  proposal path still unattributed).** The three pieces from the earlier plan:
+- **Creator-side plan attribution (shipped 2026-10-28).** The three pieces
+  from the earlier plan:
   1. DONE. `CampaignPlanInput.clientId` exists and `createCampaignPlan` persists
      it (`null` stays legal — agency-internal plans remain cross-client by
      design, same as the posts query).
-  2. DONE for `lib/ai/team-task.ts`: Malory's `plan_campaign` resolves the target
-     client before planning — the chat's bound client wins (`room.client_id`),
-     else a client name extracted from the message is matched against the
-     tenant's clients table (exact name, then substring, e.g. labelled variants
-     like "Acme Roasters Inc."); resolution never throws, it falls back to null.
-     The stamp lands on `campaign_plans` AND the mirrored `seo_campaigns` row.
-     NOT DONE: `lib/campaign-from-proposal.ts` still calls `createCampaignPlan`
-     without `clientId`, so proposal-seeded plans write null and stay
-     cross-client until that call passes the proposal's client.
+  2. DONE for both creator sites:
+     - `lib/ai/team-task.ts` — Malory's `plan_campaign` resolves the target
+       client before planning — the chat's bound client wins (`room.client_id`),
+       else a client name extracted from the message is matched against the
+       tenant's clients table (exact name, then substring, e.g. labelled variants
+       like "Acme Roasters Inc."); resolution never throws, it falls back to null.
+       The stamp lands on `campaign_plans` AND the mirrored `seo_campaigns` row.
+     - `lib/campaign-from-proposal.ts` — the seeded plan inherits
+       `seo_campaigns.client_id`, so a plan materialized from a sold proposal
+       attributes to the proposal's client (null stays null for unattributed
+       campaigns). Covers all four seed callers with no signature change:
+       the from-proposal route, DocuSign connect, onboarding, and
+       e-signature sign/complete.
   3. DONE. `tests/e2e/calendar-auto-jump.spec.ts` cases 4–5 write
      client-attributed fixtures: a scoped view with no posts jumps from a plan
      attributed to the selected client (case 4), and another client's proposed

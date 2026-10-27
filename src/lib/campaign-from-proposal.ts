@@ -240,6 +240,11 @@ export async function createCampaignFromProposal(
     title: `${tierName}: Content Campaign${focusArea}`,
     summary,
     workspaceId,
+    // Attribution: the proposal knows its client from the seo_campaigns
+    // row — the seeded plan's proposed items must land under that
+    // client's calendar filter, same as Malory's chat-stamped plans.
+    // Null stays legal (unattributed campaign → cross-client, as before).
+    clientId: campaign.client_id ?? null,
     createdBy: "proposal",
     items: allItems,
   });

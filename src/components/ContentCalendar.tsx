@@ -66,6 +66,7 @@ import {
 } from "@/lib/scheduling";
 import PostContent from "@/components/BlogContent";
 import ScoreBadge from "@/components/ScoreBadge";
+import { buildIcs, type IcsEvent } from "@/lib/ics";
 
 // ------------------------------------------------------------------
 // Types
@@ -910,6 +911,52 @@ export default function ContentCalendar({
     [currentMonth]
   );
 
+  // ---- Export month (.ics) ----
+  // Download the currently rendered month's scheduled posts as an iCalendar
+  // file from data already in the client — no extra API round-trip. Publish
+  // times are instants (zero-length events); the file keeps the post title as
+  // SUMMARY and the plain-text caption as DESCRIPTION. In week view this
+  // exports the month the operator is currently browsing.
+  const handleExportMonthIcs = useCallback(() => {
+    const monthKey = format(currentMonth, "yyyy-MM");
+    const events: IcsEvent[] = [];
+    for (const post of posts) {
+      if (!post.scheduled_at) continue;
+      if (format(parseISO(post.scheduled_at), "yyyy-MM") !== monthKey) continue;
+      const parsed = parsePostContent(post);
+      const title =
+        typeof parsed?.title === "string" && parsed.title.trim()
+          ? parsed.title.trim()
+          : (STATUS_CONFIG[post.status]?.label ?? "Post");
+      const caption =
+        typeof parsed?.caption === "string" ? parsed.caption : "";
+      const description = caption
+        .replace(/[#*_`\[\]]/g, "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 800);
+      events.push({
+        uid: `${post.id}@agency-os`,
+        title,
+        description: description || null,
+        startIso: post.scheduled_at,
+      });
+    }
+    const ics = buildIcs(
+      `Content Calendar — ${format(currentMonth, "MMMM yyyy")}`,
+      events
+    );
+    const blob = new Blob([ics], { type: "text/calendar;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `content-calendar-${monthKey}.ics`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, [posts, currentMonth]);
+
   // ---- Auto-jump to the next non-empty month ----
   // The view opens on today's month. When that month is empty but a LATER
   // month has something to show — scheduled posts OR proposed campaign items
@@ -1374,6 +1421,15 @@ export default function ContentCalendar({
                 Week
               </Button>
             </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleExportMonthIcs}
+              title={`Download the ${format(currentMonth, "MMMM yyyy")} posts as an .ics calendar file`}
+            >
+              <Download className="size-4 mr-1" />
+              Export
+            </Button>
             <Button variant="ghost" size="sm" onClick={goToToday}>
               <CalendarIcon className="size-4 mr-1" />
               Today

@@ -84,6 +84,23 @@ consequence of the drag rather than a silent property of generation.
   renders only on the all-clients view — the same treatment the posts query gives a
   `client_id IS NULL` row under a client filter. (`campaign_plans.client_id` is
   still always null in the codebase today.)
+- **Creator-side plan attribution (planned — not yet shipped).** The calendar half
+  of client-scoping is live (see the bullet above), but nothing on the write side
+  populates `client_id`: `CampaignPlanInput` has no `clientId`, and
+  `createCampaignPlan` hard-inserts `client_id: null`, so every plan is
+  cross-client and the shipped scoping only ever renders through its null tier.
+  When attribution ships it takes three small pieces and no calendar changes:
+  1. `CampaignPlanInput.clientId` + `createCampaignPlan` persists it (keep
+     `null` legal — agency-internal plans stay cross-client by design, same as
+     the posts query).
+  2. The two creator sites pass the client they mapped out for:
+     `lib/campaign-from-proposal.ts` (a proposal always knows its client) and
+     `lib/ai/team-task.ts` `plan_campaign` (Malory — the chat request context
+     must carry the resolved client id).
+  3. Extend `tests/e2e/calendar-auto-jump.spec.ts` with a client-attributed plan
+     case: a proposed item for client B must not render or jump under client A's
+     filter. Today's proposed-only fixture writes a null-client plan, so only
+     the cross-client tier is exercised.
 - **Strip cap of 50.** Beyond that the strip truncates (server-sided cap); the API
   remains the durability point.
 - ~~**Pre-existing drag flake** in the double-drop "last drop wins" test~~ —

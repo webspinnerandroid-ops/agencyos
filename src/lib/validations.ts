@@ -648,3 +648,74 @@ export const mediaAssetDuplicateSchema = z.object({
 });
 
 export type MediaAssetDuplicateInput = z.infer<typeof mediaAssetDuplicateSchema>;
+
+// ---------------------------------------------------------------------------
+// Scheduled-failure resolution. Adopted by POST /api/scheduled/resolve.
+// ---------------------------------------------------------------------------
+
+/**
+ * The Scheduled panel's two human decisions on a persistent publish failure:
+ *   { postId, action: "retry" }           → fresh publish attempt now
+ *   { postId, action: "dismiss", reason } → "won't fix"; reason required
+ *
+ * postId becomes a typed uuid (a garbage id used to fall through to the
+ * lookup and answer "Post not found"); the dismiss-requires-reason rule moves
+ * into the schema with the exact message the panel shows.
+ */
+export const scheduledResolveSchema = z
+  .object({
+    postId: z.string().uuid("postId must be a valid post id"),
+    action: z.enum(["retry", "dismiss"]),
+    reason: z
+      .string()
+      .trim()
+      .max(500, "Reason must be 500 characters or fewer")
+      .optional(),
+  })
+  .refine(
+    (v) => v.action !== "dismiss" || (v.reason?.length ?? 0) > 0,
+    { message: "A reason is required to dismiss a failure." }
+  );
+
+export type ScheduledResolveInput = z.infer<typeof scheduledResolveSchema>;
+
+// ---------------------------------------------------------------------------
+// Browser push subscriptions. Adopted by POST/DELETE /api/push/subscribe.
+//
+// The subscription's real shape comes from the Push API:
+// { endpoint: https URL, keys: { p256dh, auth } }. The schemas type exactly
+// that (the PushMessageEncryption keys are web-push writers need), replacing
+// the old all-or-nothing truthiness check with field-level 400s.
+// ---------------------------------------------------------------------------
+
+export const pushSubscribeSchema = z.object({
+  endpoint: z
+    .string({ error: "endpoint must be an https URL" })
+    .trim()
+    .max(2048, "endpoint must be 2048 characters or fewer")
+    .regex(/^https:\/\//, "endpoint must be an https URL"),
+  keys: z.object({
+    p256dh: z
+      .string({ error: "p256dh (base64url) is required" })
+      .trim()
+      .min(1, "p256dh (base64url) is required")
+      .max(512, "p256dh must be 512 characters or fewer"),
+    auth: z
+      .string({ error: "auth (base64url) is required" })
+      .trim()
+      .min(1, "auth (base64url) is required")
+      .max(512, "auth must be 512 characters or fewer"),
+  }),
+});
+
+export type PushSubscribeInput = z.infer<typeof pushSubscribeSchema>;
+
+export const pushUnsubscribeSchema = z.object({
+  endpoint: z
+    .string({ error: "endpoint is required" })
+    .trim()
+    .min(1, "endpoint is required")
+    .max(2048, "endpoint must be 2048 characters or fewer"),
+});
+
+export type PushUnsubscribeInput = z.infer<typeof pushUnsubscribeSchema>;

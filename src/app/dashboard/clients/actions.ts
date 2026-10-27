@@ -2,6 +2,7 @@
 
 import { getTenantId, requireRole } from "@/lib/auth";
 import { slugify } from "@/lib/cms";
+import { clientCreateSchema } from "@/lib/validations";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getLifecycle, getOrCreateLifecycle } from "@/lib/client-lifecycle";
 
@@ -85,8 +86,17 @@ export async function createClient(input: {
 }): Promise<{ id: string }> {
   const tenantId = await getTenantId();
   await requireRole("agency_editor");
-  const name = (input.name ?? "").trim();
-  if (!name) throw new Error("Client name is required");
+  // Same schema POST /api/clients runs — the action is the CRM form's server
+  // twin, so an over-long name or malformed website fails here with exactly
+  // the message the API route would have produced.
+  const parsed = clientCreateSchema.safeParse({
+    name: (input.name ?? "").trim(),
+    website: (input.website ?? "").trim(),
+  });
+  if (!parsed.success) {
+    throw new Error(parsed.error.issues[0]?.message ?? "Client name is required");
+  }
+  const { name, website } = parsed.data;
 
   const supabase = await createServiceClient();
 
@@ -124,7 +134,7 @@ export async function createClient(input: {
       tenant_id: tenantId,
       workspace_id: workspaceId || null,
       name,
-      website: (input.website ?? "").trim() || null,
+      website: website || null,
       notes: (input.notes ?? "").trim() || null,
     })
     .select("id")

@@ -35,11 +35,12 @@ const API = path.join(ROOT, "src", "app", "api");
  * (batch 2), notifications + read-link (batch 3), posts rescore/regenerate +
  * the publish family (batch 4), the sequences family (batch 5), the auth
  * token family — 2FA verify/disable + resend-confirmation (batch 6), the
- * media-assets reassign/duplicate family (batch 7).
+ * media-assets reassign/duplicate family (batch 7), the scheduled-failure
+ * resolution + push-subscription family (batch 8).
  */
 const BASELINE = {
-  unvalidated: 71,
-  validated: 23,
+  unvalidated: 69,
+  validated: 25,
 };
 
 function walk(dir, out = []) {

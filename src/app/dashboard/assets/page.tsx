@@ -25,6 +25,7 @@ import {
 import {
   assetFolderCreateSchema,
   assetFolderRenameSchema,
+  mediaAssetReassignSchema,
 } from "@/lib/validations";
 
 interface Asset {
@@ -155,7 +156,7 @@ export default function AssetsPage() {
       method: "POST",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, kind: assetTypeForKind(kind) }),
+      body: JSON.stringify(parsed.data),
     });
     if (res.ok) {
       setNewFolderName("");
@@ -179,7 +180,7 @@ export default function AssetsPage() {
       method: "PATCH",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify(parsed.data),
     });
     if (res.ok) {
       setRenamingId(null);
@@ -201,11 +202,20 @@ export default function AssetsPage() {
   };
 
   const moveAsset = async (asset: Asset, folderId: string) => {
+    // Twin validation — the exact zod schema PATCH /api/media-assets/[id]
+    // runs, so the inline error the user sees here is the server's own
+    // judgment (a garbage folder reference dies client-side, not at the
+    // route). "" stays valid: the route maps it to "unfiled".
+    const parsed = mediaAssetReassignSchema.safeParse({ folderId });
+    if (!parsed.success) {
+      setError(parsed.error.issues[0]?.message ?? "Failed to move asset");
+      return;
+    }
     const res = await fetch(`/api/media-assets/${asset.id}`, {
       method: "PATCH",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ folderId }),
+      body: JSON.stringify(parsed.data),
     });
     if (res.ok) {
       setMoveTarget((prev) => ({ ...prev, [asset.id]: "" }));

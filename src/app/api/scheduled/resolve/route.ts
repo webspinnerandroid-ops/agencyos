@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getTenantId } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import { getCurrentWorkspaceId } from "@/lib/workspace";
+import { parseJsonBody } from "@/lib/api-validate";
+import { scheduledResolveSchema } from "@/lib/validations";
 
 /**
  * POST /api/scheduled/resolve — resolve a persistent publish failure from
@@ -20,6 +22,12 @@ import { getCurrentWorkspaceId } from "@/lib/workspace";
  * (status remains `failed`); the columns just mark it as human-resolved so
  * it leaves the panel and never escalates again. The reason is required and
  * shown on the panel row so the next person sees the decision.
+ *
+ * Tightened: postId is now a typed uuid and the dismiss-needs-reason rule
+ * lives in scheduledResolveSchema — garbage bodies are field-level 400s
+ * instead of falling through to the lookup or silently dismissing without a
+ * reason. The reason is size-capped by the schema (the old slice is gone;
+ * a longer reason is rejected, not truncated).
  */
 export async function POST(request: NextRequest) {
   try {
@@ -27,23 +35,9 @@ export async function POST(request: NextRequest) {
     const workspaceId = await getCurrentWorkspaceId();
     const supabase = await createServiceClient();
 
-    const body = await request.json().catch(() => null);
-    const postId = body?.postId as string | undefined;
-    const action = body?.action as "retry" | "dismiss" | undefined;
-    const reason = typeof body?.reason === "string" ? body.reason.trim() : "";
-
-    if (!postId || !action) {
-      return NextResponse.json(
-        { error: "postId and action (retry | dismiss) are required" },
-        { status: 400 }
-      );
-    }
-    if (action === "dismiss" && !reason) {
-      return NextResponse.json(
-        { error: "A reason is required to dismiss a failure." },
-        { status: 400 }
-      );
-    }
+    const body = await parseJsonBody(request, scheduledResolveSchema);
+    if (!body.ok) return body.response;
+    const { postId, action, reason = "" } = body.data;
 
     // Tenant + workspace scoping: the row must belong to this tenant AND the
     // caller's current workspace, exactly like the panel that linked here.
@@ -70,7 +64,7 @@ export async function POST(request: NextRequest) {
         .from("posts")
         .update({
           publish_dismissed_at: new Date().toISOString(),
-          publish_dismiss_reason: reason.slice(0, 500),
+          publish_dismiss_reason: reason,
           // Close any pending retry so the sweeper can't resurrect a
           // dismissed failure.
           publish_retry_at: null,

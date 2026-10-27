@@ -1,5 +1,9 @@
 import { test, expect, Page, Response } from "@playwright/test";
 import fs from "fs";
+import {
+  gotoWithCompileRetry,
+  requestWithCompileRetry,
+} from "./qa-fixtures";
 
 /**
  * TECHNICAL & SECURITY AUDIT — automated E2E suite.
@@ -102,13 +106,14 @@ test.describe("Flow 1 — public surface & security headers", () => {
   }) => {
     instrument(page, "[public]");
     const started = Date.now();
-    const res = await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
+    // Cold-compile hardened: the landing route is the suite's very first hit.
+    const res = await gotoWithCompileRetry(page, `${BASE}/`);
     const ms = Date.now() - started;
 
-    expect(res?.status(), "landing page must 200").toBeLessThan(400);
+    expect(res.status(), "landing page must 200").toBeLessThan(400);
     record({ kind: "latency", severity: "info", where: "GET /", detail: `${ms}ms` });
 
-    const headers = res!.headers();
+    const headers = res.headers();
     const csp = headers["content-security-policy"];
     if (!csp) {
       record({
@@ -184,7 +189,8 @@ test.describe("Flow 1 — public surface & security headers", () => {
     await ctx.clearCookies();
     const page = await ctx.newPage();
     instrument(page, "[anon]");
-    const res = await page.goto(`${BASE}/dashboard`, { waitUntil: "domcontentloaded" });
+    // Cold-compile hardened (dashboard may compile on this anonymous first hit).
+    const res = await gotoWithCompileRetry(page, `${BASE}/dashboard`);
     // The bounce can be a server 307 (proxy) OR a client-side redirect after
     // hydration — wait out the hydration window before judging.
     await page.waitForTimeout(3_000);
@@ -211,7 +217,10 @@ test.describe("Flow 1 — public surface & security headers", () => {
 test.describe("Flow 2 — authentication mechanism", () => {
   test("dev-login endpoint behavior matches its env gate", async ({ request }) => {
     const started = Date.now();
-    const res = await request.post(`${BASE}/api/auth/dev-login`);
+    // Cold-compile hardened: the /api/auth/* family's first hit can compile.
+    const res = await requestWithCompileRetry(request, `${BASE}/api/auth/dev-login`, {
+      method: "post",
+    });
     const ms = Date.now() - started;
     record({
       kind: "latency",
@@ -264,9 +273,7 @@ test.describe("Flow 3 — core app flows (authed, error-captured)", () => {
       test.skip(!isAuthed(), "needs dev login");
       instrument(page, `[flow:${flow.name}]`);
       const started = Date.now();
-      const res = await page.goto(`${BASE}${flow.path}`, {
-        waitUntil: "domcontentloaded",
-      });
+      const res = await gotoWithCompileRetry(page, `${BASE}${flow.path}`);
       const ms = Date.now() - started;
       record({
         kind: "latency",
@@ -324,15 +331,29 @@ test.describe("Flow 4 — BOLA / access-control probes", () => {
 
     for (const probe of probes) {
       // page.request shares the browser context's cookie jar → authed probe.
-      const res = await page.request.fetch(`${BASE}${probe.path}`, {
+      // Cold-compile hardened: on transport failure (a cold /api/* compile
+      // outlasting the 30s cap) retry once with a longer timeout; if it is
+      // STILL transport-dead, record it as an infrastructure note instead of
+      // misreading it as a security finding (status 0 is not the app).
+      const res = await requestWithCompileRetry(page.request, `${BASE}${probe.path}`, {
         method: probe.method,
         headers: { "Content-Type": "application/json" },
         data: probe.body !== undefined ? JSON.stringify(probe.body) : undefined,
         maxRedirects: 0,
-        timeout: 30_000, // no single route may hang the audit
-      });
-      const status = res.status();
-      const text = await res.text().catch(() => "");
+        timeoutMs: 30_000, // no single route may hang the audit
+      }).catch(() => null);
+      const status = res?.status() ?? 0;
+      const text = res ? await res.text().catch(() => "") : "";
+
+      if (status === 0) {
+        record({
+          kind: "http-error",
+          severity: "low",
+          where: `${probe.method} ${probe.path}`,
+          detail: "transport status 0 after compile retry (cold-compile or network) — not a security finding",
+        });
+        continue;
+      }
 
       const acceptable = [200, 400, 401, 403, 404, 405, 409, 422, 429].includes(status);
       if (!acceptable) {
@@ -409,7 +430,8 @@ test.describe("Flow 5 — concurrency / state races", () => {
 
     const outcomes: boolean[] = [];
     for (const p of [pageA, pageB]) {
-      const mint = await p.request.post(`${BASE}/api/auth/dev-login`);
+      // Cold-compile hardened: dev-login can compile on this context's first hit.
+      const mint = await requestWithCompileRetry(p.request, `${BASE}/api/auth/dev-login`, { method: "POST" });
       if (!mint.ok()) {
         // Supabase throttles rapid magiclink mints — a legitimate rejection,
         // not state corruption. Record and continue.

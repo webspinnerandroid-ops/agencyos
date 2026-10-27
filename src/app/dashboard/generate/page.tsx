@@ -3,7 +3,11 @@
 import { useCallback, useEffect, useState, type ChangeEvent } from "react";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { generateContentSchema, type GenerateContentInput } from "@/lib/validations";
+import {
+  generateContentSchema,
+  publishGeneratedSchema,
+  type GenerateContentInput,
+} from "@/lib/validations";
 import { Button } from "@/components/ui/button";
 import { BuyMoreTokens } from "@/components/dashboard/buy-more-tokens";
 import { Input } from "@/components/ui/input";
@@ -268,11 +272,23 @@ function PublishToConnectedSitesButton({ post }: { post: BlogPost }) {
           post={publishPost}
           onClose={() => setOpen(false)}
           onPublish={async (targets) => {
+            // Twin validation — the exact zod schema POST /api/publish/generated
+            // runs (target shape, min-1 site, content payload), so the dialog
+            // shows the server's own first-issue message without a round trip.
+            const parsed = publishGeneratedSchema.safeParse({
+              targets,
+              content: publishPost,
+            });
+            if (!parsed.success) {
+              throw new Error(
+                parsed.error.issues[0]?.message ?? "Publish failed"
+              );
+            }
             const res = await fetch("/api/publish/generated", {
               method: "POST",
               credentials: "include",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ targets, content: publishPost }),
+              body: JSON.stringify(parsed.data),
             });
             const data = await res.json();
             if (!res.ok) {

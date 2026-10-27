@@ -7,6 +7,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Loader2, ShieldCheck, ShieldOff, Copy, Check } from "lucide-react";
 import QRCode from "qrcode";
+import {
+  authTotpDisableSchema,
+  authTotpVerifySchema,
+} from "@/lib/validations";
 
 type Phase = "loading" | "idle" | "setup" | "enabled";
 
@@ -71,8 +75,15 @@ export default function SecurityPage() {
   };
 
   const confirmSetup = async () => {
-    if (!/^\d{6}$/.test(code.trim())) {
-      setError("Enter the 6-digit code from your authenticator app.");
+    // Twin validation — the exact zod schema POST /api/auth/2fa/verify runs
+    // (6-digit shape, secret presence/caps), replacing the hand-rolled regex
+    // so the inline error is the server's own judgment.
+    const parsed = authTotpVerifySchema.safeParse({
+      code: code.trim(),
+      secret,
+    });
+    if (!parsed.success) {
+      setError(parsed.error.issues[0]?.message ?? "Verification failed");
       return;
     }
     setBusy(true);
@@ -82,7 +93,7 @@ export default function SecurityPage() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code: code.trim(), secret }),
+        body: JSON.stringify(parsed.data),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) {
@@ -100,8 +111,10 @@ export default function SecurityPage() {
   };
 
   const disable = async () => {
-    if (!/^\d{6}$/.test(disableCode.trim())) {
-      setError("Enter a current 6-digit code from your authenticator app.");
+    // Twin validation — the exact zod schema POST /api/auth/2fa/disable runs.
+    const parsed = authTotpDisableSchema.safeParse({ code: disableCode.trim() });
+    if (!parsed.success) {
+      setError(parsed.error.issues[0]?.message ?? "Could not disable 2FA");
       return;
     }
     setBusy(true);
@@ -111,7 +124,7 @@ export default function SecurityPage() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ code: disableCode.trim() }),
+        body: JSON.stringify(parsed.data),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.ok) {

@@ -6,6 +6,10 @@ import { BuyMoreTokens } from "@/components/dashboard/buy-more-tokens";
 import { Card } from "@/components/ui/card";
 import { Loader2, Download, ImagePlus, Sparkles, Trash2, History, Pencil, Wand2, ImageUp, X, Copy, FolderInput } from "lucide-react";
 import { getWorkspaces, type Workspace } from "@/lib/workspace";
+import {
+  mediaAssetDuplicateSchema,
+  mediaAssetReassignSchema,
+} from "@/lib/validations";
 
 const SIZES = [
   { label: "Square (1024×1024)", value: "1024x1024" },
@@ -342,6 +346,17 @@ export default function GenerateImagesPage() {
 
   const handleMoveAsset = async (asset: MediaAsset, targetWs: string, mode: "move" | "copy") => {
     if (!asset.id || !targetWs) return;
+    // Twin validation — the exact zod schemas PATCH /api/media-assets/[id]
+    // (reassign) and POST /api/media-assets/[id]/duplicate run, so a garbage
+    // workspace reference dies here with the route's own field message.
+    const parsed =
+      mode === "move"
+        ? mediaAssetReassignSchema.safeParse({ workspaceId: targetWs })
+        : mediaAssetDuplicateSchema.safeParse({ workspaceId: targetWs });
+    if (!parsed.success) {
+      alert(parsed.error.issues[0]?.message ?? `Failed to ${mode} image`);
+      return;
+    }
     try {
       const endpoint = mode === "move"
         ? `/api/media-assets/${asset.id}`
@@ -350,7 +365,7 @@ export default function GenerateImagesPage() {
         method: mode === "move" ? "PATCH" : "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ workspaceId: targetWs }),
+        body: JSON.stringify(parsed.data),
       });
       const data = await res.json();
       if (!res.ok) {

@@ -33,6 +33,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Plus, Users, ArrowRight, Loader2, Trash2, CheckCircle2 } from "lucide-react";
+import { clientCreateSchema } from "@/lib/validations";
 import { createClient, deleteClients, listClients, listWorkspaceOptions, type ClientListItem, type WorkspaceOption } from "./actions";
 import EditClientDialog from "./edit-client";
 import DeleteClientButton from "./delete-client";
@@ -138,9 +139,22 @@ export default function ClientsPage({
     startTransition(async () => {
       try {
         setError(null);
+        // Twin validation — the same zod schema POST /api/clients (and the
+        // createClient action below) run for name/website, so the dialog
+        // shows the server's own first-issue message before the round trip.
+        const parsed = clientCreateSchema.safeParse({
+          name: name.trim(),
+          website: website.trim(),
+        });
+        if (!parsed.success) {
+          setError(parsed.error.issues[0]?.message ?? "Failed to create client");
+          return;
+        }
         await createClient({
-          name,
-          website,
+          name: parsed.data.name,
+          // The schema types website as "absent" (null/undefined); the action
+          // wants a plain optional string — "" keeps meaning "no website".
+          website: parsed.data.website ?? "",
           notes,
           workspaceId: workspaceId === NO_WORKSPACE ? null : workspaceId,
         });

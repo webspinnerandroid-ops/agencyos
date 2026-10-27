@@ -4,6 +4,7 @@ import { getCurrentWorkspaceId } from "@/lib/workspace";
 import {
   listCampaignPlans,
   listCampaignPlanItems,
+  getCampaignItem,
   getCampaignPlanWorkspace,
   updateCampaignItemStatus,
   type CampaignPlan,
@@ -77,8 +78,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const items = await listCampaignPlanItems(tenantId);
-    const item = items.find((i) => i.id === itemId);
+    // By-id lookup — the calendar payload is capped (like the backlog strip),
+    // so an item in an older plan must still be approvable by id here.
+    const item = await getCampaignItem(tenantId, itemId);
     if (!item) {
       return NextResponse.json(
         { error: "Campaign item not found" },

@@ -142,10 +142,19 @@ export async function getCampaignPlan(
   return { ...(plan as CampaignPlan), items: (items ?? []) as CampaignPlanItem[] };
 }
 
-/** List plans for a workspace (or all of the tenant), newest first. */
+/**
+ * Row cap mirroring the unscheduled backlog strip (`/api/posts?unscheduled=1`
+ * caps at 50): the calendar's plans fetch stays bounded no matter how many
+ * campaigns pile up — newest plans win, and the table remains the durability
+ * point for anything beyond the cap.
+ */
+export const CAMPAIGN_PLANS_FETCH_CAP = 50;
+
+/** List plans for a workspace (or all of the tenant), newest first, capped. */
 export async function listCampaignPlans(
   tenantId: string,
-  workspaceId?: string | null
+  workspaceId?: string | null,
+  limit: number = CAMPAIGN_PLANS_FETCH_CAP
 ): Promise<CampaignPlan[]> {
   const supabase = tenantScopedClient(await createServiceClient(), tenantId);
   let query = supabase
@@ -153,9 +162,26 @@ export async function listCampaignPlans(
     .select("*")
     .order("created_at", { ascending: false });
   if (workspaceId) query = query.eq("workspace_id", workspaceId);
+  query = query.limit(limit);
   const { data, error } = await query;
   if (error) throw new Error(error.message);
   return (data ?? []) as CampaignPlan[];
+}
+
+/** Single item by id (tenant check enforced by the client). Used by the
+ * approve flow, which must see an item even if its plan fell outside the
+ * calendar's fetch cap. */
+export async function getCampaignItem(
+  tenantId: string,
+  itemId: string
+): Promise<CampaignPlanItem | null> {
+  const supabase = tenantScopedClient(await createServiceClient(), tenantId);
+  const { data } = await supabase
+    .from("campaign_plan_items")
+    .select("*")
+    .eq("id", itemId)
+    .maybeSingle();
+  return (data ?? null) as CampaignPlanItem | null;
 }
 
 /** Fetch all items across the tenant's plans (used by the calendar). */
@@ -166,12 +192,18 @@ export async function listCampaignPlanItems(
   const supabase = tenantScopedClient(await createServiceClient(), tenantId);
 
   // Items are scoped via the tenant filter; plan workspace filtering is a
-  // post-filter on the joined plan id set (bounded: plan count is small).
+  // post-filter on the joined plan id set. The plan set is already bounded
+  // by the calendar's cap (CAMPAIGN_PLANS_FETCH_CAP), so this stays a
+  // bounded IN-list; PostgREST's own implicit row cap bounds the rows.
   let planQuery = supabase
     .from("campaign_plans")
     .select("id")
     .order("created_at", { ascending: false });
   if (workspaceId) planQuery = planQuery.eq("workspace_id", workspaceId);
+  // Same cap as listCampaignPlans — the id set must match what the
+  // calendar fetches, so joined items can't reference plans that fell
+  // outside it.
+  planQuery = planQuery.limit(CAMPAIGN_PLANS_FETCH_CAP);
   const { data: plans, error: planError } = await planQuery;
   if (planError) throw new Error(planError.message);
   const planIds = (plans ?? []).map((p) => p.id);

@@ -71,16 +71,24 @@ consequence of the drag rather than a silent property of generation.
 
 ## Known limitations / follow-ups
 
-- **Cross-client proposed items.** `campaign_plans.client_id` is always null in the
-  codebase; `ProposedItem` carries no client. Proposed chips (and the auto-jump scan)
-  are tenant-wide. Giving `ProposedItem` the plan's client link and filtering
-  `proposedByDay` + the jump scan on `selectedClientId` is the natural follow-up.
+- **Cross-client proposed items** (fixed 2026-10-27). `ProposedItem` now carries the
+  plan's `client_id`, and both the proposed chips (`proposedByDay`) and the auto-jump
+  scan filter on `selectedClientId` — a client-filtered calendar only shows plans
+  mapped out for THAT client, mirroring the posts query. The one exception: a plan with `client_id: null` is unattributable (cross-client), so it
+  renders only on the all-clients view — the same treatment the posts query gives a
+  `client_id IS NULL` row under a client filter. (`campaign_plans.client_id` is
+  still always null in the codebase today.)
 - **Strip cap of 50.** Beyond that the strip truncates (server-sided cap); the API
   remains the durability point.
 - **Pre-existing drag flake.** The double-drop "last drop wins" test fails
   intermittently because a second HTML5 `dragstart` sometimes never fires — proven
   pre-existing on HEAD via stash A/B (fails at the same rate). Hardening idea:
   extend the pointer-fallback drop path to desktop drags.
-- **No regression coverage** for the auto-jump proposed-only case; the probe used
-  during review was disposable. Converting it into a permanent Playwright test is
-  the next cheapest ratchet.
+- ~~**No regression coverage** for the auto-jump proposed-only case~~ — covered since
+  2026-10-27 by `tests/e2e/calendar-auto-jump.spec.ts`: (1) a fresh load whose only
+  scheduled posts sit in a future month jumps there, (2) a scheduled post in the
+  current month stays put, and (3) with the tenant's posts swept empty, a single
+  `proposed` `campaign_plan_items` row in month+2 gets the jump on its own and the
+  dashed "Proposed" chip renders — written straight to the service-role client and
+  read back through the live `/api/campaign-plans` route, so the
+  item → `proposedItems` merge is exercised end to end, not just the scan math.

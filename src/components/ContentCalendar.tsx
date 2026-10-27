@@ -174,6 +174,12 @@ export interface ProposedItem {
   kind: "blog" | "social" | "website" | "research";
   planId: string;
   planTitle: string;
+  /**
+   * The plan's client (campaign_plans.client_id). Null is a tenant-wide,
+   * cross-client plan: such items surface only on the unfiltered (all
+   * clients) view, the same way the posts query treats client filters.
+   */
+  clientId: string | null;
   platform?: string | null;
   owner?: string | null;
   keywords?: string[] | null;
@@ -907,16 +913,30 @@ export default function ContentCalendar({
     return map;
   }, [posts]);
 
+  // Client-scoped proposed items. Posts arrive pre-filtered by the selected
+  // client (server-side query), so a client-filtered calendar otherwise shows
+  // OTHER clients' proposal ideas as if they belonged here. Scope them the
+  // same way the posts query does: keep only items whose plan's client IS
+  // the selection — a plan with no client is unattributable and stays on the
+  // all-clients view (see the design note's cross-client follow-up).
+  const scopedProposedItems = useMemo(
+    () =>
+      selectedClientId
+        ? proposedItems.filter((item) => item.clientId === selectedClientId)
+        : proposedItems,
+    [proposedItems, selectedClientId]
+  );
+
   // Group proposed campaign-plan items by day.
   const proposedByDay = useMemo(() => {
     const map = new Map<string, ProposedItem[]>();
-    for (const item of proposedItems) {
+    for (const item of scopedProposedItems) {
       const existing = map.get(item.date) ?? [];
       existing.push(item);
       map.set(item.date, existing);
     }
     return map;
-  }, [proposedItems]);
+  }, [scopedProposedItems]);
 
   // ---- Navigation ----
   const userNavigatedRef = useRef(false);
@@ -1040,15 +1060,16 @@ export default function ContentCalendar({
       autoJumpDoneRef.current = true;
       return;
     }
-    // Month keys (yyyy-MM) holding at least one scheduled post, or at least
-    // one proposed campaign item (ProposedItem.date is "yyyy-MM-dd"), since a
-    // month is not visually empty when either renders on the grid.
+    // Month keys (yyyy-MM) holding at least one scheduled post, or one
+    // client-scoped proposed campaign item (ProposedItem.date is
+    // "yyyy-MM-dd") — a month is not visually empty when either renders on
+    // the grid, and proposals for other clients do NOT count for this view.
     const monthKeys = new Set<string>();
     for (const post of posts) {
       if (!post.scheduled_at) continue;
       monthKeys.add(format(parseISO(post.scheduled_at), "yyyy-MM"));
     }
-    for (const item of proposedItems) monthKeys.add(item.date.slice(0, 7));
+    for (const item of scopedProposedItems) monthKeys.add(item.date.slice(0, 7));
     if (monthKeys.has(currentKey)) {
       autoJumpDoneRef.current = true;
       return;
@@ -1062,7 +1083,7 @@ export default function ContentCalendar({
       autoJumpDoneRef.current = true;
       setCurrentMonth(parseISO(`${nextKey}-01T00:00:00`));
     }
-  }, [posts, proposedItems, currentMonth, loadingFirst, openingMonthKey, selectedClientId]);
+  }, [posts, scopedProposedItems, currentMonth, loadingFirst, openingMonthKey, selectedClientId]);
 
   // ---- Status toggle ----
   const toggleStatus = useCallback(

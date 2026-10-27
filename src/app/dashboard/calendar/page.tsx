@@ -19,6 +19,9 @@ interface Client {
 
 interface CampaignPlan {
   id: string;
+  tenant_id: string;
+  /** The client the plan maps out — null is a tenant-wide, cross-client plan. */
+  client_id: string | null;
   title: string;
   summary: string;
   status: string;
@@ -135,6 +138,10 @@ export default function CalendarPage() {
           kind: item.kind,
           planId: plan.id,
           planTitle: plan.title,
+          // The plan's client drives the calendar's client filter: proposals
+          // for other clients must not render on a client-scoped view.
+          // (campaign_plans.client_id is still null for cross-client plans.)
+          clientId: plan.client_id ?? null,
           platform: item.platform,
           owner: item.owner,
           keywords: item.keywords,

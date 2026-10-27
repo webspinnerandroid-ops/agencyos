@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState, useCallback, useMemo, useEffect, useLayoutEffect, useRef } from "react";
 import type {
   DragEvent as ReactDragEvent,
@@ -574,6 +575,16 @@ interface ContentCalendarProps {
    * without it backlog chips are inert.
    */
   onPostSchedule?: (postId: string, newScheduledAt: string) => Promise<void>;
+  /**
+   * Drag-session lifecycle: a draggable chip is picked up, and again when it
+   * is fully released (dragend, with or without a drop). The parent can
+   * freeze relayouts for the duration of a gesture — a native HTML5 drop
+   * resolves its target from the pointer coordinates at flight time (the
+   * hit-test runs before React paints the dragover state), so content that
+   * shifts above/next to the drop zones mid-gesture relocates the day cells
+   * under the cursor and the drop lands on the WRONG day.
+   */
+  onDragSessionChange?: (active: boolean) => void;
   /** Posts with no scheduled_at (the backlog strip's source list). */
   unscheduledPosts?: CalendarPost[];
   onApproveProposed: (item: ProposedItem, mediaKind: "image" | "video") => Promise<void>;
@@ -598,6 +609,7 @@ export default function ContentCalendar({
   onPostUpdate,
   onPostMove,
   onPostSchedule,
+  onDragSessionChange,
   unscheduledPosts = [],
   onApproveProposed,
   onRefresh,
@@ -639,10 +651,21 @@ export default function ContentCalendar({
   // allow-default, the drop event never fires) — seen as an intermittent
   // lost drop when two drags happen in quick succession.
   const dragPostIdRef = useRef<string | null>(null);
-  const setDragPostIdSync = useCallback((v: string | null) => {
-    dragPostIdRef.current = v;
-    setDragPostId(v);
-  }, []);
+  // Session-edge mirror: only the null ↔ set transitions are real lifecycle
+  // events; the touch path can call this repeatedly during one gesture.
+  const dragActiveRef = useRef(false);
+  const setDragPostIdSync = useCallback(
+    (v: string | null) => {
+      dragPostIdRef.current = v;
+      setDragPostId(v);
+      const active = v !== null;
+      if (dragActiveRef.current !== active) {
+        dragActiveRef.current = active;
+        onDragSessionChange?.(active);
+      }
+    },
+    [onDragSessionChange]
+  );
   const [dragOverDay, setDragOverDay] = useState<string | null>(null);
 
   // ---- Month grid ↔ week strip (mobile) ----
@@ -2497,6 +2520,26 @@ export default function ContentCalendar({
                   </div>
                 )}
               </div>
+
+              {/* The client this piece maps out. Attributed plans carry one;
+                  a cross-client plan (client_id null) is unattributable and
+                  deliberately shows no client row. The name resolves live
+                  from the clients list — “Open client page” hedged for the
+                  moment the list is still loading when the dialog opens. */}
+              {selectedProposed.clientId && (
+                <div>
+                  <span className="text-muted-foreground text-xs uppercase tracking-wide font-semibold">
+                    Client
+                  </span>
+                  <Link
+                    href={`/dashboard/clients/${selectedProposed.clientId}`}
+                    className="mt-0.5 inline-flex items-center gap-1 text-primary hover:underline"
+                  >
+                    {clients.find((c) => c.id === selectedProposed.clientId)?.name ??
+                      "Open client page"}
+                  </Link>
+                </div>
+              )}
 
               {/* Approved keywords — the piece will target these */}
               {selectedProposed.keywords && selectedProposed.keywords.length > 0 && (

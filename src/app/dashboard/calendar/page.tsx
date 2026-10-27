@@ -106,6 +106,13 @@ export default function CalendarPage() {
       const res = await fetch("/api/campaign-plans", { credentials: "include" });
       if (res.ok) {
         const data = await res.json();
+        if (dragActiveRef.current) {
+          if (process.env.NODE_ENV !== "production") {
+            console.debug(`[cal] plans apply n=${(data.plans ?? []).length} buffered`);
+          }
+          pendingPlansRef.current = data.plans ?? [];
+          return;
+        }
         setCampaignPlans(data.plans ?? []);
       }
     } catch {
@@ -170,6 +177,64 @@ export default function CalendarPage() {
     fetchClients();
   }, [fetchClients]);
 
+  // ---- Refetch freeze during a drag gesture ----
+  // A native HTML5 drop resolves its target from the pointer coordinates at
+  // gesture time (the dragover hit-test runs before React paints anything),
+  // so if a refetch lands mid-gesture and repopulates the backlog strip or
+  // the grid, the day cells shift under a still-airborne cursor and the
+  // drop commits to the WRONG day — the coordinates were right, the DOM
+  // moved. Lists arriving while ContentCalendar reports a live drag session
+  // are buffered and applied the moment the session ends (dragend, with or
+  // without a drop).
+  const dragActiveRef = useRef(false);
+  const pendingPostsRef = useRef<CalendarPost[] | null>(null);
+  const pendingUnscheduledRef = useRef<CalendarPost[] | null>(null);
+  // The campaign-plans card renders ABOVE the grid, so its late mount on the
+  // plans fetch resolving is a ≥2-row shift of the whole grid — the exact
+  // wrong-day mechanism caught by the DST instrumented run. Plans get the
+  // same session-buffered treatment as the two lists.
+  const pendingPlansRef = useRef<CampaignPlan[] | null>(null);
+
+  const applyPosts = useCallback((next: CalendarPost[]) => {
+    if (dragActiveRef.current) {
+      pendingPostsRef.current = next;
+      return;
+    }
+    setPosts(next);
+  }, []);
+
+  const applyUnscheduled = useCallback((next: CalendarPost[]) => {
+    if (process.env.NODE_ENV !== "production") {
+      console.debug(`[cal] strip apply n=${next.length} frozen=${dragActiveRef.current}`);
+    }
+    if (dragActiveRef.current) {
+      pendingUnscheduledRef.current = next;
+      return;
+    }
+    setUnscheduledPosts(next);
+  }, []);
+
+  const handleDragSessionChange = useCallback((active: boolean) => {
+    dragActiveRef.current = active;
+    if (process.env.NODE_ENV !== "production") {
+      console.debug(`[cal] drag session ${active ? "start" : "end"}`);
+    }
+    if (active) return;
+    // Flush everything that queued up behind the gesture, newest wins.
+    if (pendingPlansRef.current !== null) {
+      setCampaignPlans(pendingPlansRef.current);
+      pendingPlansRef.current = null;
+    }
+    if (pendingUnscheduledRef.current !== null) {
+      setUnscheduledPosts(pendingUnscheduledRef.current);
+      pendingUnscheduledRef.current = null;
+    }
+    if (pendingPostsRef.current !== null) {
+      setPosts(pendingPostsRef.current);
+      pendingPostsRef.current = null;
+    }
+  }, []);
+
   // ---- Fetch posts ----
   const fetchPosts = useCallback(async () => {
     setLoading(true);
@@ -218,7 +283,7 @@ export default function CalendarPage() {
       if (!res.ok) {
         const errData = await res.json();
         setError(errData.error ?? "Failed to fetch posts");
-        setPosts([]);
+        applyPosts([]);
         return;
       }
 
@@ -235,14 +300,14 @@ export default function CalendarPage() {
         );
       }
 
-      setPosts(fetchedPosts);
+      applyPosts(fetchedPosts);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unexpected error");
-      setPosts([]);
+      applyPosts([]);
     } finally {
       setLoading(false);
     }
-  }, [selectedClientId, selectedStatuses]);
+  }, [selectedClientId, selectedStatuses, applyPosts]);
 
   useEffect(() => {
     fetchPosts();
@@ -261,14 +326,14 @@ export default function CalendarPage() {
       });
       if (res.ok) {
         const data = await res.json();
-        setUnscheduledPosts(data.posts ?? []);
+        applyUnscheduled(data.posts ?? []);
       } else {
-        setUnscheduledPosts([]);
+        applyUnscheduled([]);
       }
     } catch {
-      setUnscheduledPosts([]); // the strip degrades quietly to empty
+      applyUnscheduled([]); // the strip degrades quietly to empty
     }
-  }, [selectedClientId]);
+  }, [selectedClientId, applyUnscheduled]);
 
   useEffect(() => {
     fetchUnscheduled();
@@ -409,8 +474,12 @@ export default function CalendarPage() {
   // component). Optimistic: the chip leaves the backlog strip immediately
   // and joins the grid on the target day when that day is in view. Same
   // duplicate-target guard as moves; a failed PATCH reverts by refetching
-  // both authoritative lists. scheduled_at-only PATCHes do not change the
-  // status, so the approval gate is untouched and nothing self-publishes.
+  // both authoritative lists. The WRITE is serialized onto the same
+  // moveQueuesRef per-post queue as moves, so a scheduling drop can never
+  // interleave with an in-flight move for the same post (out-of-order
+  // PATCH resolution would strand the row between the two intents).
+  // scheduled_at-only PATCHes do not change the status, so the approval
+  // gate is untouched and nothing self-publishes.
   const handlePostSchedule = useCallback(
     async (postId: string, newScheduledAt: string) => {
       if (moveInFlightRef.current.get(postId) === newScheduledAt) {
@@ -425,38 +494,68 @@ export default function CalendarPage() {
           ? prev
           : [...prev, { ...post, scheduled_at: newScheduledAt }]
       );
-      let ok = false;
-      try {
-        const res = await fetch(`/api/posts/${postId}`, {
-          method: "PATCH",
-          credentials: "include",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ scheduled_at: newScheduledAt }),
-        });
-        ok = res.ok;
-        if (!res.ok) {
-          const err = await res.json().catch(() => null);
-          console.error(
-            "[calendar] schedule failed:",
-            (err as { error?: string })?.error ?? res.status
-          );
+
+      // The write itself goes through the SAME per-post serial queue the
+      // drag-moves use: a scheduling drop enqueued while a move for this
+      // post is still in flight (slow PATCH, compile window, cold network)
+      // must land AFTER that move's write on the server, or the two PATCHes
+      // can resolve out of order and strand the row — either way the server
+      // state ends up contradicting whichever write the user asked for last.
+      const queue = (
+        moveQueuesRef.current.get(postId) ?? Promise.resolve()
+      ).catch(() => {});
+      const next = queue.then(async () => {
+        let ok = false;
+        try {
+          const res = await fetch(`/api/posts/${postId}`, {
+            method: "PATCH",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ scheduled_at: newScheduledAt }),
+          });
+          ok = res.ok;
+          if (!res.ok) {
+            const err = await res.json().catch(() => null);
+            console.error(
+              "[calendar] schedule failed:",
+              (err as { error?: string })?.error ?? res.status
+            );
+          }
+        } catch (err) {
+          console.error("[calendar] schedule network failure:", err);
         }
-      } catch (err) {
-        console.error("[calendar] schedule network failure:", err);
-      }
-      moveInFlightRef.current.delete(postId);
-      if (ok) {
-        setUndoMove({
-          kind: "schedule",
-          postId,
-          previousScheduledAt: null,
-          movedToIso: newScheduledAt,
-          title: contentTitleFrom(post),
-        });
-      } else {
-        setUndoMove(null); // a failed drop has nothing to undo
-        await Promise.all([fetchPosts(), fetchUnscheduled()]);
-      }
+
+        if (ok) {
+          // Re-assert the applied instant (same contract as performMove):
+          // an interleaved refetch must not repaint an older date.
+          setPosts((prev) =>
+            prev.some((p) => p.id === postId)
+              ? prev.map((p) =>
+                  p.id === postId ? { ...p, scheduled_at: newScheduledAt } : p
+                )
+              : prev
+          );
+          setUndoMove({
+            kind: "schedule",
+            postId,
+            previousScheduledAt: null,
+            movedToIso: newScheduledAt,
+            title: contentTitleFrom(post),
+          });
+        } else {
+          setUndoMove(null); // a failed drop has nothing to undo
+          await Promise.all([fetchPosts(), fetchUnscheduled()]);
+        }
+      });
+      moveQueuesRef.current.set(
+        postId,
+        next.finally(() => {
+          if (moveInFlightRef.current.get(postId) === newScheduledAt) {
+            moveInFlightRef.current.delete(postId);
+          }
+        })
+      );
+      return next;
     },
     [fetchPosts, fetchUnscheduled]
   );
@@ -720,6 +819,7 @@ export default function CalendarPage() {
         onPostUpdate={handlePostUpdate}
         onPostMove={handlePostMove}
         onPostSchedule={handlePostSchedule}
+        onDragSessionChange={handleDragSessionChange}
         unscheduledPosts={unscheduledPosts}
         onApproveProposed={handleApproveProposed}
         onRefresh={handleRefresh}

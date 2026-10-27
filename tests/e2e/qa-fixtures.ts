@@ -455,6 +455,10 @@ export async function gotoWithCompileRetry(
 export interface ProbeOpts {
   method?: string;
   data?: unknown;
+  /** Multipart form fields (Playwright `multipart` option) — form-only
+   * write routes (CSV imports, uploads) validate their IDs here, so a
+   * foreign-id probe of THAT contract must ship as a form, not JSON. */
+  multipart?: Record<string, string | { name: string; mimeType: string; buffer: Buffer }>;
   headers?: Record<string, string>;
   maxRedirects?: number;
   timeoutMs?: number;
@@ -473,6 +477,7 @@ export async function requestWithCompileRetry(
       .fetch(url, {
         method: opts.method ?? "GET",
         data: opts.data,
+        multipart: opts.multipart,
         headers: opts.headers,
         maxRedirects: opts.maxRedirects,
         timeout,

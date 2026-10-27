@@ -3,6 +3,7 @@ import fs from "fs";
 import {
   gotoWithCompileRetry,
   requestWithCompileRetry,
+  type ProbeOpts,
 } from "./qa-fixtures";
 
 /**
@@ -306,7 +307,13 @@ test.describe("Flow 4 — BOLA / access-control probes", () => {
     test.setTimeout(240_000);
     instrument(page, "[bola]");
 
-    const probes: { method: string; path: string; body?: unknown }[] = [
+    const probes: Array<
+      { method: string; path: string; body?: unknown } | {
+        method: string;
+        path: string;
+        multipart: Record<string, string | { name: string; mimeType: string; buffer: Buffer }>;
+      }
+    > = [
       { method: "GET", path: `/api/content-map/${FOREIGN_ID}` },
       { method: "PATCH", path: `/api/content-map/${FOREIGN_ID}`, body: { title: "x" } },
       { method: "DELETE", path: `/api/content-map/${FOREIGN_ID}` },
@@ -316,7 +323,20 @@ test.describe("Flow 4 — BOLA / access-control probes", () => {
       { method: "GET", path: "/api/analytics" },
       { method: "GET", path: "/api/admin/models" },
       { method: "POST", path: "/api/admin/models", body: { sync: true } },
-      { method: "POST", path: "/api/content-map", body: { clientId: FOREIGN_ID } },
+      // POST /api/content-map is a multipart CSV import (safeFormData → 415
+      // for anything else): a JSON body is rejected for its CONTENT TYPE
+      // before any ID validation runs, which reported a false-positive 415
+      // in the audit findings instead of exercising the foreign-id path.
+      // Probe the real contract: the same kind of CSV form, with the
+      // foreign id in the clientId field the route validates.
+      {
+        method: "POST",
+        path: "/api/content-map",
+        multipart: {
+          clientId: FOREIGN_ID,
+          file: { name: "foreign-id.csv", mimeType: "text/csv", buffer: Buffer.from("Title\n") },
+        },
+      },
       // The batch API accepts itemIds directly — a foreign row id must claim
       // nothing. (generate-content is deliberately NOT probed with a postId:
       // its Zod schema has no postId field, so a junk id is stripped and the
@@ -335,10 +355,15 @@ test.describe("Flow 4 — BOLA / access-control probes", () => {
       // outlasting the 30s cap) retry once with a longer timeout; if it is
       // STILL transport-dead, record it as an infrastructure note instead of
       // misreading it as a security finding (status 0 is not the app).
+      // Two probe contracts: JSON bodies for JSON APIs, and multipart forms
+      // for the form-only write routes (their foreign ids live in form
+      // fields, so the JSON `Content-Type` header is not sent there).
+      const isForm = "multipart" in probe;
       const res = await requestWithCompileRetry(page.request, `${BASE}${probe.path}`, {
         method: probe.method,
-        headers: { "Content-Type": "application/json" },
-        data: probe.body !== undefined ? JSON.stringify(probe.body) : undefined,
+        headers: isForm ? undefined : { "Content-Type": "application/json" },
+        data: !isForm && probe.body !== undefined ? JSON.stringify(probe.body) : undefined,
+        multipart: isForm ? (probe as ProbeOpts).multipart : undefined,
         maxRedirects: 0,
         timeoutMs: 30_000, // no single route may hang the audit
       }).catch(() => null);

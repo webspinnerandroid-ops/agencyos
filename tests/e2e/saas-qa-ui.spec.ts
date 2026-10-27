@@ -1185,12 +1185,32 @@ test.describe("saas-qa-audit · navigation dead ends", () => {
       return Array.from(set);
     });
 
+    // Transport status 0 is not a dead link: in dev, the FIRST hit of an
+    // uncached route triggers an on-the-fly Next.js compile that can outlast
+    // the probe's timeout, so the request context rejects and reads as 0 —
+    // an app failure looks identical to a network hiccup. Retry transport
+    // failures once with a longer timeout before declaring the link dead;
+    // a real status answer (4xx/5xx) is taken at face value on attempt one.
+    const probeDestination = async (href: string): Promise<number> => {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        if (attempt > 0) await page.waitForTimeout(1_000); // let the compile settle in
+        const res = await request
+          .get(href, { maxRedirects: 0, timeout: 90_000 })
+          .catch(() => null);
+        const status = res?.status() ?? 0;
+        if (status !== 0) return status;
+      }
+      return 0;
+    };
+
     const broken: string[] = [];
     for (const href of hrefs.slice(0, 40)) {
-      const res = await request.get(href, { maxRedirects: 0 }).catch(() => null);
-      const status = res?.status() ?? 0;
+      const status = await probeDestination(href);
       if (status === 0 || status >= 400) broken.push(`${href} → ${status}`);
     }
+    // Worst case: two 90s attempts per link only when a link truly never
+    // answers; the 300s budget covers the common cold-compile-then-respond
+    // path (attempt one waits out the compile, attempt two answers fast).
     expect(broken, `dead links:\n${broken.join("\n")}`).toHaveLength(0);
   });
 });

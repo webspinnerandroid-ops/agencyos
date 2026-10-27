@@ -59,4 +59,27 @@ describe("buildIcs", () => {
     const ics = buildIcs("Content, calendar — 2026", [], FIXED_NOW);
     expect(ics).toMatch(/X-WR-CALNAME:Content\\, calendar — 2026/);
   });
+
+  it("folds on UTF-8 octets and never splits a surrogate pair", () => {
+    // Emoji lands exactly at the 75-char boundary of a 160-char title: the
+    // naive code-unit fold would tear the pair in half, leaving invalid UTF-8
+    // on disk that strict importers (Google) render as U+FFFD.
+    const title = "Q".repeat(74) + "🚀" + "tail " + "x".repeat(60);
+    const ics = buildIcs(
+      "Export test",
+      [{ uid: "p4@agency-os", title, startIso: "2026-12-15T15:00:00Z" }],
+      FIXED_NOW
+    );
+    // Every physical CONTENT line stays within 75 octets.
+    const physical = ics.split("\r\n").filter((l) => l.length > 0);
+    for (const line of physical) {
+      expect(Buffer.byteLength(line, "utf8")).toBeLessThanOrEqual(75);
+    }
+    // Unfolding (strip CRLF + single leading space) restores the exact title.
+    const unfolded = physical
+      .join("\r\n")
+      .replace(/\r\n /g, "");
+    const summary = unfolded.match(/^SUMMARY:(.*)$/m)![1];
+    expect(summary).toBe(title);
+  });
 });

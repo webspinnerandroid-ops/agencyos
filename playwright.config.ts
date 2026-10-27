@@ -35,13 +35,20 @@ export default defineConfig({
         browserName: "chromium",
         storageState: "test-results/.audit-auth-storage.json",
       },
-      // mobile-drawer-semantics runs in the deduped mobile project below.
-      testIgnore: [/mobile-drawer-semantics\.spec\.ts/],
+      // mobile-drawer-semantics and the week-strip phone copy run in the
+      // deduped mobile project below.
+      testIgnore: [
+        /mobile-drawer-semantics\.spec\.ts/,
+        /calendar-week-strip-mobile\.spec\.ts/,
+      ],
       dependencies: ["setup"],
     },
     {
       name: "chromium-mobile",
-      testMatch: [/mobile-drawer-semantics\.spec\.ts/],
+      testMatch: [
+        /mobile-drawer-semantics\.spec\.ts/,
+        /calendar-week-strip-mobile\.spec\.ts/,
+      ],
       use: {
         browserName: "chromium",
         viewport: { width: 390, height: 844 },

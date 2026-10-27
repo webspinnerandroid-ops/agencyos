@@ -14,6 +14,7 @@ import {
   statusBadgeClass,
   type PostRow,
 } from "@/lib/post-preview";
+import { postRegenerateSchema } from "@/lib/validations";
 
 /**
  * Modal showing a full post. The list only ships lightweight fields (title /
@@ -133,6 +134,16 @@ export default function PostDetailModal({
 
   const handleRewrite = async () => {
     if (!post.id || !rewriteFeedback.trim() || rewriting) return;
+    // Twin validation — the exact zod schema POST /api/posts/[id]/regenerate
+    // runs, so the "Feedback must be 2000 characters or fewer" cap (and any
+    // shape drift) is caught client-side with the server's own message.
+    const parsed = postRegenerateSchema.safeParse({
+      feedback: rewriteFeedback.trim(),
+    });
+    if (!parsed.success) {
+      setRewriteMessage(parsed.error.issues[0]?.message ?? "Rewrite failed — please try again.");
+      return;
+    }
     setRewriting(true);
     setRewriteMessage(null);
     try {
@@ -140,7 +151,7 @@ export default function PostDetailModal({
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ feedback: rewriteFeedback.trim() }),
+        body: JSON.stringify(parsed.data),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {

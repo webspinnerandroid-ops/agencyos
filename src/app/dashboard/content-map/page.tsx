@@ -19,6 +19,11 @@ import {
   ChevronDown,
 } from "lucide-react";
 import {
+  contentMapRowPatchSchema,
+  contentMapBatchSchema,
+  contentMapSiteSchema,
+} from "@/lib/validations";
+import {
   Card,
   CardHeader,
   CardTitle,
@@ -351,24 +356,33 @@ export default function ContentMapPage() {
     setSavingEdits(true);
     try {
       for (const [id, val] of Object.entries(editing)) {
+        // Twin validation — the exact zod schema PATCH /api/content-map/[id]
+        // runs (title/topic caps, keyword array shape, mode enum), reported
+        // with the same first-issue message the server would send. The stale
+        // row stays in edit mode so the problem is visible where it is.
+        const parsed = contentMapRowPatchSchema.safeParse({
+          title: val.title,
+          topic: val.topic,
+          keywords: val.keywords
+            .split(",")
+            .map((k) => k.trim())
+            .filter(Boolean),
+          mode: val.mode,
+        });
+        if (!parsed.success) {
+          setPageError(parsed.error.issues[0]?.message ?? "Could not save the row edits.");
+          return;
+        }
         const res = await fetch(`/api/content-map/${id}`, {
           method: "PATCH",
           credentials: "include",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            title: val.title,
-            topic: val.topic,
-            keywords: val.keywords
-              .split(",")
-              .map((k) => k.trim())
-              .filter(Boolean),
-            mode: val.mode,
-          }),
+          body: JSON.stringify(parsed.data),
         });
         if (!res.ok) {
           const d = await res.json().catch(() => ({}));
           setPageError(d.error ?? "Could not save the row edits.");
-          break;
+          return;
         }
       }
       setEditing({});
@@ -382,6 +396,12 @@ export default function ContentMapPage() {
   // a failure here is a note, never a blocker for the map itself.
   const uploadSite = async () => {
     if (!siteUrl.trim()) return;
+    // Twin validation — the exact zod schema POST /api/content-map/site runs.
+    const parsed = contentMapSiteSchema.safeParse({ url: siteUrl.trim() });
+    if (!parsed.success) {
+      setSiteNote(parsed.error.issues[0]?.message ?? "Could not start the site crawl.");
+      return;
+    }
     setSiteUploading(true);
     setSiteNote(null);
     try {
@@ -389,7 +409,7 @@ export default function ContentMapPage() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: siteUrl.trim() }),
+        body: JSON.stringify(parsed.data),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -471,18 +491,26 @@ export default function ContentMapPage() {
   // ---------------------------------------------------------------------------
   const batchStart = async (itemIds?: string[]) => {
     setPageError(null);
+    // Twin validation — the exact zod schema POST /api/content-map/batch runs
+    // (imagePref's int/"auto" union, brandVoice cap, clientId shape), so an
+    // invalid prefix state stops here with the server's own message.
+    const parsed = contentMapBatchSchema.safeParse({
+      action: "start",
+      clientId: clientId || null,
+      brandVoice: brandVoice.trim() || null,
+      imagePref,
+      itemIds,
+    });
+    if (!parsed.success) {
+      setPageError(parsed.error.issues[0]?.message ?? "Could not start the batch.");
+      return;
+    }
     try {
       const res = await fetch("/api/content-map/batch", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "start",
-          clientId: clientId || null,
-          brandVoice: brandVoice.trim() || null,
-          imagePref,
-          itemIds,
-        }),
+        body: JSON.stringify(parsed.data),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {

@@ -22,6 +22,10 @@ import {
   Wand2,
   HardDrive,
 } from "lucide-react";
+import {
+  assetFolderCreateSchema,
+  assetFolderRenameSchema,
+} from "@/lib/validations";
 
 interface Asset {
   id: string;
@@ -137,6 +141,16 @@ export default function AssetsPage() {
   const createFolder = async () => {
     const name = newFolderName.trim();
     if (!name) return;
+    // Twin validation — the exact zod schema the API route runs, so the
+    // inline error the user sees here is the same judgment the server makes.
+    const parsed = assetFolderCreateSchema.safeParse({
+      name,
+      kind: assetTypeForKind(kind),
+    });
+    if (!parsed.success) {
+      setError(parsed.error.issues[0]?.message ?? "Failed to create folder");
+      return;
+    }
     const res = await fetch("/api/assets/folders", {
       method: "POST",
       credentials: "include",
@@ -155,6 +169,12 @@ export default function AssetsPage() {
   const renameFolder = async (id: string) => {
     const name = renamingName.trim();
     if (!name) return;
+    // Twin validation — same schema the PATCH route runs.
+    const parsed = assetFolderRenameSchema.safeParse({ name });
+    if (!parsed.success) {
+      setError(parsed.error.issues[0]?.message ?? "Failed to rename the folder");
+      return;
+    }
     const res = await fetch(`/api/assets/folders/${id}`, {
       method: "PATCH",
       credentials: "include",

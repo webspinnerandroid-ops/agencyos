@@ -72,8 +72,9 @@ export interface SocialCaptionResult {
  * Deterministic title for a social post — no extra model call.
  * A blog-promo caption titles itself after the blog post (the post exists
  * to promote it); a standalone post after its topic or first keyword.
+ * Exported for unit tests — the generation call is the only production caller.
  */
-function socialTitle(ctx: SocialCaptionContext, platform: string): string {
+export function socialTitle(ctx: SocialCaptionContext, platform: string): string {
   if (ctx.blog) {
     const label = platform.charAt(0).toUpperCase() + platform.slice(1);
     return `${ctx.blog.title} — ${label}`;

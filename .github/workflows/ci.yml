@@ -180,6 +180,12 @@ jobs:
 
   # ────────────────────────────────────────────────────────────────
   # 6. E2E technical & security audit (Playwright)
+  #    `npx playwright test` sweeps every spec under tests/e2e on every
+  #    push — including the calendar drag-and-drop + undo mechanics at the
+  #    Europe/Berlin DST boundary (saas-qa-ui, DST boundary describe) and
+  #    the MobileNav modal-drawer contract (mobile-drawer-semantics, run in
+  #    the dedicated chromium-mobile phone-emulation project). New spec
+  #    files dropped into tests/e2e are picked up automatically.
   #    Drives core flows in a real browser, captures 4xx/5xx +
   #    console/page errors, probes BOLA across endpoints, and races
   #    the batch API. Findings land in tests/e2e/audit-findings.json

@@ -35,6 +35,20 @@ export default defineConfig({
         browserName: "chromium",
         storageState: "test-results/.audit-auth-storage.json",
       },
+      // mobile-drawer-semantics runs in the deduped mobile project below.
+      testIgnore: [/mobile-drawer-semantics\.spec\.ts/],
+      dependencies: ["setup"],
+    },
+    {
+      name: "chromium-mobile",
+      testMatch: [/mobile-drawer-semantics\.spec\.ts/],
+      use: {
+        browserName: "chromium",
+        viewport: { width: 390, height: 844 },
+        isMobile: true,
+        hasTouch: true,
+        storageState: "test-results/.audit-auth-storage.json",
+      },
       dependencies: ["setup"],
     },
   ],

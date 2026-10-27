@@ -1088,6 +1088,7 @@ export default function ContentCalendar({
       e: ReactDragEvent<HTMLDivElement>,
       source: "grid" | "backlog" = "grid"
     ) => {
+      nativeDragActiveRef.current = true;
       setDragPostIdSync(post.id);
       dragSourceRef.current = source;
       // Required by Firefox: a drag needs payload data to actually start.
@@ -1098,6 +1099,7 @@ export default function ContentCalendar({
   );
 
   const handleDragEnd = useCallback(() => {
+    nativeDragActiveRef.current = false;
     setDragPostIdSync(null);
     setDragOverDay(null);
     dragSourceRef.current = null;
@@ -1143,21 +1145,31 @@ export default function ContentCalendar({
     [onPostMove, onPostSchedule, setDragPostIdSync]
   );
 
-  // ---- Pointer drag (touch) ----
+  // ---- Pointer drag (touch + fallback for mice) ----
   // Mobile browsers never start a native HTML5 drag, so draggable chips also
   // track a captured pointer gesture. Crossing a small movement threshold
   // enters the same visual state as HTML5 dragging; releasing over a
   // [data-drop-day] target replays handleDropOnDay — identical semantics in
-  // the month grid and the week strip. Mice are ignored here: once native
-  // DnD begins, the browser stops emitting pointermove on a draggable
-  // element, so this path stays dormant on desktop.
+  // the month grid and the week strip.
+  //
+  // Mice run the same gesture as a FALLBACK for swallowed dragstarts:
+  // Chromium intermittently fails to initiate native DnD when a gesture runs
+  // right after a re-render or a previous gesture (the double-drop QA suite
+  // exposed this). With a mouse the pointer stream keeps flowing, so the
+  // fallback completes the drop; when native DnD DOES initiate, the UA fires
+  // pointercancel and every pointer handler below defers to it
+  // (nativeDragActiveRef), so exactly one of the two paths ever drops.
   const pointerDragRef = useRef<{
     postId: string;
     pointerId: number;
     startX: number;
     startY: number;
     active: boolean;
+    source: "grid" | "backlog";
   } | null>(null);
+  // Set by the HTML5 dragstart handler, cleared on dragend: the native DnD
+  // session's definitive marker, checked by all pointer handlers.
+  const nativeDragActiveRef = useRef(false);
   const suppressClickUntilRef = useRef(0);
 
   const dayKeyFromPoint = useCallback((x: number, y: number): string | null => {
@@ -1172,7 +1184,19 @@ export default function ContentCalendar({
       e: ReactPointerEvent<HTMLDivElement>,
       source: "grid" | "backlog" = "grid"
     ) => {
-      if ((!onPostMove && !onPostSchedule) || e.pointerType === "mouse") return;
+      if ((!onPostMove && !onPostSchedule) || !e.isPrimary) return;
+      // A native session whose dragend was swallowed (the same UA flake that
+      // swallows dragstart) can leave nativeDragActiveRef stuck true — every
+      // later fallback move would then bail, and ALL mouse gestures would
+      // silently degrade back to clicks. A fresh pointerdown proves no drag
+      // session is live (a real one owns the pointer until it ends), so
+      // clear the stale marker plus whatever visuals it left behind.
+      if (nativeDragActiveRef.current) {
+        nativeDragActiveRef.current = false;
+        setDragPostIdSync(null);
+        setDragOverDay(null);
+        dragSourceRef.current = null;
+      }
       // Grid chips must carry a slot to reschedule; backlog chips are the
       // undated ones — the drop assigns it.
       if (source === "grid" && !post.scheduled_at) return;
@@ -1182,6 +1206,7 @@ export default function ContentCalendar({
         startX: e.clientX,
         startY: e.clientY,
         active: false,
+        source,
       };
       // Capture so moves keep arriving while the finger travels off-chip.
       // A already-released pointer (quick taps, synthetic events) throws —
@@ -1199,9 +1224,18 @@ export default function ContentCalendar({
     (e: ReactPointerEvent<HTMLDivElement>) => {
       const st = pointerDragRef.current;
       if (!st || st.pointerId !== e.pointerId) return;
+      // Native DnD just took over (mice): dragstart already set the visuals
+      // and source; the drops are native. Stop tracking immediately.
+      if (nativeDragActiveRef.current) {
+        pointerDragRef.current = null;
+        return;
+      }
       if (!st.active) {
         if (Math.hypot(e.clientX - st.startX, e.clientY - st.startY) < 8) return;
         st.active = true;
+        // Claim the same source the HTML5 dragstart would have recorded, so
+        // handleDropOnDay's backlog/grid split matches the visual gesture.
+        dragSourceRef.current = st.source;
         setDragPostIdSync(st.postId);
       }
       // Suppress selection/scroll defaults only once the gesture is a drag.
@@ -1217,23 +1251,39 @@ export default function ContentCalendar({
       const st = pointerDragRef.current;
       if (!st || st.pointerId !== e.pointerId) return;
       pointerDragRef.current = null;
-      if (!st.active) return;
+      // A native drag in flight owns this release: drop/dragend apply it.
+      if (nativeDragActiveRef.current || !st.active) return;
       // The click that follows a real drag must not open the post dialog.
       suppressClickUntilRef.current = Date.now();
       const target = dayKeyFromPoint(e.clientX, e.clientY);
-      setDragPostIdSync(null);
-      setDragOverDay(null);
-      if (target) void handleDropOnDay(target);
+      if (target) {
+        // handleDropOnDay reads dragPostIdRef AND dragSourceRef itself before
+        // clearing them; nulling the id here first made every pointer-fallback
+        // drop read null and silently no-op (the fallback's whole purpose was
+        // to finish gestures whose native dragstart was swallowed).
+        void handleDropOnDay(target);
+      } else {
+        // Released nowhere droppable: the gesture is over, nothing moves.
+        dragSourceRef.current = null;
+        setDragPostIdSync(null);
+        setDragOverDay(null);
+      }
     },
     [dayKeyFromPoint, handleDropOnDay]
   );
 
   const handleChipPointerCancel = useCallback(() => {
-    if (!pointerDragRef.current) return;
+    const st = pointerDragRef.current;
     pointerDragRef.current = null;
-    dragSourceRef.current = null;
-    setDragPostIdSync(null);
-    setDragOverDay(null);
+    // Native DnD starting triggers pointercancel for the owning mouse: the
+    // drag session set the visuals and source; dragend clears them. Wiping
+    // either here would mis-style or mis-attribute the live drag.
+    if (!st || nativeDragActiveRef.current) return;
+    if (st.active) {
+      dragSourceRef.current = null;
+      setDragPostIdSync(null);
+      setDragOverDay(null);
+    }
   }, []);
 
   const openPostFromChip = useCallback((post: CalendarPost) => {

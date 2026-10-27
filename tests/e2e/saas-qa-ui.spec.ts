@@ -53,6 +53,29 @@ async function horizontalOverflow(page: Page): Promise<number> {
   });
 }
 
+/** Disposable UNDATED draft — the Unscheduled backlog strip's source row. */
+async function createProbeDraft(title: string): Promise<string> {
+  const { db } = adminClient();
+  const { tenantId, workspaceId } = sessionIds();
+  if (!tenantId) throw new Error("could not read the session tenant cookie");
+  if (!workspaceId) throw new Error("the suite session has no workspace_id cookie");
+  const post = await db
+    .from("posts")
+    .insert({
+      tenant_id: tenantId,
+      workspace_id: workspaceId,
+      title,
+      type: "blog",
+      status: "draft",
+      scheduled_at: null,
+      content: { type: "blog", title, body: "Probe." },
+    })
+    .select("id")
+    .single();
+  if (post.error) throw new Error(`probe draft insert failed: ${post.error.message}`);
+  return post.data!.id as string;
+}
+
 /** Disposable probe post in the tenant the suite session is browsing. */
 async function createProbePost(title: string, scheduledIso: string): Promise<string> {
   const { db } = adminClient();
@@ -668,6 +691,137 @@ test.describe("saas-qa-audit · calendar mechanics", () => {
         .dragTo(cellByDay(page, probeDayNo).locator("span").first());
       await page.waitForTimeout(500);
       expect(patchBodies.length, "same-day drop fired a reschedule").toBe(2);
+      } finally {
+        await deleteProbePost(probeId);
+      }
+    });
+  });
+  test.describe("backlog strip: undated drafts are datable — and undoable", () => {
+    // Pinned so the expected 09:00 instant is identical on any host/CI
+    // machine (the browser resolves the slot in its zone).
+    test.use({ timezoneId: "America/Denver" });
+    const DENVER = "America/Denver";
+    const denverOffHrs = (iso: string): number => {
+      const name = new Intl.DateTimeFormat("en-US", {
+        timeZone: DENVER, timeZoneName: "shortOffset",
+      })
+        .formatToParts(new Date(iso))
+        .find((p) => p.type === "timeZoneName")?.value;
+      const match = /GMT([+-]?\d{1,2})/.exec(name ?? "");
+      return match ? Number(match[1]) : 0;
+    };
+
+    test("drag a strip draft onto a day: the 9:00 local slot lands, Undo returns it to the strip", async ({ page }) => {
+      test.setTimeout(240_000);
+      const title = "QA-AUDIT backlog probe";
+      const probeId = await createProbeDraft(title);
+      try {
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await page.goto(`${BASE}/dashboard/calendar`, { waitUntil: "domcontentloaded" });
+
+        const strip = page.getByTestId("unscheduled-backlog");
+        const stripChip = strip.locator("div.bg-card", { hasText: title });
+        // The strip refetches asynchronously; the probe is the newest row
+        // (unscheduled lists newest-first) so it leads the strip.
+        await expect(stripChip).toBeVisible({ timeout: 90_000 });
+
+        // The view is NOT guaranteed to be on today's month: when the current
+        // month holds nothing schedulable, the calendar auto-jumps to the next
+        // non-empty one, and the strip's UNDATED probe never stops that jump.
+        // Anchor the target on the DATE ATTRIBUTE instead — every month view
+        // renders exactly one "the 15th" cell, whatever month it is showing.
+        const targetKey = String(
+          await page.locator('div[data-drop-day$="-15"]').getAttribute("data-drop-day")
+        );
+        const targetCell = page.locator(`div[data-drop-day="${targetKey}"]`);
+        // Expected slot = 09:00 LOCAL on the target day, offset resolved for
+        // THAT date.
+        const off = denverOffHrs(`${targetKey}T12:00:00Z`);
+        const expectedSlotIso = new Date(
+          Date.parse(`${targetKey}T09:00:00Z`) - off * 3_600_000
+        ).toISOString();
+
+        const patchBodies: Array<string | null> = [];
+        await page.route(`**/api/posts/${probeId}`, async (route) => {
+          const req = route.request();
+          if (req.method() === "PATCH") {
+            patchBodies.push(
+              ((req.postDataJSON() as { scheduled_at?: string | null }) ?? {}).scheduled_at ?? null
+            );
+          }
+          await route.continue();
+        });
+
+        // dragTo can die on a scroll target (the page must scroll the cell
+        // into view mid-gesture, which kills the native dragstart) — the same
+        // pointer-fallback that recovers swallowed dragstarts completes the
+        // drop there. Retry the gesture until the chip verifiably lands.
+        const chipInTarget = targetCell.locator("div.bg-card", { hasText: title }).first();
+        await expect
+          .poll(
+            async () => {
+              if ((await chipInTarget.count()) > 0) return true;
+              const current = page
+                .locator("div.bg-card", { hasText: title })
+                .filter({ visible: true })
+                .first();
+              if ((await current.count()) === 0) return false;
+              try {
+                await current.dragTo(targetCell.locator("span").first(), {
+                  timeout: 10_000,
+                });
+              } catch {
+                // The gesture never started; the poll re-runs from wherever the chip now is.
+              }
+              return (await chipInTarget.count()) > 0;
+            },
+            { timeout: 30_000, intervals: [500], message: `drop of "${title}" never landed on ${targetKey}` }
+          )
+          .toBe(true);
+
+        await expect.poll(() => patchBodies.length).toBe(1);
+        expect(
+          new Date(patchBodies[0] as string).toISOString(),
+          "dropping a strip draft must assign the day's 09:00 local slot"
+        ).toBe(expectedSlotIso);
+
+        // The row itself: the exact assigned instant AND the untouched
+        // status (a scheduled_at-only PATCH must not publish a draft).
+        const { db } = adminClient();
+        const rowState = async (): Promise<{ slot: string | null; status: string | null }> => {
+          const row = await db
+            .from("posts")
+            .select("scheduled_at,status")
+            .eq("id", probeId)
+            .single();
+          return {
+            slot: row.data?.scheduled_at ? new Date(row.data.scheduled_at).toISOString() : null,
+            status: row.data?.status ?? null,
+          };
+        };
+        await expect
+          .poll(rowState, { timeout: 20_000 })
+          .toEqual({ slot: expectedSlotIso, status: "draft" });
+        await expect(chipInTarget).toBeVisible();
+
+        const banner = page.getByTestId("post-move-undo");
+        await expect(banner).toBeVisible({ timeout: 20_000 });
+        await expect(banner).toContainText(title);
+        await banner.getByRole("button", { name: /undo/i }).click();
+
+        // Undoing a backlog SCHEDULING (there was no previous slot) must
+        // unschedule — scheduled_at back to null, not some re-slot value.
+        await expect.poll(() => patchBodies.length).toBe(2);
+        expect(patchBodies[1], "undo must unschedule, not fabricate another slot").toBeNull();
+
+        // The chip is back in the strip and gone from the grid, and the row
+        // is undated again — still a draft.
+        await expect(stripChip).toBeVisible({ timeout: 20_000 });
+        await expect(chipInTarget).toHaveCount(0);
+        await expect(banner).toBeHidden();
+        await expect
+          .poll(rowState, { timeout: 20_000 })
+          .toEqual({ slot: null, status: "draft" });
       } finally {
         await deleteProbePost(probeId);
       }

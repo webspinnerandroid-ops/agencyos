@@ -104,6 +104,14 @@ export default function MobileNav({
 
   return (
     <div className={`${breakpointClass} relative`}>
+      {/* Live region for screen readers. The dialog panel is contextual
+          (support varies by screen reader), so a persistent polite region
+          whose text appears when the drawer mounts gives an explicit
+          "Navigation menu opened" announcement. Empty when closed means
+          closing is silent, matching the visual cue of X → hamburger. */}
+      <span className="sr-only" role="status" aria-live="polite">
+        {open ? "Navigation menu opened" : ""}
+      </span>
       <button
         ref={triggerRef}
         onClick={() => setOpen((v) => !v)}

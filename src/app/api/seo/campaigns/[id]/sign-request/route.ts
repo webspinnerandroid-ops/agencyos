@@ -6,6 +6,8 @@ import {
   tenantScopedClient,
 } from "@/lib/supabase/tenant-scope";
 import { createSignRequest, signUrlForToken } from "@/lib/signing";
+import { parseJsonBody } from "@/lib/api-validate";
+import { seoSignerSchema } from "@/lib/validations";
 
 /**
  * POST /api/seo/campaigns/[id]/sign-request
@@ -47,15 +49,15 @@ export async function POST(
       );
     }
 
-    const body = (await request.json().catch(() => ({}))) as {
-      signerName?: string;
-      signerEmail?: string;
-    };
+    const body = await parseJsonBody(request, seoSignerSchema, {
+      emptyAsEmptyObject: true,
+    });
+    if (!body.ok) return body.response;
 
     // Resolve signer identity: explicit body values win, then stored values,
     // then the client record's name/email.
-    let signerName = body.signerName?.trim() || owned.signer_name || "";
-    let signerEmail = body.signerEmail?.trim() || owned.signer_email || "";
+    let signerName = body.data.signerName?.trim() || owned.signer_name || "";
+    let signerEmail = body.data.signerEmail?.trim() || owned.signer_email || "";
     if ((!signerName || !signerEmail) && owned.client_id) {
       const { data: client } = await scoped
         .from("clients")

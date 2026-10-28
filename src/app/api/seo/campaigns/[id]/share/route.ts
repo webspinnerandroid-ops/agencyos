@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getTenantId } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import { randomBytes } from "crypto";
+import { parseJsonBody } from "@/lib/api-validate";
+import { seoCampaignShareSchema } from "@/lib/validations";
 
 /**
  * PATCH /api/seo/campaigns/[id]/share
@@ -30,25 +32,11 @@ export async function PATCH(
     const supabase = await createServiceClient();
     const { id } = await params;
 
-    let body: Record<string, unknown>;
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json(
-        { error: "Invalid JSON body" },
-        { status: 400 }
-      );
-    }
+    const body = await parseJsonBody(request, seoCampaignShareSchema);
+    if (!body.ok) return body.response;
 
-    const wantEnabled = typeof body.enabled === "boolean" ? body.enabled : undefined;
-    const wantRegenerate = body.regenerate === true;
-
-    if (wantEnabled === undefined && !wantRegenerate) {
-      return NextResponse.json(
-        { error: "Provide enabled (boolean) and/or regenerate (true)." },
-        { status: 400 }
-      );
-    }
+    const wantEnabled = body.data.enabled;
+    const wantRegenerate = body.data.regenerate === true;
 
     const updates: Record<string, unknown> = {};
     if (wantEnabled !== undefined) updates.share_enabled = wantEnabled;

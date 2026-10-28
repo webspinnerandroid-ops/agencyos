@@ -659,4 +659,124 @@ test("POST /api/campaign-plans/from-proposal routes a shaped body past validatio
   });
   expect(res.status()).toBe(500);
   expect(((await res.json()) as { error?: string }).error).toMatch(/Proposal campaign not found/);
-});;
+});
+
+// ---- SEO campaigns family (batch 11) ---------------------------------------
+// No shaped crawl/AI/provider calls are made here: analyze is probed with a
+// text-only body (local scoring, no persistence), and the rest with junk
+// shapes that validation itself refuses before any crawl, LLM pass or
+// DocuSign/sign-request call. docusign's provider gate may answer 501 before
+// the body is read at all, so it stays to the unit suite.
+
+test("POST /api/seo/analyze refuses junk shapes and scores a text-only body", async ({ request }) => {
+  const both = await hardPost(request, "/api/seo/analyze", {
+    data: { url: "https://example.test/qa", text: "prose" },
+  });
+  expect(both.status()).toBe(400);
+  expect(((await both.json()) as { issues?: { message: string }[] }).issues?.[0]?.message).toMatch(
+    /Provide exactly one of url and text/
+  );
+
+  const unknownKey = await hardPost(request, "/api/seo/analyze", {
+    data: { text: "prose", evil: true },
+  });
+  expect(unknownKey.status()).toBe(400);
+  expect(((await unknownKey.json()) as { issues?: { message: string }[] }).issues?.[0]?.message).toContain('"evil"');
+
+  // Shape of the pasted-content path (title/keyword/pageUrl all optional):
+  // validation passes it through and the local scoring engines answer 200.
+  const shaped = await hardPost(request, "/api/seo/analyze", {
+    data: { text: "QA validation probe content for the analyzer. It mentions staying organized.\n\nAnother paragraph. Continued below.\n\nMore prose. Even more.", title: "QA Validation", keyword: "staying organized" },
+  });
+  expect(shaped.status(), await shaped.text()).toBe(200);
+  expect((await shaped.json() as { mode?: string }).mode).toBe("text");
+});
+
+test("POST /api/seo/generate-campaign refuses junk bodies before any crawl", async ({ request }) => {
+  const noClient = await hardPost(request, "/api/seo/generate-campaign", {
+    data: { url: "https://example.test/qa" },
+  });
+  expect(noClient.status()).toBe(400);
+  expect(((await noClient.json()) as { issues?: { message: string }[] }).issues?.[0]?.message).toBe(
+    "clientId or clientName is required"
+  );
+
+  const junkId = await hardPost(request, "/api/seo/generate-campaign", {
+    data: { clientId: "acme", url: "https://example.test/qa" },
+  });
+  expect(junkId.status()).toBe(400);
+  expect(((await junkId.json()) as { issues?: { path: string }[] }).issues?.map((i) => i.path)).toContain("clientId");
+
+  const junkCompetitor = await hardPost(request, "/api/seo/generate-campaign", {
+    data: { clientName: "QA Validation Co", url: "https://example.test/qa", competitors: [42] },
+  });
+  expect(junkCompetitor.status()).toBe(400);
+  // zod indexes array-element findings: competitors.0, not competitors.
+  expect(((await junkCompetitor.json()) as { issues?: { path: string }[] }).issues?.map((i) => i.path)[0]).toMatch(/^competitors/);
+});
+
+test("POST /api/seo/rewrite refuses junk bodies at the gate", async ({ request }) => {
+  const empty = await hardPost(request, "/api/seo/rewrite", { data: {} });
+  expect(empty.status()).toBe(400);
+  expect(((await empty.json()) as { issues?: { path: string }[] }).issues?.map((i) => i.path)).toContain("text");
+
+  const unknownKey = await hardPost(request, "/api/seo/rewrite", {
+    data: { text: "prose", evil: true },
+  });
+  expect(unknownKey.status()).toBe(400);
+  expect(((await unknownKey.json()) as { issues?: { message: string }[] }).issues?.[0]?.message).toContain('"evil"');
+});
+
+test("PATCH /api/seo/campaigns/[id] refuses empties, the stale 'active' status, and unknown keys", async ({ request }) => {
+  const empty = await hardPatch(request, `/api/seo/campaigns/${CLEAN_UUID}`, { data: {} });
+  expect(empty.status()).toBe(400);
+  expect(((await empty.json()) as { issues?: { message: string }[] }).issues?.[0]?.message).toBe("No fields to update");
+
+  // migration 001's CHECK constraint permits 'deployed', never 'active'.
+  const staleStatus = await hardPatch(request, `/api/seo/campaigns/${CLEAN_UUID}`, {
+    data: { status: "active" },
+  });
+  expect(staleStatus.status()).toBe(400);
+  expect(((await staleStatus.json()) as { issues?: { path: string }[] }).issues?.map((i) => i.path)).toContain("status");
+
+  const unknownKey = await hardPatch(request, `/api/seo/campaigns/${CLEAN_UUID}`, {
+    data: { tierName: "QA Tier", evil: true },
+  });
+  expect(unknownKey.status()).toBe(400);
+  expect(((await unknownKey.json()) as { issues?: { message: string }[] }).issues?.[0]?.message).toContain('"evil"');
+
+  // A shaped but no-op tier-name update on a uuid that matches nothing:
+  // validation passes, the tenant-scoped update itself 500s.
+  const noRow = await hardPatch(request, `/api/seo/campaigns/${CLEAN_UUID}`, {
+    data: { tierName: "QA Tier" },
+  });
+  expect(noRow.status()).toBe(500);
+});
+
+test("POST /api/seo/campaigns/[id] keeps the legacy unknown-action message and refuses junk keys", async ({ request }) => {
+  const absent = await hardPost(request, `/api/seo/campaigns/${CLEAN_UUID}`, { data: {} });
+  expect(absent.status()).toBe(400);
+  expect(((await absent.json()) as { issues?: { message: string }[] }).issues?.[0]?.message).toBe(
+    'Unknown action. Use action: "approve" to approve and deploy.'
+  );
+
+  const junk = await hardPost(request, `/api/seo/campaigns/${CLEAN_UUID}`, {
+    data: { action: "approve", evil: true },
+  });
+  expect(junk.status()).toBe(400);
+  expect(((await junk.json()) as { issues?: { message: string }[] }).issues?.[0]?.message).toContain('"evil"');
+});
+
+test("PATCH /api/seo/campaigns/[id]/share refuses an empty patch and junk booleans", async ({ request }) => {
+  const empty = await hardPatch(request, `/api/seo/campaigns/${CLEAN_UUID}/share`, { data: {} });
+  expect(empty.status()).toBe(400);
+  expect(((await empty.json()) as { issues?: { message: string }[] }).issues?.[0]?.message).toBe(
+    "Provide enabled (boolean) and/or regenerate (true)."
+  );
+
+  const junk = await hardPatch(request, `/api/seo/campaigns/${CLEAN_UUID}/share`, {
+    data: { enabled: "yes" },
+  });
+  expect(junk.status()).toBe(400);
+  expect(((await junk.json()) as { issues?: { path: string }[] }).issues?.map((i) => i.path)).toContain("enabled");
+});

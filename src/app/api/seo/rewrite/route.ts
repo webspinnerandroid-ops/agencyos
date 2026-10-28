@@ -5,6 +5,8 @@ import { createServiceClient } from "@/lib/supabase/server";
 import { rateLimitRequest } from "@/lib/rate-limit";
 import { rewriteToPassGate } from "@/lib/seo/rewriter";
 import { buildWpSeoMeta, schemaPreview } from "@/lib/seo/wp-seo-meta";
+import { parseJsonBody } from "@/lib/api-validate";
+import { seoRewriteSchema } from "@/lib/validations";
 
 /**
  * POST /api/seo/rewrite
@@ -33,34 +35,16 @@ export async function POST(request: NextRequest) {
     const workspaceId = await getCurrentWorkspaceId();
     const supabase = await createServiceClient();
 
-    let body: {
-      text?: string;
-      title?: string;
-      keyword?: string;
-      instructions?: string;
-      targeted?: boolean;
-    };
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
-    }
-
-    const text = (body.text ?? "").trim();
-    if (!text) {
-      return NextResponse.json(
-        { error: "Provide a piece of text content to rewrite." },
-        { status: 400 }
-      );
-    }
+    const body = await parseJsonBody(request, seoRewriteSchema);
+    if (!body.ok) return body.response;
 
     const result = await rewriteToPassGate(
       {
-        text,
-        title: body.title,
-        keyword: body.keyword,
-        instructions: body.instructions,
-        targeted: body.targeted,
+        text: body.data.text,
+        title: body.data.title,
+        keyword: body.data.keyword,
+        instructions: body.data.instructions,
+        targeted: body.data.targeted,
       },
       { tenantId, workspaceId }
     );

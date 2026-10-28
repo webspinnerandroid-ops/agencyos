@@ -35,6 +35,15 @@ import {
   campaignFromProposalSchema,
   campaignItemApproveSchema,
   campaignRefineSchema,
+  seoAnalyzeSchema,
+  seoAuditCreateSchema,
+  seoGenerateCampaignSchema,
+  seoRewriteSchema,
+  seoCampaignPatchSchema,
+  seoCampaignActionSchema,
+  seoSignerSchema,
+  seoCampaignShareSchema,
+  SEO_CAMPAIGN_STATUSES,
 } from "./validations";
 
 describe("validateJson — emptyAsEmptyObject courtesies", () => {
@@ -844,5 +853,182 @@ describe("campaignFromProposalSchema (batch 10)", () => {
         createWorkspace: "yes",
       }).success
     ).toBe(false);
+  });
+});
+
+// ---- SEO family (batch 11) -------------------------------------------------
+// The analyze/audit shapes mirror AnalyzeRequest (analyzer.ts): the routes
+// pass the body straight through, so every field the lib reads must stay
+// accepted — including the text-mode scoring inputs the analyzer UI sends.
+
+describe("seoAnalyzeSchema (batch 11)", () => {
+  const US = "11111111-1111-4111-8111-111111111111";
+
+  it("accepts url-only and the analyzer's full text-mode body", () => {
+    expect(seoAnalyzeSchema.safeParse({ url: "https://example.com" }).success).toBe(true);
+    expect(
+      seoAnalyzeSchema.safeParse({
+        text: "https://example.com\nsample body",
+        title: "Example",
+        keyword: "example",
+        pageUrl: "https://example.com",
+        metaDescription: "Example meta.",
+        internalUrls: ["https://example.com/pricing"],
+        slug: "/example",
+      }).success
+    ).toBe(true);
+  });
+
+  it("rejects neither or both of url/text, and unknown keys", () => {
+    expect(seoAnalyzeSchema.safeParse({}).success).toBe(false);
+    expect(
+      seoAnalyzeSchema.safeParse({ url: "https://a.test", text: "prose" }).success
+    ).toBe(false);
+    expect(seoAnalyzeSchema.safeParse({ text: "prose", evil: true }).success).toBe(false);
+  });
+
+  it("rejects whitespace-only and over-long fields", () => {
+    expect(seoAnalyzeSchema.safeParse({ text: "   " }).success).toBe(false);
+    expect(seoAnalyzeSchema.safeParse({ url: "x".repeat(2049) }).success).toBe(false);
+  });
+
+  it("audit-create enforces the same exactly-one rule", () => {
+    expect(seoAuditCreateSchema.safeParse({ url: "https://example.com" }).success).toBe(true);
+    expect(
+      seoAuditCreateSchema.safeParse({ url: "https://a.test", text: "prose" }).success
+    ).toBe(false);
+  });
+});
+
+describe("seoGenerateCampaignSchema (batch 11)", () => {
+  it("accepts the New Audit form's url-only/by-name and by-id bodies", () => {
+    expect(
+      seoGenerateCampaignSchema.safeParse({ clientName: "Acme Co", url: "https://acme.test" }).success
+    ).toBe(true);
+    expect(
+      seoGenerateCampaignSchema.safeParse({
+        clientId: "11111111-1111-4111-8111-111111111111",
+        url: "https://acme.test",
+        location: "Cleveland, OH",
+        competitors: ["rival.test"],
+      }).success
+    ).toBe(true);
+  });
+
+  it("keeps the route's own required messages", () => {
+    const none = seoGenerateCampaignSchema.safeParse({ url: "https://acme.test" });
+    expect(none.success).toBe(false);
+    if (!none.success) expect(none.error.issues[0].message).toBe("clientId or clientName is required");
+
+    const noUrl = seoGenerateCampaignSchema.safeParse({ clientName: "Acme" });
+    expect(noUrl.success).toBe(false);
+    if (!noUrl.success) expect(noUrl.error.issues[0].path.join(".")).toBe("url");
+  });
+
+  it("rejects a junk client id, non-string competitors, and unknown keys", () => {
+    expect(
+      seoGenerateCampaignSchema.safeParse({ clientId: "acme", url: "https://acme.test" }).success
+    ).toBe(false);
+    expect(
+      seoGenerateCampaignSchema.safeParse({
+        clientName: "Acme",
+        url: "https://acme.test",
+        competitors: [42],
+      }).success
+    ).toBe(false);
+    expect(
+      seoGenerateCampaignSchema.safeParse({ clientName: "Acme", url: "https://acme.test", evil: 1 }).success
+    ).toBe(false);
+  });
+});
+
+describe("seoRewriteSchema (batch 11)", () => {
+  it("accepts the rewriter page's body and rejects empty/whitespace text", () => {
+    expect(
+      seoRewriteSchema.safeParse({
+        text: "prose body",
+        title: "Rewrite me",
+        keyword: "rewrite",
+        instructions: "punchier opening",
+        targeted: true,
+      }).success
+    ).toBe(true);
+    expect(seoRewriteSchema.safeParse({}).success).toBe(false);
+    expect(seoRewriteSchema.safeParse({ text: "   " }).success).toBe(false);
+  });
+
+  it("bounds instructions and rejects unknown keys", () => {
+    expect(seoRewriteSchema.safeParse({ text: "b", instructions: "x".repeat(4001) }).success).toBe(false);
+    expect(seoRewriteSchema.safeParse({ text: "b", targeted: "yes" }).success).toBe(false);
+    expect(seoRewriteSchema.safeParse({ text: "b", evil: true }).success).toBe(false);
+  });
+});
+
+describe("seoCampaignPatchSchema (batch 11)", () => {
+  it("accepts each updateable field alone and together", () => {
+    expect(seoCampaignPatchSchema.safeParse({ tierName: "Silver" }).success).toBe(true);
+    expect(seoCampaignPatchSchema.safeParse({ tierPrice: 2500 }).success).toBe(true);
+    expect(seoCampaignPatchSchema.safeParse({ campaignJson: { tierName: "Silver" } }).success).toBe(true);
+    for (const status of SEO_CAMPAIGN_STATUSES) {
+      expect(seoCampaignPatchSchema.safeParse({ status }).success).toBe(true);
+    }
+  });
+
+  it("encodes the migration-001 DB status enum, not the route's stale comment", () => {
+    // The DB CHECK constraint has 'deployed', never 'active'.
+    expect(SEO_CAMPAIGN_STATUSES).not.toContain("active");
+    expect(seoCampaignPatchSchema.safeParse({ status: "active" }).success).toBe(false);
+  });
+
+  it("rejects an empty patch, junk numbers, and unknown keys", () => {
+    expect(seoCampaignPatchSchema.safeParse({}).success).toBe(false);
+    expect(seoCampaignPatchSchema.safeParse({ tierPrice: 1.5 }).success).toBe(false);
+    expect(seoCampaignPatchSchema.safeParse({ tierName: 42 }).success).toBe(false);
+    expect(seoCampaignPatchSchema.safeParse({ tierName: "T", evil: true }).success).toBe(false);
+  });
+});
+
+describe("seoCampaignActionSchema (batch 11)", () => {
+  it("accepts only the approve action and answers the legacy message otherwise", () => {
+    expect(seoCampaignActionSchema.safeParse({ action: "approve" }).success).toBe(true);
+
+    const absent = seoCampaignActionSchema.safeParse({});
+    expect(absent.success).toBe(false);
+    if (!absent.success)
+      expect(absent.error.issues[0].message).toBe('Unknown action. Use action: "approve" to approve and deploy.');
+    expect(seoCampaignActionSchema.safeParse({ action: "deploy" }).success).toBe(false);
+  });
+});
+
+describe("seoSignerSchema (batch 11)", () => {
+  it("accepts empty/absent fields (the routes fall back to stored values) and bounds lengths", () => {
+    expect(seoSignerSchema.safeParse({}).success).toBe(true);
+    expect(
+      seoSignerSchema.safeParse({ signerName: "Alice", signerEmail: "alice@client.test" }).success
+    ).toBe(true);
+    // Shape-and-size only: an email-format check would break the fallback.
+    expect(seoSignerSchema.safeParse({ signerEmail: "not-an-email" }).success).toBe(true);
+    expect(seoSignerSchema.safeParse({ signerEmail: "x".repeat(321) }).success).toBe(false);
+    expect(seoSignerSchema.safeParse({ evil: true }).success).toBe(false);
+  });
+});
+
+describe("seoCampaignShareSchema (batch 11)", () => {
+  it("accepts enable/disable and/or regenerate, and requires at least one", () => {
+    expect(seoCampaignShareSchema.safeParse({ enabled: false }).success).toBe(true);
+    expect(seoCampaignShareSchema.safeParse({ regenerate: true }).success).toBe(true);
+    expect(
+      seoCampaignShareSchema.safeParse({ enabled: true, regenerate: true }).success
+    ).toBe(true);
+    const empty = seoCampaignShareSchema.safeParse({});
+    expect(empty.success).toBe(false);
+    if (!empty.success)
+      expect(empty.error.issues[0].message).toBe("Provide enabled (boolean) and/or regenerate (true).");
+  });
+
+  it("rejects non-boolean junk and unknown keys", () => {
+    expect(seoCampaignShareSchema.safeParse({ enabled: 1 }).success).toBe(false);
+    expect(seoCampaignShareSchema.safeParse({ regenerate: "yes" }).success).toBe(false);
+    expect(seoCampaignShareSchema.safeParse({ enabled: true, evil: true }).success).toBe(false);
   });
 });

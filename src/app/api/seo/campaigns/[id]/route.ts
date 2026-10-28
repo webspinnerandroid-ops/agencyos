@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getTenantId } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
 import { approveAndDeploy } from "@/lib/seo/deployCampaign";
+import { parseJsonBody } from "@/lib/api-validate";
+import { seoCampaignPatchSchema, seoCampaignActionSchema } from "@/lib/validations";
 
 /**
  * PATCH /api/seo/campaigns/[id]
@@ -22,31 +24,16 @@ export async function PATCH(
     const supabase = await createServiceClient();
     const { id } = await params;
 
-    // Parse body
-    let body: Record<string, unknown>;
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json(
-        { error: "Invalid JSON body" },
-        { status: 400 }
-      );
-    }
+    const body = await parseJsonBody(request, seoCampaignPatchSchema);
+    if (!body.ok) return body.response;
 
     // Build update payload
     const updates: Record<string, unknown> = {};
-    if (body.campaignJson !== undefined)
-      updates.campaign_json = body.campaignJson;
-    if (body.tierName !== undefined) updates.tier_name = body.tierName;
-    if (body.tierPrice !== undefined) updates.tier_price = body.tierPrice;
-    if (body.status !== undefined) updates.status = body.status;
-
-    if (Object.keys(updates).length === 0) {
-      return NextResponse.json(
-        { error: "No fields to update" },
-        { status: 400 }
-      );
-    }
+    if (body.data.campaignJson !== undefined)
+      updates.campaign_json = body.data.campaignJson;
+    if (body.data.tierName !== undefined) updates.tier_name = body.data.tierName;
+    if (body.data.tierPrice !== undefined) updates.tier_price = body.data.tierPrice;
+    if (body.data.status !== undefined) updates.status = body.data.status;
 
     const { data: campaign, error } = await supabase
       .from("seo_campaigns")
@@ -121,14 +108,12 @@ export async function POST(
     const tenantId = await getTenantId();
     const { id } = await params;
 
-    let body: { action?: string } = {};
-    try {
-      body = await request.json();
-    } catch {
-      // No body is fine
-    }
+    const body = await parseJsonBody(request, seoCampaignActionSchema, {
+      emptyAsEmptyObject: true,
+    });
+    if (!body.ok) return body.response;
 
-    if (body.action === "approve") {
+    if (body.data.action === "approve") {
       const result = await approveAndDeploy(id, tenantId);
       return NextResponse.json({ success: true, ...result });
     }

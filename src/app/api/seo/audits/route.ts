@@ -3,6 +3,8 @@ import { getTenantId } from "@/lib/auth";
 import { getCurrentWorkspaceId } from "@/lib/workspace";
 import { createServiceClient } from "@/lib/supabase/server";
 import { analyzeContent, type AnalyzeResult } from "@/lib/seo/analyzer";
+import { parseJsonBody } from "@/lib/api-validate";
+import { seoAuditCreateSchema } from "@/lib/validations";
 
 /**
  * Saved site audits — the dashboard behind "monitor a URL".
@@ -129,37 +131,10 @@ export async function POST(request: NextRequest) {
     const workspaceId = await getCurrentWorkspaceId();
     const supabase = await createServiceClient();
 
-    let body: {
-      url?: string;
-      text?: string;
-      title?: string;
-      keyword?: string;
-    };
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json(
-        { error: "Invalid JSON body." },
-        { status: 400 }
-      );
-    }
+    const body = await parseJsonBody(request, seoAuditCreateSchema);
+    if (!body.ok) return body.response;
 
-    const hasUrl = typeof body.url === "string" && body.url.trim().length > 0;
-    const hasText = typeof body.text === "string" && body.text.trim().length > 0;
-    if (!hasUrl && !hasText) {
-      return NextResponse.json(
-        { error: "Provide a URL or a piece of text content to audit." },
-        { status: 400 }
-      );
-    }
-    if (hasUrl && hasText) {
-      return NextResponse.json(
-        { error: "Provide either a URL or text, not both." },
-        { status: 400 }
-      );
-    }
-
-    const result: AnalyzeResult = await analyzeContent(body);
+    const result: AnalyzeResult = await analyzeContent(body.data);
     const failed = [
       ...(result.seo?.checks ?? []),
       ...(result.aeoGeo?.checks ?? []),

@@ -10,6 +10,8 @@ import {
 import { generateStructuredOutput } from "@/lib/ai/orchestrator";
 import { getSeoCampaignPrompt, type CampaignTier } from "@/lib/ai/seo-prompts";
 import type { AITask } from "@/lib/ai/orchestrator";
+import { parseJsonBody } from "@/lib/api-validate";
+import { seoGenerateCampaignSchema } from "@/lib/validations";
 
 // ----------------------------------------------------------------------------
 // Social presence research — AI-assisted (labeled as estimates in the UI).
@@ -93,11 +95,6 @@ uncertain as such in notes. Return JSON: { "brands": [...], "overall": "..." }`,
 // ============================================================================
 // Types
 // ============================================================================
-
-interface GenerateCampaignRequest {
-  clientId: string;
-  url: string;
-}
 
 interface CampaignObject {
   tierName: string;
@@ -258,35 +255,22 @@ export async function POST(request: NextRequest) {
     // ------------------------------------------------------------------
     // 2. Parse body
     // ------------------------------------------------------------------
-    let body: GenerateCampaignRequest & { clientName?: string };
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json(
-        { error: "Invalid JSON body" },
-        { status: 400 }
-      );
-    }
+    const body = await parseJsonBody(request, seoGenerateCampaignSchema);
+    if (!body.ok) return body.response;
+    const { clientId, clientName, url, competitors } = body.data;
 
-    const { clientId, clientName, url } = body as any;
     // Business location (optional) — lets the auditor qualify keywords,
     // competitors and rankings for the right market instead of being generic.
-    const location =
-      typeof (body as any).location === "string"
-        ? (body as any).location.trim().slice(0, 120)
-        : "";
+    const location = body.data.location?.trim().slice(0, 120) ?? "";
 
     let resolvedClientId: string | null = null;
 
-    // Resolve client by UUID or name
-    if (clientId && typeof clientId === "string") {
-      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-      if (uuidRegex.test(clientId)) {
-        resolvedClientId = clientId;
-      }
+    // Resolve client by UUID or name — the uuid/shape gate moved to the schema.
+    if (clientId) {
+      resolvedClientId = clientId;
     }
 
-    if (!resolvedClientId && clientName && typeof clientName === "string") {
+    if (!resolvedClientId && clientName) {
       try {
         const lookupClient = createClient(
           process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -323,19 +307,6 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    if (!resolvedClientId) {
-      return NextResponse.json(
-        { error: "clientId or clientName is required" },
-        { status: 400 }
-      );
-    }
-
-    if (!url || typeof url !== "string") {
-      return NextResponse.json(
-        { error: "url is required" },
-        { status: 400 }
-      );
-    }
 
     // ------------------------------------------------------------------
     // 3. Crawl the website (defensive)
@@ -365,16 +336,13 @@ export async function POST(request: NextRequest) {
     let competitorData: any[] = [];
     // Optional manual competitors from the form (up to 3) — they anchor the
     // proposal so it isn't generic; discovered ones fill in the rest.
-    const manualCompetitors: string[] = Array.isArray((body as any).competitors)
-      ? (body as any).competitors
-          .filter((c: unknown): c is string => typeof c === "string")
-          .map((c: string) => {
-            const t = c.trim();
-            if (!t) return "";
-            return /^https?:\/\//.test(t) ? t : `https://${t}`;
-          })
-          .filter(Boolean)
-      : [];
+    const manualCompetitors: string[] = (competitors ?? [])
+      .map((c) => {
+        const t = c.trim();
+        if (!t) return "";
+        return /^https?:\/\//.test(t) ? t : `https://${t}`;
+      })
+      .filter(Boolean);
     try {
       const discovered = await discoverCompetitors(
         new URL(siteAudit.url).hostname,
@@ -548,7 +516,7 @@ Create one campaign per tier that is realistic, actionable, and tailored to the 
           required: ["campaigns", "recommended_tier"],
         },
         {
-          clientId: resolvedClientId,
+          clientId: resolvedClientId ?? undefined,
           functionName: "generate_seo_campaigns",
           temperature: 0.4,
           maxTokens: 16384,

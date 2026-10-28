@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantId } from "@/lib/auth";
 import { analyzeContent } from "@/lib/seo/analyzer";
+import { parseJsonBody } from "@/lib/api-validate";
+import { seoAnalyzeSchema } from "@/lib/validations";
 
 /**
  * POST /api/seo/analyze
@@ -16,37 +18,10 @@ export async function POST(request: NextRequest) {
   try {
     await getTenantId();
 
-    let body: {
-      url?: string;
-      text?: string;
-      title?: string;
-      keyword?: string;
-    };
-    try {
-      body = await request.json();
-    } catch {
-      return NextResponse.json(
-        { error: "Invalid JSON body." },
-        { status: 400 }
-      );
-    }
+    const body = await parseJsonBody(request, seoAnalyzeSchema);
+    if (!body.ok) return body.response;
 
-    const hasUrl = typeof body.url === "string" && body.url.trim().length > 0;
-    const hasText = typeof body.text === "string" && body.text.trim().length > 0;
-    if (!hasUrl && !hasText) {
-      return NextResponse.json(
-        { error: "Provide a URL or a piece of text content to analyze." },
-        { status: 400 }
-      );
-    }
-    if (hasUrl && hasText) {
-      return NextResponse.json(
-        { error: "Provide either a URL or text, not both." },
-        { status: 400 }
-      );
-    }
-
-    const result = await analyzeContent(body);
+    const result = await analyzeContent(body.data);
     return NextResponse.json(result);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Analysis failed";

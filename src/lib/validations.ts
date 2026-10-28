@@ -881,3 +881,217 @@ export const campaignFromProposalSchema = z.strictObject({
 });
 
 export type CampaignFromProposalInput = z.infer<typeof campaignFromProposalSchema>;
+
+// ---------------------------------------------------------------------------
+// SEO campaigns. Adopted by the eight body-reading write routes of the seo
+// family — POST /api/seo/analyze, POST /api/seo/audits, POST
+// /api/seo/generate-campaign, POST /api/seo/rewrite, PATCH/POST
+// /api/seo/campaigns/[id], POST .../docusign, PATCH .../share and POST
+// .../sign-request. (The approve / re-run-audit / public sign routes take no
+// body and are out of the ratchet's scope.)
+//
+// The analyze/audit body is exactly-one-of url|text; both messages keep the
+// wording the routes previously answered with. The legal campaign statuses
+// come from the seo_campaigns CHECK constraint (migration 001): proposed,
+// approved, deployed, archived — the route's old comment claimed "active",
+// which the DB has never accepted. The signer fields stay shape-only (no
+// min, no trim): the route deliberately falls back to the stored signer or
+// the client record for empty/absent values.
+// ---------------------------------------------------------------------------
+
+/**
+ * The full AnalyzeRequest shape (src/lib/seo/analyzer.ts) — the routes pass
+ * the body straight through, and the analyzer UI's text mode really sends
+ * pageUrl/metaDescription (+ internalUrls/slug for the rewriter's scoring
+ * inputs), so strict rejection without those keys would break live audits.
+ */
+const seoAnalyzeFields = {
+  url: z
+    .string()
+    .trim()
+    .min(1, "A URL body field must not be empty")
+    .max(2048, "url must be 2048 characters or fewer")
+    .optional(),
+  text: z.string().trim().min(1, "A text body field must not be empty").optional(),
+  title: z.string().max(1200, "title must be 1200 characters or fewer").optional(),
+  keyword: z.string().max(300, "keyword must be 300 characters or fewer").optional(),
+  // Text-mode scoring inputs (analyzer/rewriter contract).
+  pageUrl: z.string().max(2048, "pageUrl must be 2048 characters or fewer").optional(),
+  internalUrls: z
+    .array(z.string().max(2048, "every internalUrl must be 2048 characters or fewer"))
+    .max(200, "internalUrls must have 200 entries or fewer")
+    .optional(),
+  slug: z.string().max(500, "slug must be 500 characters or fewer").optional(),
+  metaDescription: z
+    .string()
+    .max(2000, "metaDescription must be 2000 characters or fewer")
+    .optional(),
+} as const;
+
+export const seoAnalyzeSchema = z
+  .strictObject(seoAnalyzeFields)
+  .refine(
+    (v) =>
+      (Boolean(v.url || v.text) && !(v.url && v.text)),
+    {
+      message: "Provide exactly one of url and text",
+    }
+  );
+
+export type SeoAnalyzeInput = z.infer<typeof seoAnalyzeSchema>;
+
+export const seoAuditCreateSchema = z
+  .strictObject(seoAnalyzeFields)
+  .refine(
+    (v) =>
+      (Boolean(v.url || v.text) && !(v.url && v.text)),
+    {
+      message: "Provide exactly one of url and text",
+    }
+  );
+
+export type SeoAuditCreateInput = z.infer<typeof seoAuditCreateSchema>;
+
+/**
+ * POST /api/seo/generate-campaign — the New Audit form's payload.
+ *
+ * clientId (uuid) or clientName (name lookup / auto-create) is required, in
+ * that exact wording; the route keeps its own ordering of the follow-up
+ * checks so the response contract changes only how garbage is refused.
+ */
+export const seoGenerateCampaignSchema = z
+  .strictObject({
+    clientId: z
+      .string()
+      .uuid("clientId must be a valid client id")
+      .optional(),
+    clientName: z
+      .string()
+      .max(120, "clientName must be 120 characters or fewer")
+      .optional(),
+    url: z
+      .string({ error: "url is required" })
+      .min(1, "url is required")
+      .max(2000, "url must be 2000 characters or fewer"),
+    // The route trims and truncates the location itself (slice(0,120)),
+    // so this stays shape-only.
+    location: z.string().optional(),
+    // Manual competitors from the form (up to 3 in the UI). The route used
+    // to silently drop non-string entries; they are now field-level 400s.
+    competitors: z.array(z.string()).optional(),
+  })
+  .refine(
+    (v) => v.clientId !== undefined || v.clientName !== undefined,
+    {
+      message: "clientId or clientName is required",
+    }
+  );
+
+export type SeoGenerateCampaignInput = z.infer<typeof seoGenerateCampaignSchema>;
+
+/** POST /api/seo/rewrite — pasted content to be rewritten past the gate. */
+export const seoRewriteSchema = z.strictObject({
+  text: z
+    .string()
+    .trim()
+    .min(1, "Provide a piece of text content to rewrite."),
+  title: z.string().max(1200, "title must be 1200 characters or fewer").optional(),
+  keyword: z.string().max(300, "keyword must be 300 characters or fewer").optional(),
+  instructions: z
+    .string()
+    .max(4000, "instructions must be 4000 characters or fewer")
+    .optional(),
+  targeted: z.boolean().optional(),
+});
+
+export type SeoRewriteInput = z.infer<typeof seoRewriteSchema>;
+
+/**
+ * PATCH /api/seo/campaigns/[id] — tier customization / status change.
+ * campaign_json stays shape-only (the tier object is producer-owned);
+ * status is the DB's real enum from migration 001.
+ */
+export const SEO_CAMPAIGN_STATUSES = [
+  "proposed",
+  "approved",
+  "deployed",
+  "archived",
+] as const;
+
+export const seoCampaignPatchSchema = z
+  .strictObject({
+    campaignJson: z.record(z.string(), z.unknown()).optional(),
+    tierName: z.string().max(300, "tierName must be 300 characters or fewer").optional(),
+    tierPrice: z
+      .number()
+      .int("tierPrice must be an integer")
+      .optional(),
+    status: z
+      .enum(SEO_CAMPAIGN_STATUSES)
+      .optional(),
+  })
+  .refine(
+    (v) =>
+      v.campaignJson !== undefined ||
+      v.tierName !== undefined ||
+      v.tierPrice !== undefined ||
+      v.status !== undefined,
+    {
+      message: "No fields to update",
+    }
+  );
+
+export type SeoCampaignPatchInput = z.infer<typeof seoCampaignPatchSchema>;
+
+/**
+ * POST /api/seo/campaigns/[id] (legacy convenience approve). The action is
+ * required with the exact message the route used to return, so an absent or
+ * no-body call keeps answering 400 with it.
+ */
+export const seoCampaignActionSchema = z.strictObject({
+  action: z
+    .enum(["approve"], { error: 'Unknown action. Use action: "approve" to approve and deploy.' }),
+});
+
+export type SeoCampaignActionInput = z.infer<typeof seoCampaignActionSchema>;
+
+/**
+ * The signer identity the docusign and sign-request senders accept. Shape
+ * and size only — the routes trim and fall back to the stored signer or the
+ * client record for empty/absent values, and an email-format check here
+ * would break that fallback contract.
+ */
+export const seoSignerSchema = z.strictObject({
+  signerName: z
+    .string()
+    .max(200, "signerName must be 200 characters or fewer")
+    .optional(),
+  signerEmail: z
+    .string()
+    .max(320, "signerEmail must be 320 characters or fewer")
+    .optional(),
+});
+
+export type SeoSignerInput = z.infer<typeof seoSignerSchema>;
+
+/**
+ * PATCH /api/seo/campaigns/[id]/share — enable/disable and/or regenerate the
+ * public share link.
+ */
+export const seoCampaignShareSchema = z
+  .strictObject({
+    enabled: z
+      .boolean({ error: "enabled must be a boolean" })
+      .optional(),
+    regenerate: z
+      .boolean({ error: "regenerate must be a boolean" })
+      .optional(),
+  })
+  .refine(
+    (v) => v.enabled !== undefined || v.regenerate !== undefined,
+    {
+      message: "Provide enabled (boolean) and/or regenerate (true).",
+    }
+  );
+
+export type SeoCampaignShareInput = z.infer<typeof seoCampaignShareSchema>;

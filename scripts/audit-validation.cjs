@@ -38,11 +38,13 @@ const API = path.join(ROOT, "src", "app", "api");
  * media-assets reassign/duplicate family (batch 7), the scheduled-failure
  * resolution + push-subscription family (batch 8), the leads (Cipher CRM)
  * family — create/update/email/sms/apollo-import (batch 9), the
- * campaign-plans family — approve/refine/from-proposal (batch 10).
+ * campaign-plans family — approve/refine/from-proposal (batch 10), the seo
+ * family — analyze/audits/generate-campaign/rewrite/campaigns-[id]
+ * patch+action/docusign/share/sign-request (batch 11).
  */
 const BASELINE = {
-  unvalidated: 61,
-  validated: 33,
+  unvalidated: 53,
+  validated: 41,
 };
 
 function walk(dir, out = []) {

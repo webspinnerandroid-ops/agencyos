@@ -9,6 +9,8 @@ import {
   createCampaignFromProposal,
   WEBSITE_PLAN,
 } from "@/lib/campaign-from-proposal";
+import { parseJsonBody } from "@/lib/api-validate";
+import { campaignFromProposalSchema } from "@/lib/validations";
 
 /**
  * POST /api/campaign-plans/from-proposal
@@ -34,24 +36,14 @@ export async function POST(request: NextRequest) {
     const tenantId = await getTenantId();
     await requireRole("agency_editor");
 
-    const body = (await request.json()) as {
-      campaignId?: string;
-      workspaceId?: string;
-      createWorkspace?: boolean;
-      includeWebsite?: boolean;
-    };
-    if (!body.campaignId) {
-      return NextResponse.json(
-        { error: "campaignId is required" },
-        { status: 400 }
-      );
-    }
+    const body = await parseJsonBody(request, campaignFromProposalSchema);
+    if (!body.ok) return body.response;
 
     let workspaceId =
-      body.workspaceId ?? (await getCurrentWorkspaceId());
+      body.data.workspaceId ?? (await getCurrentWorkspaceId());
     let createdWorkspace: Workspace | null = null;
 
-    if (body.createWorkspace && !body.workspaceId) {
+    if (body.data.createWorkspace && !body.data.workspaceId) {
       // Read the proposal title first so the workspace name is meaningful.
       const { createClient } = await import("@supabase/supabase-js");
       const sb = createClient(
@@ -62,7 +54,7 @@ export async function POST(request: NextRequest) {
       const { data: campaign } = await sb
         .from("seo_campaigns")
         .select("tier_name, campaign_json")
-        .eq("id", body.campaignId)
+        .eq("id", body.data.campaignId)
         .eq("tenant_id", tenantId)
         .single();
       const json =
@@ -82,9 +74,9 @@ export async function POST(request: NextRequest) {
 
     const plan = await createCampaignFromProposal(
       tenantId,
-      body.campaignId,
+      body.data.campaignId,
       workspaceId,
-      body.includeWebsite === true
+      body.data.includeWebsite === true
     );
 
     // The sold tier is now live — mark it approved so Recent SEO Audits and
@@ -100,11 +92,11 @@ export async function POST(request: NextRequest) {
     const { data: campaign } = await sb
       .from("seo_campaigns")
       .select("campaign_json")
-      .eq("id", body.campaignId)
+      .eq("id", body.data.campaignId)
       .eq("tenant_id", tenantId)
       .maybeSingle();
     const campaignJson = (campaign?.campaign_json ?? {}) as Record<string, unknown>;
-    if (body.includeWebsite === true) {
+    if (body.data.includeWebsite === true) {
       campaignJson.websitePlan = WEBSITE_PLAN;
     } else {
       delete campaignJson.websitePlan;
@@ -115,7 +107,7 @@ export async function POST(request: NextRequest) {
         status: "approved",
         campaign_json: campaignJson,
       })
-      .eq("id", body.campaignId)
+      .eq("id", body.data.campaignId)
       .eq("tenant_id", tenantId)
       .in("status", ["proposed", "approved"]);
 

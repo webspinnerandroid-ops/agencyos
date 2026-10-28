@@ -584,3 +584,79 @@ test("POST /api/leads/import/apollo refuses junk search params and unknown keys"
   expect(unknownFilter.status()).toBe(400);
   expect(((await unknownFilter.json()) as { issues?: { message: string }[] }).issues?.[0]?.message).toContain('"seniority"');
 });
+
+// ---- Campaign-plans family (batch 10) --------------------------------------
+// Approve and refine are probed against uuids that match no row, so they
+// stop at their own "Campaign item not found" / "Campaign plan not found"
+// branches — no generation runs and no Malory call fires. from-proposal is
+// probed on a campaign id that matches no proposal (the materializer throws
+// "Proposal campaign not found" before inserting anything).
+
+test("POST /api/campaign-plans refuses a garbage id, a bogus mediaKind, and unknown keys", async ({ request }) => {
+  // Previously a non-uuid itemId fell through to the lookup, answering
+  // "Campaign item not found" from the branch logic.
+  const junkId = await hardPost(request, "/api/campaign-plans", { data: { itemId: "row-1" } });
+  expect(junkId.status()).toBe(400);
+  const junkBody = (await junkId.json()) as { code?: string; issues?: { path: string }[] };
+  expect(junkBody.code).toBe("invalid_body");
+  expect(junkBody.issues?.map((i) => i.path)).toContain("itemId");
+
+  const junkMedia = await hardPost(request, "/api/campaign-plans", {
+    data: { itemId: CLEAN_UUID, mediaKind: "gif" },
+  });
+  expect(junkMedia.status()).toBe(400);
+  expect(((await junkMedia.json()) as { issues?: { path: string }[] }).issues?.map((i) => i.path)).toContain("mediaKind");
+
+  const unknownKey = await hardPost(request, "/api/campaign-plans", {
+    data: { itemId: CLEAN_UUID, kind: "blog" },
+  });
+  expect(unknownKey.status()).toBe(400);
+  expect(((await unknownKey.json()) as { issues?: { message: string }[] }).issues?.[0]?.message).toContain('"kind"');
+});
+
+test("POST /api/campaign-plans routes a shaped approve body past validation", async ({ request }) => {
+  // A uuid that matches no item: validation accepts it, the by-id lookup
+  // answers "Campaign item not found" — proving the body reached the branch.
+  const res = await hardPost(request, "/api/campaign-plans", {
+    data: { itemId: CLEAN_UUID, mediaKind: "image" },
+  });
+  expect(res.status()).toBe(404);
+  expect(((await res.json()) as { error?: string }).error).toMatch(/Campaign item not found/);
+});
+
+test("POST /api/campaign-plans/refine validates planId before the Malory call", async ({ request }) => {
+  const junk = await hardPost(request, "/api/campaign-plans/refine", { data: { planId: "plan-1" } });
+  expect(junk.status()).toBe(400);
+  expect(((await junk.json()) as { issues?: { path: string }[] }).issues?.map((i) => i.path)).toContain("planId");
+
+  const none = await hardPost(request, "/api/campaign-plans/refine", { data: {} });
+  expect(none.status()).toBe(400);
+
+  // A no-match plan: the refine lib throws its own "Campaign plan not found"
+  // before any model call, which the route answers as a 500.
+  const shaped = await hardPost(request, "/api/campaign-plans/refine", { data: { planId: CLEAN_UUID } });
+  expect(shaped.status()).toBe(500);
+  expect(((await shaped.json()) as { error?: string }).error).toMatch(/Campaign plan not found/);
+});
+
+test("POST /api/campaign-plans/from-proposal validates the required campaign id", async ({ request }) => {
+  const none = await hardPost(request, "/api/campaign-plans/from-proposal", { data: { createWorkspace: true } });
+  expect(none.status()).toBe(400);
+  expect(((await none.json()) as { issues?: { path: string }[] }).issues?.map((i) => i.path)).toContain("campaignId");
+
+  const junkFlag = await hardPost(request, "/api/campaign-plans/from-proposal", {
+    data: { campaignId: CLEAN_UUID, createWorkspace: "yes" },
+  });
+  expect(junkFlag.status()).toBe(400);
+  expect(((await junkFlag.json()) as { issues?: { path: string }[] }).issues?.map((i) => i.path)).toContain("createWorkspace");
+});
+
+test("POST /api/campaign-plans/from-proposal routes a shaped body past validation", async ({ request }) => {
+  // A uuid that matches no proposal: validation accepts it, the materializer
+  // throws "Proposal campaign not found" before inserting a plan.
+  const res = await hardPost(request, "/api/campaign-plans/from-proposal", {
+    data: { campaignId: CLEAN_UUID, createWorkspace: false, includeWebsite: false },
+  });
+  expect(res.status()).toBe(500);
+  expect(((await res.json()) as { error?: string }).error).toMatch(/Proposal campaign not found/);
+});;

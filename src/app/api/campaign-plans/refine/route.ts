@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantId, requireRole } from "@/lib/auth";
 import { refineCampaignPlan } from "@/lib/campaign-refine";
+import { parseJsonBody } from "@/lib/api-validate";
+import { campaignRefineSchema } from "@/lib/validations";
 
 /**
  * POST /api/campaign-plans/refine
@@ -15,12 +17,10 @@ export async function POST(request: NextRequest) {
   try {
     const tenantId = await getTenantId();
     await requireRole("agency_editor");
-    const body = (await request.json()) as { planId?: string };
-    if (!body.planId) {
-      return NextResponse.json({ error: "planId is required" }, { status: 400 });
-    }
+    const body = await parseJsonBody(request, campaignRefineSchema);
+    if (!body.ok) return body.response;
 
-    const result = await refineCampaignPlan(tenantId, body.planId);
+    const result = await refineCampaignPlan(tenantId, body.data.planId);
     return NextResponse.json({ success: true, ...result });
   } catch (error) {
     const message =

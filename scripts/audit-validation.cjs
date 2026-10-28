@@ -37,11 +37,12 @@ const API = path.join(ROOT, "src", "app", "api");
  * token family — 2FA verify/disable + resend-confirmation (batch 6), the
  * media-assets reassign/duplicate family (batch 7), the scheduled-failure
  * resolution + push-subscription family (batch 8), the leads (Cipher CRM)
- * family — create/update/email/sms/apollo-import (batch 9).
+ * family — create/update/email/sms/apollo-import (batch 9), the
+ * campaign-plans family — approve/refine/from-proposal (batch 10).
  */
 const BASELINE = {
-  unvalidated: 64,
-  validated: 30,
+  unvalidated: 61,
+  validated: 33,
 };
 
 function walk(dir, out = []) {

@@ -32,6 +32,9 @@ import {
   leadUpdateSchema,
   LEAD_SOURCES,
   LEAD_STATUSES,
+  campaignFromProposalSchema,
+  campaignItemApproveSchema,
+  campaignRefineSchema,
 } from "./validations";
 
 describe("validateJson — emptyAsEmptyObject courtesies", () => {
@@ -766,6 +769,80 @@ describe("leadApolloImportSchema", () => {
     expect(leadApolloImportSchema.safeParse({ q_keywords: "ok", per_page: 101 }).success).toBe(false);
     expect(
       leadApolloImportSchema.safeParse({ q_organization_name: "Acme", seniority: "vp" }).success
+    ).toBe(false);
+  });
+});
+
+describe("campaignItemApproveSchema (batch 10)", () => {
+  it("accepts the body the calendar sends (itemId + mediaKind)", () => {
+    expect(
+      campaignItemApproveSchema.safeParse({
+        itemId: "11111111-1111-4111-8111-111111111111",
+        mediaKind: "image",
+      }).success
+    ).toBe(true);
+    expect(
+      campaignItemApproveSchema.safeParse({
+        itemId: "11111111-1111-4111-8111-111111111111",
+        mediaKind: "video",
+      }).success
+    ).toBe(true);
+  });
+
+  it("rejects a garbage item id, a non-enum mediaKind, and an unknown key", () => {
+    expect(campaignItemApproveSchema.safeParse({ itemId: "row-1" }).success).toBe(false);
+    expect(campaignItemApproveSchema.safeParse({}).success).toBe(false);
+    expect(
+      campaignItemApproveSchema.safeParse({
+        itemId: "11111111-1111-4111-8111-111111111111",
+        mediaKind: "gif",
+      }).success
+    ).toBe(false);
+    expect(
+      campaignItemApproveSchema.safeParse({
+        itemId: "11111111-1111-4111-8111-111111111111",
+        kind: "blog",
+      }).success
+    ).toBe(false);
+  });
+});
+
+describe("campaignRefineSchema (batch 10)", () => {
+  it("requires a uuid planId", () => {
+    expect(
+      campaignRefineSchema.safeParse({ planId: "11111111-1111-4111-8111-111111111111" }).success
+    ).toBe(true);
+    expect(campaignRefineSchema.safeParse({}).success).toBe(false);
+    expect(campaignRefineSchema.safeParse({ planId: "plan-1" }).success).toBe(false);
+  });
+});
+
+describe("campaignFromProposalSchema (batch 10)", () => {
+  it("accepts the body the SEO campaigns page sends", () => {
+    expect(
+      campaignFromProposalSchema.safeParse({
+        campaignId: "11111111-1111-4111-8111-111111111111",
+        createWorkspace: true,
+        includeWebsite: false,
+      }).success
+    ).toBe(true);
+    // workspaceId is optional (absent → fall back to the current workspace).
+    expect(
+      campaignFromProposalSchema.safeParse({
+        campaignId: "11111111-1111-4111-8111-111111111111",
+        workspaceId: "22222222-2222-4222-8222-222222222222",
+      }).success
+    ).toBe(true);
+  });
+
+  it("rejects a missing/garbage campaignId and non-boolean flags", () => {
+    expect(campaignFromProposalSchema.safeParse({}).success).toBe(false);
+    expect(campaignFromProposalSchema.safeParse({ campaignId: "acme" }).success).toBe(false);
+    expect(
+      campaignFromProposalSchema.safeParse({
+        campaignId: "11111111-1111-4111-8111-111111111111",
+        createWorkspace: "yes",
+      }).success
     ).toBe(false);
   });
 });

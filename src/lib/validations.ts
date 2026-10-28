@@ -843,3 +843,41 @@ export const leadApolloImportSchema = z
   );
 
 export type LeadApolloImportInput = z.infer<typeof leadApolloImportSchema>;
+
+// ---------------------------------------------------------------------------
+// Campaign plans. Adopted by the three write routes of the family —
+// POST /api/campaign-plans (approve a proposed item),
+// POST /api/campaign-plans/refine ("Refine with Malory") and
+// POST /api/campaign-plans/from-proposal (materialize a sold tier).
+//
+// The DB ids are uuids for all three callers, so garbage ids are field-level
+// 400s instead of falling through to a not-found lookup; mediaKind rejects
+// non-image/video values instead of silently approving them as images.
+// ---------------------------------------------------------------------------
+
+export const campaignItemApproveSchema = z.strictObject({
+  itemId: z.string().uuid("itemId must be a valid campaign item id"),
+  mediaKind: z.enum(["video", "image"]).optional(),
+});
+
+export type CampaignItemApproveInput = z.infer<typeof campaignItemApproveSchema>;
+
+export const campaignRefineSchema = z.strictObject({
+  planId: z.string().uuid("planId must be a valid campaign plan id"),
+});
+
+export type CampaignRefineInput = z.infer<typeof campaignRefineSchema>;
+
+export const campaignFromProposalSchema = z.strictObject({
+  campaignId: z
+    .string()
+    .uuid("campaignId must be a valid proposal (SEO campaign) id"),
+  workspaceId: z
+    .string()
+    .uuid("workspaceId must be a valid workspace id")
+    .optional(),
+  createWorkspace: z.boolean().optional(),
+  includeWebsite: z.boolean().optional(),
+});
+
+export type CampaignFromProposalInput = z.infer<typeof campaignFromProposalSchema>;

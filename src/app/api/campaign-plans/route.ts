@@ -11,6 +11,8 @@ import {
   type CampaignPlanItem,
 } from "@/lib/campaign-plans";
 import { generateApprovedCampaignItem } from "@/lib/ai/team-task";
+import { parseJsonBody } from "@/lib/api-validate";
+import { campaignItemApproveSchema } from "@/lib/validations";
 
 /**
  * GET /api/campaign-plans
@@ -67,16 +69,9 @@ export async function POST(request: NextRequest) {
   try {
     const tenantId = await getTenantId();
     await requireRole("agency_editor");
-    const body = (await request.json()) as { itemId?: string; mediaKind?: string };
-    const itemId = body.itemId;
-    const mediaKind =
-      body.mediaKind === "video" ? ("video" as const) : ("image" as const);
-    if (!itemId) {
-      return NextResponse.json(
-        { error: "itemId is required" },
-        { status: 400 }
-      );
-    }
+    const body = await parseJsonBody(request, campaignItemApproveSchema);
+    if (!body.ok) return body.response;
+    const { itemId, mediaKind = "image" } = body.data;
 
     // By-id lookup — the calendar payload is capped (like the backlog strip),
     // so an item in an older plan must still be approvable by id here.

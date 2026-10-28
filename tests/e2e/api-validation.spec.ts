@@ -16,6 +16,7 @@ let tenantId: string;
 let postId: string;
 let createdClientId: string | null = null;
 let createdSequenceId: string | null = null;
+let createdLeadId: string | null = null;
 const stamp = Date.now();
 
 /**
@@ -69,6 +70,7 @@ test.afterAll(async () => {
   if (postId) await db.from("posts").delete().eq("id", postId);
   if (createdClientId) await db.from("clients").delete().eq("id", createdClientId);
   if (createdSequenceId) await db.from("sequences").delete().eq("id", createdSequenceId);
+  if (createdLeadId) await db.from("leads").delete().eq("id", createdLeadId);
 });
 
 test("POST /api/clients refuses an empty body with field-level detail", async ({ request }) => {
@@ -449,4 +451,136 @@ test("DELETE /api/push/subscribe validates the endpoint and keeps the no-match s
     data: { endpoint: "https://push.example.test/subscribe/never-registered" },
   });
   expect(res.status(), await res.text()).toBe(200);
+});
+
+// ---- Leads (Cipher CRM) family (batch 9) -----------------------------------
+// Create/update are exercised on a real probe lead (created and deleted in
+// this section); the email/sms senders are probed against a uuid that matches
+// no lead, so they stop at their own "Lead not found" branch and never reach
+// Resend/Twilio; the Apollo importer is exercised on rejected bodies only —
+// a shaped import would call the live Apollo provider, so none is sent.
+
+test("POST /api/leads refuses junk statuses, junk ids, and unknown keys", async ({ request }) => {
+  const junkStatus = await hardPost(request, "/api/leads", {
+    data: { email: `qa-validation-${stamp}@probe.test`, status: "closed_archived" },
+  });
+  expect(junkStatus.status()).toBe(400);
+  const junkBody = (await junkStatus.json()) as { code?: string; issues?: { path: string }[] };
+  expect(junkBody.code).toBe("invalid_body");
+  expect(junkBody.issues?.map((i) => i.path)).toContain("status");
+
+  const junkClient = await hardPost(request, "/api/leads", { data: { clientId: "acme" } });
+  expect(junkClient.status()).toBe(400);
+  expect(((await junkClient.json()) as { issues?: { path: string }[] }).issues?.map((i) => i.path)).toContain("clientId");
+
+  // Supabase silently ignored unknown keys — and `assignedTo` even sat in
+  // updateLead's accepted type without ever being applied to the DB.
+  const unknownKey = await hardPost(request, "/api/leads", {
+    data: { email: `qa-validation-${stamp}@probe.test`, evil: true },
+  });
+  expect(unknownKey.status()).toBe(400);
+  // strictObject reports unknown keys by name in the message (path is []).
+  expect(((await unknownKey.json()) as { issues?: { message: string }[] }).issues?.[0]?.message).toContain('"evil"');
+});
+
+test("POST /api/leads accepts the body the lib contract sends and stores it", async ({ request }) => {
+  const res = await hardPost(request, "/api/leads", {
+    data: {
+      email: `qa-validation-${stamp}@probe.test`,
+      firstName: "QA",
+      lastName: "Validation",
+      company: "QA Validation Co",
+    },
+  });
+  expect(res.status(), await res.text()).toBe(201);
+  createdLeadId = ((await res.json()) as { id: string }).id;
+
+  const { db } = adminClient();
+  const row = await db
+    .from("leads")
+    .select("first_name, status, source")
+    .eq("id", createdLeadId)
+    .single();
+  expect(row.data?.first_name).toBe("QA");
+  expect(row.data?.status).toBe("new");
+  expect(row.data?.source).toBe("manual");
+});
+
+test("PATCH /api/leads/[id] refuses an empty patch and the never-applied assignedTo", async ({ request }) => {
+  const empty = await hardPatch(request, `/api/leads/${createdLeadId}`, { data: {} });
+  expect(empty.status()).toBe(400);
+  const emptyBody = (await empty.json()) as { code?: string; issues?: { message: string }[] };
+  expect(emptyBody.code).toBe("invalid_body");
+  expect(emptyBody.issues?.[0]?.message).toMatch(/Provide at least one of email, firstName/);
+
+  const assignedTo = await hardPatch(request, `/api/leads/${createdLeadId}`, {
+    data: { assignedTo: CLEAN_UUID },
+  });
+  expect(assignedTo.status()).toBe(400);
+  expect(((await assignedTo.json()) as { issues?: { message: string }[] }).issues?.[0]?.message).toContain('"assignedTo"');
+});
+
+test("PATCH /api/leads/[id] applies a real status change", async ({ request }) => {
+  const res = await hardPatch(request, `/api/leads/${createdLeadId}`, { data: { status: "qualified" } });
+  expect(res.status(), await res.text()).toBe(200);
+
+  const { db } = adminClient();
+  const row = await db.from("leads").select("status").eq("id", createdLeadId).single();
+  expect(row.data?.status).toBe("qualified");
+});
+
+test("POST /api/leads/[id]/email validates subject/body before the sender runs", async ({ request }) => {
+  const noFields = await hardPost(request, `/api/leads/${CLEAN_UUID}/email`, { data: {} });
+  expect(noFields.status()).toBe(400);
+  const noFieldsBody = (await noFields.json()) as { issues?: { path: string }[] };
+  expect(noFieldsBody.issues?.map((i) => i.path)).toContain("subject");
+  expect(noFieldsBody.issues?.map((i) => i.path)).toContain("body");
+
+  const emptySubject = await hardPost(request, `/api/leads/${CLEAN_UUID}/email`, {
+    data: { subject: "", body: "prose" },
+  });
+  expect(emptySubject.status()).toBe(400);
+  expect(((await emptySubject.json()) as { issues?: { message: string }[] }).issues?.[0]?.message).toMatch(/subject is required/);
+
+  // A shaped body reaches the sender's own branch on a uuid that matches no
+  // lead — the sender throws there (no lead, or no provider key), which the
+  // route answers 500; the point is that validation no longer 400s first.
+  const shaped = await hardPost(request, `/api/leads/${CLEAN_UUID}/email`, {
+    data: { subject: "Hi", body: "Validation probe." },
+  });
+  expect(shaped.status()).toBe(500);
+  expect(((await shaped.json()) as { error?: string }).error).toMatch(/Lead not found|not configured/);
+});
+
+test("POST /api/leads/[id]/sms validates the body before the sender runs", async ({ request }) => {
+  const noBody = await hardPost(request, `/api/leads/${CLEAN_UUID}/sms`, { data: {} });
+  expect(noBody.status()).toBe(400);
+  expect(((await noBody.json()) as { issues?: { path: string }[] }).issues?.map((i) => i.path)).toContain("body");
+
+  const shaped = await hardPost(request, `/api/leads/${CLEAN_UUID}/sms`, {
+    data: { body: "Validation probe." },
+  });
+  expect(shaped.status()).toBe(500);
+  expect(((await shaped.json()) as { error?: string }).error).toMatch(/Lead not found|not configured/);
+});
+
+test("POST /api/leads/import/apollo refuses junk search params and unknown keys", async ({ request }) => {
+  // No search parameter at all now fails the schema's own refine.
+  const noSearch = await hardPost(request, "/api/leads/import/apollo", { data: { page: 1, per_page: 10 } });
+  expect(noSearch.status()).toBe(400);
+  expect(((await noSearch.json()) as { issues?: { message: string }[] }).issues?.[0]?.message).toMatch(
+    /At least one search parameter is required/
+  );
+
+  const junkParam = await hardPost(request, "/api/leads/import/apollo", { data: { q_keywords: 42 } });
+  expect(junkParam.status()).toBe(400);
+  expect(((await junkParam.json()) as { issues?: { path: string }[] }).issues?.map((i) => i.path)).toContain("q_keywords");
+
+  // Apollo search filters beyond the three supported ones are refused, not
+  // forwarded as unknowns by the supabase client.
+  const unknownFilter = await hardPost(request, "/api/leads/import/apollo", {
+    data: { q_organization_name: "Acme", seniority: "vp" },
+  });
+  expect(unknownFilter.status()).toBe(400);
+  expect(((await unknownFilter.json()) as { issues?: { message: string }[] }).issues?.[0]?.message).toContain('"seniority"');
 });

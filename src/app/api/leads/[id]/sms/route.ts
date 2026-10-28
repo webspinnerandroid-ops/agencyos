@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sendSMS } from "@/lib/leads/cipher";
 import { getTenantId } from "@/lib/auth";
+import { parseJsonBody } from "@/lib/api-validate";
+import { leadSmsSchema } from "@/lib/validations";
 
 export async function POST(
   request: NextRequest,
@@ -9,9 +11,9 @@ export async function POST(
   try {
     const tenantId = await getTenantId();
     const { id } = await context.params;
-    const { body } = await request.json();
-    if (!body) return NextResponse.json({ error: "body is required" }, { status: 400 });
-    const result = await sendSMS(tenantId, id, body);
+    const body = await parseJsonBody(request, leadSmsSchema);
+    if (!body.ok) return body.response;
+    const result = await sendSMS(tenantId, id, body.data.body);
     return NextResponse.json(result);
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });

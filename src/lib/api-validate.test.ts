@@ -25,6 +25,13 @@ import {
   sequenceUpdateSchema,
   mediaAssetDuplicateSchema,
   mediaAssetReassignSchema,
+  leadApolloImportSchema,
+  leadCreateSchema,
+  leadEmailSchema,
+  leadSmsSchema,
+  leadUpdateSchema,
+  LEAD_SOURCES,
+  LEAD_STATUSES,
 } from "./validations";
 
 describe("validateJson — emptyAsEmptyObject courtesies", () => {
@@ -665,6 +672,100 @@ describe("publishGeneratedSchema", () => {
         targets: [{ blogPlatformId: "bp-1", mode: "create", kind: "post" }],
         content: { title: "t", body: "b", images: [{ url: "not a url" }] },
       }).success
+    ).toBe(false);
+  });
+});
+
+describe("leadCreateSchema", () => {
+  it("accepts the partial body the lib contract sends", () => {
+    expect(leadCreateSchema.safeParse({ email: "a@b.test" }).success).toBe(true);
+    expect(
+      leadCreateSchema.safeParse({ email: "a@b.test", firstName: "A", client_id: "x" }).success
+    ).toBe(false); // snake_case alias is not part of the contract.
+  });
+
+  it("encodes the DB enums (migration 011) and rejects everything else", () => {
+    for (const status of LEAD_STATUSES) {
+      expect(leadCreateSchema.safeParse({ status }).success).toBe(true);
+    }
+    for (const source of LEAD_SOURCES) {
+      expect(leadCreateSchema.safeParse({ source }).success).toBe(true);
+    }
+    expect(leadCreateSchema.safeParse({ status: "closed_archived" }).success).toBe(false);
+    expect(leadCreateSchema.safeParse({ source: "zoominfo" }).success).toBe(false);
+    expect(leadCreateSchema.safeParse({ clientId: "acme" }).success).toBe(false);
+  });
+
+  it("rejects unknown keys instead of letting the client drop them", () => {
+    const parsed = leadCreateSchema.safeParse({ email: "a@b.test", evil: true });
+    expect(parsed.success).toBe(false);
+    // strictObject reports unknown keys by name in the message (path is []).
+    if (!parsed.success) expect(parsed.error.issues[0].message).toContain('"evil"');
+  });
+});
+
+describe("leadUpdateSchema", () => {
+  it("rejects a patch that updates nothing", () => {
+    expect(leadUpdateSchema.safeParse({}).success).toBe(false);
+  });
+
+  it("rejects `assignedTo` — updateLead never applied it anyway", () => {
+    expect(
+      leadUpdateSchema.safeParse({ assignedTo: "11111111-1111-4111-8111-111111111111" }).success
+    ).toBe(false);
+  });
+
+  it("accepts a single-field status change and every DB status", () => {
+    expect(leadUpdateSchema.safeParse({ status: "qualified" }).success).toBe(true);
+    for (const status of LEAD_STATUSES) {
+      expect(leadUpdateSchema.safeParse({ status }).success).toBe(true);
+    }
+    expect(leadUpdateSchema.safeParse({ status: "qualified", clientId: null }).success).toBe(false);
+    // Empty string clears a field (lib contract: "" → null/NULL).
+    expect(leadUpdateSchema.safeParse({ email: "" }).success).toBe(false); // invalid email
+    expect(leadUpdateSchema.safeParse({ company: "" }).success).toBe(true);
+  });
+});
+
+describe("leadEmailSchema", () => {
+  it("requires subject and body", () => {
+    expect(leadEmailSchema.safeParse({}).success).toBe(false);
+    expect(leadEmailSchema.safeParse({ body: "prose" }).success).toBe(false);
+    expect(leadEmailSchema.safeParse({ subject: "Hi", body: "prose" }).success).toBe(true);
+    expect(leadEmailSchema.safeParse({ subject: "", body: "prose" }).success).toBe(false);
+  });
+
+  it("bounds subject and body", () => {
+    expect(leadEmailSchema.safeParse({ subject: "x".repeat(501), body: "b" }).success).toBe(false);
+    expect(leadEmailSchema.safeParse({ subject: "s", body: "x".repeat(20001) }).success).toBe(false);
+  });
+});
+
+describe("leadSmsSchema", () => {
+  it("requires a body and holds the 1600-character Twilio bound", () => {
+    expect(leadSmsSchema.safeParse({}).success).toBe(false);
+    expect(leadSmsSchema.safeParse({ body: "" }).success).toBe(false);
+    expect(leadSmsSchema.safeParse({ body: "x".repeat(1600) }).success).toBe(true);
+    expect(leadSmsSchema.safeParse({ body: "x".repeat(1601) }).success).toBe(false);
+  });
+});
+
+describe("leadApolloImportSchema", () => {
+  it("requires at least one of the three search parameters", () => {
+    expect(leadApolloImportSchema.safeParse({ page: 1, per_page: 10 }).success).toBe(false);
+    for (const q of ["q_organization_name", "q_title", "q_keywords"]) {
+      expect(leadApolloImportSchema.safeParse({ [q]: "Acme" }).success).toBe(true);
+    }
+  });
+
+  it("bounds page/per_page and the search strings, and rejects unknown filters", () => {
+    expect(leadApolloImportSchema.safeParse({ q_keywords: "x".repeat(301) }).success).toBe(false);
+    expect(leadApolloImportSchema.safeParse({ q_keywords: "ok", page: 0 }).success).toBe(false);
+    expect(leadApolloImportSchema.safeParse({ q_keywords: "ok", page: 101 }).success).toBe(false);
+    expect(leadApolloImportSchema.safeParse({ q_keywords: "ok", per_page: 0 }).success).toBe(false);
+    expect(leadApolloImportSchema.safeParse({ q_keywords: "ok", per_page: 101 }).success).toBe(false);
+    expect(
+      leadApolloImportSchema.safeParse({ q_organization_name: "Acme", seniority: "vp" }).success
     ).toBe(false);
   });
 });

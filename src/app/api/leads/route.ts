@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getLeads, createLead } from "@/lib/leads/cipher";
 import { getTenantId } from "@/lib/auth";
+import { parseJsonBody } from "@/lib/api-validate";
+import { leadCreateSchema } from "@/lib/validations";
 
 export async function GET(request: NextRequest) {
   try {
@@ -26,8 +28,9 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const tenantId = await getTenantId();
-    const body = await request.json();
-    const result = await createLead(tenantId, body);
+    const body = await parseJsonBody(request, leadCreateSchema);
+    if (!body.ok) return body.response;
+    const result = await createLead(tenantId, body.data);
     return NextResponse.json(result, { status: 201 });
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 });

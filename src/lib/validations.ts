@@ -719,3 +719,127 @@ export const pushUnsubscribeSchema = z.object({
 });
 
 export type PushUnsubscribeInput = z.infer<typeof pushUnsubscribeSchema>;
+
+// ---------------------------------------------------------------------------
+// Leads (Cipher CRM). Adopted by the 4 body-reading routes of the leads
+// family — POST /api/leads, PATCH /api/leads/[id], the email/sms senders,
+// and the Apollo importer. GET/DELETE and /api/leads/[id]/enrich take no
+// body and are out of scope.
+//
+// The lib's own types (src/lib/leads/cipher.ts) are its real contract and
+// the DB enums come from the CHECK constraints in migration 011 — both are
+// encoded below. The leads routes have no in-repo UI callers, so strict
+// unknown-key rejection (supabase JS silently ignores garbage keys like
+// polyglot-object fields) costs nothing. Note deliberately omitted:
+// `assignedTo` — updateLead's type accepts it but the DB update never
+// applies it; rejecting it here makes that silent ignore loud instead.
+// ---------------------------------------------------------------------------
+
+export const LEAD_STATUSES = [
+  "new",
+  "contacted",
+  "qualified",
+  "proposal_sent",
+  "closed_won",
+  "closed_lost",
+  "unqualified",
+] as const;
+
+export const LEAD_SOURCES = ["apollo", "referral", "website", "manual", "csv_import"] as const;
+
+/** Shared contact-detail fields for create and update. All optional — */
+/** createLead/updateLead accept a partial (lib contract), not a full row. */
+const leadContactFields = {
+  email: z
+    .string()
+    .max(320, "email must be 320 characters or fewer")
+    .email("email must be a valid email address")
+    .optional(),
+  firstName: z.string().max(120, "firstName must be 120 characters or fewer").optional(),
+  lastName: z.string().max(120, "lastName must be 120 characters or fewer").optional(),
+  company: z.string().max(200, "company must be 200 characters or fewer").optional(),
+  title: z.string().max(200, "title must be 200 characters or fewer").optional(),
+  phone: z.string().max(40, "phone must be 40 characters or fewer").optional(),
+  linkedinUrl: z
+    .string()
+    .max(500, "linkedinUrl must be 500 characters or fewer")
+    .url("linkedinUrl must be a valid URL")
+    .optional(),
+} as const;
+
+export const leadCreateSchema = z.strictObject({
+  ...leadContactFields,
+  status: z.enum(LEAD_STATUSES).optional(),
+  source: z.enum(LEAD_SOURCES).optional(),
+  clientId: z.string().uuid("clientId must be a valid client id").optional(),
+  notes: z.string().max(4000, "notes must be 4000 characters or fewer").optional(),
+});
+
+export type LeadCreateInput = z.infer<typeof leadCreateSchema>;
+
+export const leadUpdateSchema = z
+  .strictObject({
+    ...leadContactFields,
+    status: z.enum(LEAD_STATUSES).optional(),
+    clientId: z.string().uuid("clientId must be a valid client id").optional(),
+    notes: z.string().max(4000, "notes must be 4000 characters or fewer").optional(),
+  })
+  .refine(
+    (v) => Object.keys(v).length > 0,
+    {
+      message:
+        "Provide at least one of email, firstName, lastName, company, title, phone, linkedinUrl, status, notes, clientId to update",
+    }
+  );
+
+export type LeadUpdateInput = z.infer<typeof leadUpdateSchema>;
+
+export const leadEmailSchema = z.strictObject({
+  subject: z
+    .string()
+    .min(1, "subject is required")
+    .max(500, "subject must be 500 characters or fewer"),
+  body: z
+    .string()
+    .min(1, "body is required")
+    .max(20000, "body must be 20000 characters or fewer"),
+});
+
+export type LeadEmailInput = z.infer<typeof leadEmailSchema>;
+
+export const leadSmsSchema = z.strictObject({
+  body: z
+    .string()
+    .min(1, "body is required")
+    .max(1600, "body must be 1600 characters or fewer (Twilio SMS limit)"),
+});
+
+export type LeadSmsInput = z.infer<typeof leadSmsSchema>;
+
+export const leadApolloImportSchema = z
+  .strictObject({
+    q_organization_name: z.string().max(200, "q_organization_name must be 200 characters or fewer").optional(),
+    q_title: z.string().max(200, "q_title must be 200 characters or fewer").optional(),
+    q_keywords: z.string().max(300, "q_keywords must be 300 characters or fewer").optional(),
+    page: z
+      .number()
+      .int("page must be an integer")
+      .min(1, "page must be 1 or greater")
+      .max(100, "page must be 100 or fewer")
+      .optional(),
+    per_page: z
+      .number()
+      .int("per_page must be an integer")
+      .min(1, "per_page must be 1 or greater")
+      .max(100, "per_page must be 100 or fewer")
+      .optional(),
+  })
+  .refine(
+    (v) => Boolean(v.q_organization_name || v.q_title || v.q_keywords),
+    {
+      message:
+        "At least one search parameter is required (q_organization_name, q_title, or q_keywords)",
+    }
+  );
+
+export type LeadApolloImportInput = z.infer<typeof leadApolloImportSchema>;

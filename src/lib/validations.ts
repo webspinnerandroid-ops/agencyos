@@ -606,3 +606,45 @@ export const authResendConfirmationSchema = z.object({
 export type AuthResendConfirmationInput = z.infer<
   typeof authResendConfirmationSchema
 >;
+
+// ---------------------------------------------------------------------------
+// Media assets (reassign / duplicate). Adopted by PATCH /api/media-assets/[id]
+// and POST /api/media-assets/[id]/duplicate.
+//
+// The bodies are tiny (a workspace and/or folder reference), so the schema's
+// job is just to make the references typed ids instead of any JSON the
+// destructuring would take. "Move to workspace" sends { workspaceId },
+// "move to folder" sends { folderId } — at least one is required, the
+// refine keeps an empty PATCH from being a silent no-op 200.
+// ---------------------------------------------------------------------------
+
+const workspaceIdField = z.string().uuid("workspaceId must be a valid workspace id");
+
+export const mediaAssetReassignSchema = z
+  .object({
+    workspaceId: workspaceIdField.optional(),
+    // A non-empty id files the asset into that folder; "" or null is the
+    // assets page's "unfiled" move — keep accepting both (the route maps ""
+    // to a null folder_id, same as before).
+    folderId: z
+      .union([
+        z.string().uuid("folderId must be a valid folder id"),
+        z.literal(""),
+        z.null(),
+      ])
+      .optional(),
+  })
+  .refine(
+    (v) => v.workspaceId !== undefined || v.folderId !== undefined,
+    {
+      message: "Provide a workspaceId and/or folderId to update",
+    }
+  );
+
+export type MediaAssetReassignInput = z.infer<typeof mediaAssetReassignSchema>;
+
+export const mediaAssetDuplicateSchema = z.object({
+  workspaceId: workspaceIdField,
+});
+
+export type MediaAssetDuplicateInput = z.infer<typeof mediaAssetDuplicateSchema>;

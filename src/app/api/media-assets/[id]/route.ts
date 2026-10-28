@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantId } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
+import { parseJsonBody } from "@/lib/api-validate";
+import { mediaAssetReassignSchema } from "@/lib/validations";
 
 /**
  * PATCH /api/media-assets/[id]
@@ -19,15 +21,9 @@ export async function PATCH(
     const supabase = await createServiceClient();
     const { id } = await params;
 
-    const body = await request.json();
-    const { workspaceId, folderId } = body;
-
-    if (!workspaceId && !folderId) {
-      return NextResponse.json(
-        { error: "Provide a workspaceId and/or folderId to update" },
-        { status: 400 }
-      );
-    }
+    const parsed = await parseJsonBody(request, mediaAssetReassignSchema);
+    if (!parsed.ok) return parsed.response;
+    const { workspaceId, folderId } = parsed.data;
 
     // Verify the asset belongs to this tenant
     const { data: existing, error: fetchError } = await supabase

@@ -34,11 +34,12 @@ const API = path.join(ROOT, "src", "app", "api");
  * Migrated so far: clients + posts (batch 1), content-map + asset folders
  * (batch 2), notifications + read-link (batch 3), posts rescore/regenerate +
  * the publish family (batch 4), the sequences family (batch 5), the auth
- * token family — 2FA verify/disable + resend-confirmation (batch 6).
+ * token family — 2FA verify/disable + resend-confirmation (batch 6), the
+ * media-assets reassign/duplicate family (batch 7).
  */
 const BASELINE = {
-  unvalidated: 73,
-  validated: 21,
+  unvalidated: 71,
+  validated: 23,
 };
 
 function walk(dir, out = []) {

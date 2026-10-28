@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTenantId } from "@/lib/auth";
 import { createServiceClient } from "@/lib/supabase/server";
+import { parseJsonBody } from "@/lib/api-validate";
+import { mediaAssetDuplicateSchema } from "@/lib/validations";
 
 /**
  * POST /api/media-assets/[id]/duplicate
@@ -16,15 +18,9 @@ export async function POST(
     const supabase = await createServiceClient();
     const { id } = await params;
 
-    const body = await request.json();
-    const { workspaceId } = body;
-
-    if (!workspaceId || typeof workspaceId !== "string") {
-      return NextResponse.json(
-        { error: "workspaceId is required" },
-        { status: 400 }
-      );
-    }
+    const parsed = await parseJsonBody(request, mediaAssetDuplicateSchema);
+    if (!parsed.ok) return parsed.response;
+    const { workspaceId } = parsed.data;
 
     // Verify the source asset belongs to this tenant
     const { data: source, error: fetchError } = await supabase

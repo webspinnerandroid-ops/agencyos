@@ -23,6 +23,8 @@ import {
   sequenceEnrollSchema,
   sequenceStepSchema,
   sequenceUpdateSchema,
+  mediaAssetDuplicateSchema,
+  mediaAssetReassignSchema,
 } from "./validations";
 
 describe("validateJson — emptyAsEmptyObject courtesies", () => {
@@ -444,6 +446,44 @@ describe("sequenceEnrollSchema", () => {
     ).toBe(true);
     expect(sequenceEnrollSchema.safeParse({}).success).toBe(false);
     expect(sequenceEnrollSchema.safeParse({ leadId: "lead-1" }).success).toBe(false);
+  });
+});
+
+describe("mediaAssetReassignSchema", () => {
+  it("accepts the workspace move, the folder move, and the unfiled move", () => {
+    expect(
+      mediaAssetReassignSchema.safeParse({ workspaceId: "11111111-1111-4111-8111-111111111111" })
+        .success
+    ).toBe(true);
+    expect(
+      mediaAssetReassignSchema.safeParse({ folderId: "22222222-2222-4222-8222-222222222222" })
+        .success
+    ).toBe(true);
+    // The assets page's "unfiled" sentinel and an explicit null clear the folder.
+    expect(mediaAssetReassignSchema.safeParse({ folderId: "" }).success).toBe(true);
+    expect(mediaAssetReassignSchema.safeParse({ folderId: null }).success).toBe(true);
+  });
+
+  it("rejects an empty PATCH, junk ids, and swapped field types", () => {
+    expect(mediaAssetReassignSchema.safeParse({}).success).toBe(false);
+    expect(mediaAssetReassignSchema.safeParse({ workspaceId: "not-a-uuid" }).success).toBe(false);
+    expect(mediaAssetReassignSchema.safeParse({ folderId: "not-a-uuid" }).success).toBe(false);
+    expect(
+      mediaAssetReassignSchema.safeParse({
+        workspaceId: true,
+      }).success
+    ).toBe(false);
+  });
+});
+
+describe("mediaAssetDuplicateSchema", () => {
+  it("requires a uuid workspaceId", () => {
+    expect(
+      mediaAssetDuplicateSchema.safeParse({ workspaceId: "11111111-1111-4111-8111-111111111111" })
+        .success
+    ).toBe(true);
+    expect(mediaAssetDuplicateSchema.safeParse({}).success).toBe(false);
+    expect(mediaAssetDuplicateSchema.safeParse({ workspaceId: "" }).success).toBe(false);
   });
 });
 

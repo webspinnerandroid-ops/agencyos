@@ -302,3 +302,52 @@ test("POST /api/sequences/[id]/enroll validates the body before the sequence loo
   );
   expect(unknown.status(), await unknown.text()).toBe(404);
 });
+
+// ---- Auth token family (batch 6) -------------------------------------------
+// The 2FA probes never disable or enroll anything (this account has no
+// user_2fa row, so both calls stop at the "not enabled" branch); the
+// resend-confirmation probe uses an email that owns no account, so no email
+// is ever sent. Still exercised only up to the branch boundaries.
+
+test("POST /api/auth/2fa/verify carries the friendly malformed-code message", async ({ request }) => {
+  const junk = await request.post("/api/auth/2fa/verify", { data: { code: 123456 } });
+  expect(junk.status()).toBe(400);
+  const body = (await junk.json()) as { error?: string; issues?: { message: string }[] };
+  expect(body.issues?.[0]?.message).toMatch(/6-digit/);
+
+  // A syntactically valid code trips the "not enabled" branch, proving it
+  // got past validation and into the route's own logic.
+  const shaped = await request.post("/api/auth/2fa/verify", { data: { code: "123456" } });
+  expect(shaped.status()).toBe(400);
+  expect((await shaped.json()).error).toMatch(/not enabled/i);
+});
+
+test("POST /api/auth/2fa/verify refuses a non-string pending secret", async ({ request }) => {
+  const res = await request.post("/api/auth/2fa/verify", {
+    data: { code: "123456", secret: 42 },
+  });
+  expect(res.status()).toBe(400);
+  expect(((await res.json()) as { issues?: { path: string }[] }).issues?.map((i) => i.path)).toContain("secret");
+});
+
+test("POST /api/auth/2fa/disable rejects a junk code and stops at the not-enabled branch", async ({ request }) => {
+  const junk = await request.post("/api/auth/2fa/disable", { data: { code: "654 321" } });
+  expect(junk.status()).toBe(400);
+
+  const shaped = await request.post("/api/auth/2fa/disable", { data: { code: "654321" } });
+  expect(shaped.status()).toBe(400);
+  expect((await shaped.json()).error).toMatch(/not enabled/i);
+});
+
+test("POST /api/auth/resend-confirmation validates the email and keeps the opaque response", async ({ request }) => {
+  const junk = await request.post("/api/auth/resend-confirmation", { data: { email: "not-an-email" } });
+  expect(junk.status()).toBe(400);
+  expect(((await junk.json()) as { issues?: { message: string }[] }).issues?.[0]?.message).toMatch(/valid email/i);
+
+  // An email that owns no account: same opaque {ok:true} as ever.
+  const unknown = await request.post("/api/auth/resend-confirmation", {
+    data: { email: `qa-validation-${stamp}@no-such-account.test` },
+  });
+  expect(unknown.status(), await unknown.text()).toBe(200);
+  expect(await unknown.json()).toEqual({ ok: true });
+});

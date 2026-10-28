@@ -3,6 +3,8 @@ import { createClient } from "@supabase/supabase-js";
 import { rateLimitRequest } from "@/lib/rate-limit";
 import { isDisposableEmail } from "@/lib/disposable-email";
 import { fetchWithTimeout } from "@/lib/fetch-with-timeout";
+import { parseJsonBody } from "@/lib/api-validate";
+import { authResendConfirmationSchema } from "@/lib/validations";
 
 /**
  * POST /api/auth/resend-confirmation
@@ -22,11 +24,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const body = await request.json().catch(() => ({}));
-    const email = String(body.email ?? "").trim().toLowerCase();
-    if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
-      return NextResponse.json({ error: "A valid email is required" }, { status: 400 });
-    }
+    const parsed = await parseJsonBody(request, authResendConfirmationSchema);
+    if (!parsed.ok) return parsed.response;
+    const email = parsed.data.email;
 
     // Disposable / temp-mail domains can't request confirmation links — the
     // account should never have existed, and this blocks the resend path too.

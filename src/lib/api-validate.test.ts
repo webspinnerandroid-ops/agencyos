@@ -16,6 +16,9 @@ import {
   notificationsMarkReadSchema,
   notificationsReadLinkSchema,
   postUpdateSchema,
+  authTotpDisableSchema,
+  authTotpVerifySchema,
+  authResendConfirmationSchema,
   sequenceCreateSchema,
   sequenceEnrollSchema,
   sequenceStepSchema,
@@ -441,6 +444,60 @@ describe("sequenceEnrollSchema", () => {
     ).toBe(true);
     expect(sequenceEnrollSchema.safeParse({}).success).toBe(false);
     expect(sequenceEnrollSchema.safeParse({ leadId: "lead-1" }).success).toBe(false);
+  });
+});
+
+describe("authTotpVerifySchema", () => {
+  it("accepts the login shape ({code}) and the setup shape ({code, secret})", () => {
+    expect(authTotpVerifySchema.safeParse({ code: "123456" }).success).toBe(true);
+    expect(
+      authTotpVerifySchema.safeParse({ code: " 123456 ", secret: "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP" }).success
+    ).toBe(true);
+  });
+
+  it("carries the friendly malformed-code message the UI used to show", () => {
+    for (const bad of [undefined, null, 123456, "12345", "1234567", "12 456", "abcdef"]) {
+      const parsed = authTotpVerifySchema.safeParse({ code: bad });
+      expect(parsed.success).toBe(false);
+      if (!parsed.success) {
+        expect(parsed.error.issues[0].message).toMatch(/6-digit/);
+      }
+    }
+  });
+
+  it("bounds the pending secret and rejects a non-string one", () => {
+    expect(
+      authTotpVerifySchema.safeParse({ code: "123456", secret: "" }).success
+    ).toBe(false);
+    expect(
+      authTotpVerifySchema.safeParse({ code: "123456", secret: 42 }).success
+    ).toBe(false);
+    expect(
+      authTotpVerifySchema.safeParse({ code: "123456", secret: "x".repeat(201) }).success
+    ).toBe(false);
+  });
+});
+
+describe("authTotpDisableSchema", () => {
+  it("accepts a 6-digit code and rejects the malformed shapes", () => {
+    expect(authTotpDisableSchema.safeParse({ code: "654321" }).success).toBe(true);
+    expect(authTotpDisableSchema.safeParse({}).success).toBe(false);
+    expect(authTotpDisableSchema.safeParse({ code: 654321 }).success).toBe(false);
+    expect(authTotpDisableSchema.safeParse({ code: "654 321" }).success).toBe(false);
+  });
+});
+
+describe("authResendConfirmationSchema", () => {
+  it("trims and lowercases the email", () => {
+    const parsed = authResendConfirmationSchema.safeParse({ email: "  Alice@Example.COM " });
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.email).toBe("alice@example.com");
+  });
+
+  it("rejects a missing, malformed, or over-long email", () => {
+    expect(authResendConfirmationSchema.safeParse({}).success).toBe(false);
+    expect(authResendConfirmationSchema.safeParse({ email: "not-an-email" }).success).toBe(false);
+    expect(authResendConfirmationSchema.safeParse({ email: "x".repeat(321) }).success).toBe(false);
   });
 });
 

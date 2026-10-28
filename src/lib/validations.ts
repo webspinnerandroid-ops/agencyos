@@ -556,3 +556,53 @@ export const sequenceEnrollSchema = z.object({
 });
 
 export type SequenceEnrollInput = z.infer<typeof sequenceEnrollSchema>;
+
+// ---------------------------------------------------------------------------
+// Auth token requests. Adopted by POST /api/auth/2fa/verify,
+// POST /api/auth/2fa/disable, and POST /api/auth/resend-confirmation.
+//
+// The 6-digit TOTP format (and the friendly message for a malformed one) moves
+// into the schema; the routes keep only their real decisions — verifying the
+// code against the stored/pending secret, or resending a confirmation. The
+// same fields the login page, the settings page and mailto flows send stay
+// valid exactly as before.
+// ---------------------------------------------------------------------------
+
+export const authTotpVerifySchema = z.object({
+  code: z
+    .string({ error: "Enter the 6-digit code from your authenticator app." })
+    .trim()
+    .regex(/^\d{6}$/, "Enter the 6-digit code from your authenticator app."),
+  // Present only in setup mode (the settings page's enroll step); login sends
+  // { code } alone and stays in login mode.
+  secret: z
+    .string({ error: "secret must be a string" })
+    .trim()
+    .min(16, "The pending secret looks too short")
+    .max(200, "The pending secret looks too long")
+    .optional(),
+});
+
+export type AuthTotpVerifyInput = z.infer<typeof authTotpVerifySchema>;
+
+export const authTotpDisableSchema = z.object({
+  code: z
+    .string({ error: "Enter the 6-digit code from your authenticator app." })
+    .trim()
+    .regex(/^\d{6}$/, "Enter the 6-digit code from your authenticator app."),
+});
+
+export type AuthTotpDisableInput = z.infer<typeof authTotpDisableSchema>;
+
+export const authResendConfirmationSchema = z.object({
+  email: z
+    .string({ error: "A valid email is required" })
+    .trim()
+    .toLowerCase()
+    .max(320, "Email address is too long")
+    .regex(/^[^@\s]+@[^@\s]+\.[^@\s]+$/, "A valid email is required"),
+});
+
+export type AuthResendConfirmationInput = z.infer<
+  typeof authResendConfirmationSchema
+>;

@@ -3,6 +3,8 @@ import { getUserId } from "@/lib/auth";
 import { verifyTotp } from "@/lib/totp";
 import { decrypt } from "@/lib/encryption";
 import { createServiceClient } from "@/lib/supabase/server";
+import { parseJsonBody } from "@/lib/api-validate";
+import { authTotpDisableSchema } from "@/lib/validations";
 
 /**
  * POST /api/auth/2fa/disable — body { code }
@@ -14,11 +16,9 @@ export async function POST(request: NextRequest) {
     if (!userId) {
       return NextResponse.json({ error: "Authentication required" }, { status: 401 });
     }
-    const body = await request.json().catch(() => ({}));
-    const code = String(body.code ?? "").trim();
-    if (!/^\d{6}$/.test(code)) {
-      return NextResponse.json({ error: "Enter the 6-digit code from your authenticator app." }, { status: 400 });
-    }
+    const parsed = await parseJsonBody(request, authTotpDisableSchema);
+    if (!parsed.ok) return parsed.response;
+    const { code } = parsed.data;
 
     const supabase = await createServiceClient();
     const { data: record } = await supabase
